@@ -48,8 +48,7 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = Self::default_path();
         if path.exists() {
-            let contents =
-                std::fs::read_to_string(&path).context("Failed to read config file")?;
+            let contents = std::fs::read_to_string(&path).context("Failed to read config file")?;
             let config: Config =
                 serde_yaml::from_str(&contents).context("Failed to parse config file")?;
             Ok(config)
@@ -95,10 +94,10 @@ impl Default for Config {
 }
 
 fn expand_tilde(path: &Path) -> PathBuf {
-    if let Ok(stripped) = path.strip_prefix("~") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped);
-        }
+    if let Ok(stripped) = path.strip_prefix("~")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(stripped);
     }
     path.to_path_buf()
 }

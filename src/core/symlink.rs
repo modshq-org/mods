@@ -22,17 +22,28 @@ pub fn create(link: &Path, target: &Path) -> Result<()> {
     }
 
     #[cfg(unix)]
-    std::os::unix::fs::symlink(target, link)
-        .with_context(|| format!("Failed to create symlink: {} -> {}", link.display(), target.display()))?;
+    std::os::unix::fs::symlink(target, link).with_context(|| {
+        format!(
+            "Failed to create symlink: {} -> {}",
+            link.display(),
+            target.display()
+        )
+    })?;
 
     #[cfg(windows)]
-    std::os::windows::fs::symlink_file(target, link)
-        .with_context(|| format!("Failed to create symlink: {} -> {}", link.display(), target.display()))?;
+    std::os::windows::fs::symlink_file(target, link).with_context(|| {
+        format!(
+            "Failed to create symlink: {} -> {}",
+            link.display(),
+            target.display()
+        )
+    })?;
 
     Ok(())
 }
 
 /// Remove a symlink (only if it is a symlink, not a real file)
+#[allow(dead_code)]
 pub fn remove(link: &Path) -> Result<()> {
     if link.is_symlink() {
         std::fs::remove_file(link)
@@ -42,6 +53,7 @@ pub fn remove(link: &Path) -> Result<()> {
 }
 
 /// Check if a symlink is valid (target exists)
+#[allow(dead_code)]
 pub fn is_valid(link: &Path) -> bool {
     link.is_symlink() && link.exists()
 }

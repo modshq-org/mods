@@ -1,18 +1,18 @@
+mod auth;
+mod doctor;
+mod export;
+mod gc;
+mod import;
+mod info;
 mod init;
 mod install;
-mod uninstall;
+mod link;
 mod list;
-mod info;
+mod popular;
 mod search;
 mod space;
-mod doctor;
-mod gc;
-mod link;
-mod auth;
+mod uninstall;
 mod update;
-mod export;
-mod import;
-mod popular;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -139,9 +139,11 @@ pub enum Commands {
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Init => init::run().await,
-        Commands::Install { id, variant, dry_run } => {
-            install::run(&id, variant.as_deref(), dry_run).await
-        }
+        Commands::Install {
+            id,
+            variant,
+            dry_run,
+        } => install::run(&id, variant.as_deref(), dry_run).await,
         Commands::Uninstall { id, force } => uninstall::run(&id, force).await,
         Commands::List { r#type } => list::run(r#type.as_deref()).await,
         Commands::Info { id } => info::run(&id).await,
@@ -164,9 +166,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Space => space::run().await,
         Commands::Doctor => doctor::run().await,
         Commands::Gc => gc::run().await,
-        Commands::Link { comfyui, a1111 } => {
-            link::run(comfyui.as_deref(), a1111.as_deref()).await
-        }
+        Commands::Link { comfyui, a1111 } => link::run(comfyui.as_deref(), a1111.as_deref()).await,
         Commands::Auth { provider } => auth::run(&provider).await,
         Commands::Update => update::run().await,
         Commands::Export => export::run().await,

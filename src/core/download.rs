@@ -36,11 +36,7 @@ pub async fn download_file(
     let response = request.send().await.context("Failed to send request")?;
 
     if !response.status().is_success() && response.status().as_u16() != 206 {
-        anyhow::bail!(
-            "Download failed: HTTP {} for {}",
-            response.status(),
-            url
-        );
+        anyhow::bail!("Download failed: HTTP {} for {}", response.status(), url);
     }
 
     let total_size = if response.status().as_u16() == 206 {
@@ -49,10 +45,7 @@ pub async fn download_file(
     } else {
         // Full download — reset partial
         start_byte = 0;
-        response
-            .content_length()
-            .or(expected_size)
-            .unwrap_or(0)
+        response.content_length().or(expected_size).unwrap_or(0)
     };
 
     // Progress bar
@@ -76,10 +69,7 @@ pub async fn download_file(
         pb
     };
 
-    let file_name = dest
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("file");
+    let file_name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     pb.set_message(file_name.to_string());
 
     // Ensure parent directory exists

@@ -1,5 +1,5 @@
-pub mod huggingface;
 pub mod civitai;
+pub mod huggingface;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -28,10 +28,9 @@ impl AuthStore {
     pub fn load() -> Result<Self> {
         let path = Self::path();
         if path.exists() {
-            let contents = std::fs::read_to_string(&path)
-                .context("Failed to read auth file")?;
-            let store: AuthStore = serde_yaml::from_str(&contents)
-                .context("Failed to parse auth file")?;
+            let contents = std::fs::read_to_string(&path).context("Failed to read auth file")?;
+            let store: AuthStore =
+                serde_yaml::from_str(&contents).context("Failed to parse auth file")?;
             Ok(store)
         } else {
             Ok(Self::default())

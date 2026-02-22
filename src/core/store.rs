@@ -17,12 +17,7 @@ impl Store {
     }
 
     /// Get the storage path for a file: store/<type>/<sha256_prefix>/<filename>
-    pub fn path_for(
-        &self,
-        asset_type: &AssetType,
-        sha256: &str,
-        file_name: &str,
-    ) -> PathBuf {
+    pub fn path_for(&self, asset_type: &AssetType, sha256: &str, file_name: &str) -> PathBuf {
         self.root
             .join(asset_type.to_string())
             .join(&sha256[..16]) // Use first 16 chars of hash as directory
@@ -30,6 +25,7 @@ impl Store {
     }
 
     /// Check if a file exists in the store with matching hash
+    #[allow(dead_code)]
     pub fn has(&self, asset_type: &AssetType, sha256: &str, file_name: &str) -> bool {
         self.path_for(asset_type, sha256, file_name).exists()
     }
@@ -37,8 +33,7 @@ impl Store {
     /// Ensure the directory for a store path exists
     pub fn ensure_dir(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .context("Failed to create store directory")?;
+            std::fs::create_dir_all(parent).context("Failed to create store directory")?;
         }
         Ok(())
     }

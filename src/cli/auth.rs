@@ -1,9 +1,121 @@
 use anyhow::Result;
+use console::style;
+use dialoguer::Password;
+
+use crate::auth::{AuthStore, CivitaiAuth, HuggingFaceAuth};
 
 pub async fn run(provider: &str) -> Result<()> {
-    println!("Configuring auth for '{}'...", provider);
-    // TODO: Prompt for token/key
-    // TODO: Verify token
-    // TODO: Store in ~/.mods/auth.yaml
+    match provider {
+        "huggingface" | "hf" => configure_huggingface().await,
+        "civitai" => configure_civitai().await,
+        _ => {
+            anyhow::bail!(
+                "Unknown provider '{}'. Supported: huggingface, civitai",
+                provider
+            );
+        }
+    }
+}
+
+async fn configure_huggingface() -> Result<()> {
+    println!("{} Configure HuggingFace authentication", style("→").cyan());
+    println!();
+    println!(
+        "  1. Go to {}",
+        style("https://huggingface.co/settings/tokens").underlined()
+    );
+    println!("  2. Create a token with 'Read' access");
+    println!("  3. For gated models (e.g., Flux Dev), accept terms on the model page first");
+    println!();
+
+    let token: String = Password::new()
+        .with_prompt("HuggingFace token (hf_...)")
+        .interact()?;
+
+    if !token.starts_with("hf_") {
+        println!(
+            "  {} Token doesn't start with 'hf_' — are you sure it's correct?",
+            style("!").yellow()
+        );
+    }
+
+    // Verify token
+    println!("  Verifying token...");
+    match crate::auth::huggingface::verify_token(&token).await {
+        Ok(true) => {
+            println!("  {} Token verified!", style("✓").green());
+        }
+        Ok(false) => {
+            println!(
+                "  {} Token rejected by HuggingFace. Check it's valid.",
+                style("✗").red()
+            );
+            anyhow::bail!("Invalid token");
+        }
+        Err(e) => {
+            println!(
+                "  {} Could not verify (network issue?): {}",
+                style("!").yellow(),
+                e
+            );
+            println!("  Saving anyway — you can re-run `mods auth huggingface` later.");
+        }
+    }
+
+    let mut store = AuthStore::load().unwrap_or_default();
+    store.huggingface = Some(HuggingFaceAuth { token });
+    store.save()?;
+
+    println!(
+        "{} HuggingFace auth saved to {}",
+        style("✓").green(),
+        style("~/.mods/auth.yaml").dim()
+    );
+
+    Ok(())
+}
+
+async fn configure_civitai() -> Result<()> {
+    println!("{} Configure Civitai authentication", style("→").cyan());
+    println!();
+    println!(
+        "  1. Go to {}",
+        style("https://civitai.com/user/account").underlined()
+    );
+    println!("  2. Scroll to 'API Keys' and create one");
+    println!();
+
+    let api_key: String = Password::new().with_prompt("Civitai API key").interact()?;
+
+    // Verify key
+    println!("  Verifying API key...");
+    match crate::auth::civitai::verify_key(&api_key).await {
+        Ok(true) => {
+            println!("  {} API key verified!", style("✓").green());
+        }
+        Ok(false) => {
+            println!("  {} API key rejected by Civitai.", style("✗").red());
+            anyhow::bail!("Invalid API key");
+        }
+        Err(e) => {
+            println!(
+                "  {} Could not verify (network issue?): {}",
+                style("!").yellow(),
+                e
+            );
+            println!("  Saving anyway.");
+        }
+    }
+
+    let mut store = AuthStore::load().unwrap_or_default();
+    store.civitai = Some(CivitaiAuth { api_key });
+    store.save()?;
+
+    println!(
+        "{} Civitai auth saved to {}",
+        style("✓").green(),
+        style("~/.mods/auth.yaml").dim()
+    );
+
     Ok(())
 }

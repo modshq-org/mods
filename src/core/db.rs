@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::PathBuf;
 
 /// Local database for tracking installed models
@@ -20,6 +20,7 @@ impl Database {
         Ok(db)
     }
 
+    #[allow(dead_code)]
     pub fn open_at(path: &std::path::Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open database")?;
         let db = Self { conn };
@@ -70,6 +71,7 @@ impl Database {
     }
 
     /// Record a model as installed
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_installed(
         &self,
         id: &str,
@@ -113,10 +115,7 @@ impl Database {
     }
 
     /// List all installed models
-    pub fn list_installed(
-        &self,
-        type_filter: Option<&str>,
-    ) -> Result<Vec<InstalledModel>> {
+    pub fn list_installed(&self, type_filter: Option<&str>) -> Result<Vec<InstalledModel>> {
         let mut stmt = if let Some(t) = type_filter {
             let mut s = self
                 .conn
@@ -136,7 +135,9 @@ impl Database {
                     })
                 })
                 .context("Failed to query installed models")?;
-            return rows.collect::<std::result::Result<Vec<_>, _>>().context("Failed to collect results");
+            return rows
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("Failed to collect results");
         } else {
             self.conn
                 .prepare("SELECT id, name, asset_type, variant, sha256, size, file_name, store_path FROM installed ORDER BY name")

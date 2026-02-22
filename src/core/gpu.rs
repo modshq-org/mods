@@ -9,7 +9,7 @@ pub struct GpuInfo {
 
 /// Detect GPU and VRAM. Returns None if no GPU found.
 pub fn detect() -> Option<GpuInfo> {
-    detect_nvml().or_else(|| detect_nvidia_smi())
+    detect_nvml().or_else(detect_nvidia_smi)
 }
 
 /// Try NVML (programmatic nvidia-smi)
@@ -27,7 +27,10 @@ fn detect_nvml() -> Option<GpuInfo> {
 /// Fallback: parse nvidia-smi CLI output
 fn detect_nvidia_smi() -> Option<GpuInfo> {
     let output = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
         .ok()?;
 
@@ -63,6 +66,7 @@ pub fn select_variant(vram_mb: u64, variants: &[(String, u64)]) -> Option<String
 }
 
 /// Get VRAM or return None with a helpful message
+#[allow(dead_code)]
 pub fn get_vram() -> Result<Option<u64>> {
     match detect() {
         Some(info) => {
@@ -89,22 +93,13 @@ mod tests {
             ("gguf-q2".to_string(), 4096),
         ];
 
-        assert_eq!(
-            select_variant(24576, &variants),
-            Some("fp16".to_string())
-        );
-        assert_eq!(
-            select_variant(16000, &variants),
-            Some("fp8".to_string())
-        );
+        assert_eq!(select_variant(24576, &variants), Some("fp16".to_string()));
+        assert_eq!(select_variant(16000, &variants), Some("fp8".to_string()));
         assert_eq!(
             select_variant(10000, &variants),
             Some("gguf-q4".to_string())
         );
-        assert_eq!(
-            select_variant(6000, &variants),
-            Some("gguf-q2".to_string())
-        );
+        assert_eq!(select_variant(6000, &variants), Some("gguf-q2".to_string()));
         assert_eq!(select_variant(2000, &variants), None);
     }
 }

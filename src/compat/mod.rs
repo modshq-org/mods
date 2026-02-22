@@ -45,11 +45,7 @@ pub fn detect_tools() -> Vec<(ToolType, PathBuf)> {
     }
 
     // Common A1111 locations
-    for dir in &[
-        "stable-diffusion-webui",
-        "sd-webui",
-        "automatic1111",
-    ] {
+    for dir in &["stable-diffusion-webui", "sd-webui", "automatic1111"] {
         let path = home.join(dir);
         if path.join("models").exists() {
             found.push((ToolType::A1111, path));

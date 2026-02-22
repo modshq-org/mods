@@ -14,6 +14,7 @@ pub struct InstallPlan {
 #[derive(Debug)]
 pub struct ResolvedItem {
     pub manifest: Manifest,
+    #[allow(dead_code)]
     pub variant_id: Option<String>,
     /// Whether this item is already installed (skip download)
     pub already_installed: bool,
@@ -52,12 +53,8 @@ fn resolve_recursive(
     // Resolve dependencies first (depth-first)
     for dep in &manifest.requires {
         resolve_recursive(
-            &dep.id,
-            None, // Dependencies use auto-selected variant
-            index,
-            installed,
-            visited,
-            plan,
+            &dep.id, None, // Dependencies use auto-selected variant
+            index, installed, visited, plan,
         )?;
     }
 

@@ -17,18 +17,16 @@ impl RegistryIndex {
     pub fn load() -> Result<Self> {
         let path = Self::local_path();
         if !path.exists() {
-            anyhow::bail!(
-                "Registry index not found. Run `mods update` to fetch it."
-            );
+            anyhow::bail!("Registry index not found. Run `mods update` to fetch it.");
         }
-        let contents =
-            std::fs::read_to_string(&path).context("Failed to read registry index")?;
+        let contents = std::fs::read_to_string(&path).context("Failed to read registry index")?;
         let index: RegistryIndex =
             serde_json::from_str(&contents).context("Failed to parse registry index")?;
         Ok(index)
     }
 
     /// Save index to local cache
+    #[allow(dead_code)]
     pub fn save(&self) -> Result<()> {
         let path = Self::local_path();
         if let Some(parent) = path.parent() {
@@ -68,6 +66,7 @@ impl RegistryIndex {
     }
 
     /// Build a lookup map by ID for faster access
+    #[allow(dead_code)]
     pub fn as_map(&self) -> HashMap<&str, &Manifest> {
         self.items.iter().map(|m| (m.id.as_str(), m)).collect()
     }
