@@ -12,7 +12,12 @@ use crate::core::symlink;
 
 pub async fn run(comfyui: Option<&str>, a1111: Option<&str>) -> Result<()> {
     if comfyui.is_none() && a1111.is_none() {
-        anyhow::bail!("Specify at least one: --comfyui <path> or --a1111 <path>");
+        anyhow::bail!(
+            "Specify a tool to link:\n\n  \
+             mods link --comfyui ~/ComfyUI\n  \
+             mods link --a1111 ~/stable-diffusion-webui\n\n\
+             This scans the tool's model folders and adopts recognized files into the mods store."
+        );
     }
 
     let mut config = Config::load()?;

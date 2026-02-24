@@ -99,7 +99,15 @@ pub async fn run() -> Result<()> {
 
     if detected.is_empty() {
         println!("  {} No tools auto-detected.", style("!").yellow());
-        println!("  You can add targets later with `mods link`.");
+        println!("  Can't find your install? Add it manually with:");
+        println!(
+            "    {}",
+            style("mods link --comfyui /path/to/ComfyUI").cyan()
+        );
+        println!(
+            "    {}",
+            style("mods link --a1111 /path/to/stable-diffusion-webui").cyan()
+        );
     } else {
         let labels: Vec<String> = detected
             .iter()

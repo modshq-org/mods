@@ -63,7 +63,7 @@ After linking, `mods install` will automatically symlink new models into all you
 - **Dependency resolution** — installs required VAE, text encoders automatically
 - **GPU-aware variant selection** — picks fp16/fp8/GGUF based on your VRAM
 - **Content-addressed storage** — deduplicated, hash-verified downloads
-- **Multi-tool support** — symlinks into ComfyUI, A1111, InvokeAI simultaneously
+- **Multi-tool support** — symlinks into ComfyUI, A1111, and more (InvokeAI planned)
 - **Adopt existing models** — `mods link` migrates your current library without re-downloading
 - **Resumable downloads** — partial downloads resume automatically
 - **Lock files** — `mods export` / `mods import` for reproducible environments
