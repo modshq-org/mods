@@ -103,18 +103,6 @@ Models come in multiple variants. Mods picks the best one for your GPU automatic
 
 Override with `mods install flux-dev --variant fp8`.
 
-## Part of the modshq Platform
-
-Mods is the foundation of a larger platform:
-
-| Layer | Repo | Status |
-|-------|------|--------|
-| Website | [mods.pedroalonso.net](https://mods.pedroalonso.net) | Live |
-| Model Manager | [`modshq/mods`](https://github.com/modshq-org/mods) | **This repo** — in progress |
-| Registry | [`modshq/mods-registry`](https://github.com/modshq-org/mods-registry) | In progress |
-| Pipeline Authoring | TBD | Future — LLM-first pipeline creation |
-| Deploy | TBD | Future — one-click to Modal/Replicate/RunPod |
-
 ## License
 
 MIT
