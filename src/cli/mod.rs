@@ -14,6 +14,7 @@ mod search;
 mod space;
 mod uninstall;
 mod update;
+mod upgrade;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
@@ -143,6 +144,9 @@ pub enum Commands {
     #[command(hide = true)]
     CliSchema,
 
+    /// Update mods CLI to the latest release
+    Upgrade,
+
     /// Show popular/trending models
     Popular {
         /// Filter by asset type
@@ -191,6 +195,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Link { comfyui, a1111 } => link::run(comfyui.as_deref(), a1111.as_deref()).await,
         Commands::Auth { provider } => auth::run(&provider).await,
         Commands::Update => update::run().await,
+        Commands::Upgrade => upgrade::run().await,
         Commands::Export => export::run().await,
         Commands::Import { path } => import::run(&path).await,
         Commands::CliSchema => {
