@@ -39,9 +39,7 @@ pub async fn run(id: &str, variant: Option<&str>, dry_run: bool, force: bool) ->
     // and the user didn't specify --variant)
     if variant.is_none() {
         for item in &mut plan.items {
-            if item.manifest.id == id
-                && !item.already_installed
-                && item.manifest.variants.len() > 1
+            if item.manifest.id == id && !item.already_installed && item.manifest.variants.len() > 1
             {
                 let selected = prompt_variant_selection(&item.manifest, vram)?;
                 item.variant_id = Some(selected);
@@ -216,13 +214,10 @@ pub async fn run(id: &str, variant: Option<&str>, dry_run: bool, force: bool) ->
                                 "    Run: {}",
                                 style(format!("mods auth {}", provider)).cyan()
                             );
-                            if let Some(ref auth) = item.manifest.auth {
-                                if let Some(ref terms) = auth.terms_url {
-                                    println!(
-                                        "    Accept terms at: {}",
-                                        style(terms).underlined()
-                                    );
-                                }
+                            if let Some(ref auth) = item.manifest.auth
+                                && let Some(ref terms) = auth.terms_url
+                            {
+                                println!("    Accept terms at: {}", style(terms).underlined());
                             }
                             println!();
                         }
@@ -389,10 +384,7 @@ fn prompt_variant_selection(manifest: &Manifest, vram: Option<u64>) -> Result<St
         .variants
         .iter()
         .map(|v| {
-            let recommended = auto_selected
-                .as_ref()
-                .map(|s| s == &v.id)
-                .unwrap_or(false);
+            let recommended = auto_selected.as_ref().map(|s| s == &v.id).unwrap_or(false);
             let precision = v
                 .precision
                 .as_ref()

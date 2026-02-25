@@ -145,8 +145,7 @@ pub async fn run() -> Result<()> {
     println!("  {} Downloaded", style("\u{2713}").green());
 
     // Extract the binary from the tarball
-    extract_binary(&tmp_archive, &tmp_binary)
-        .context("Failed to extract binary from archive")?;
+    extract_binary(&tmp_archive, &tmp_binary).context("Failed to extract binary from archive")?;
 
     // Clean up the archive
     std::fs::remove_file(&tmp_archive).ok();

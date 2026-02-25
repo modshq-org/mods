@@ -55,8 +55,12 @@ If your tool has a predictable install location, you can add it to the auto-dete
 ### How to verify
 
 ```bash
-cargo fmt
-cargo clippy -- -D warnings
+# Install git hooks (runs fmt + clippy before each commit)
+cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+# Or run manually:
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
