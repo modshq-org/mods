@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use crate::core::job::{EventPayload, JobEvent, TrainJobSpec};
+use crate::core::job::{EventPayload, GenerateJobSpec, JobEvent, TrainJobSpec};
 use crate::core::runtime;
 use crate::core::training::resolve_worker_python_root;
 
@@ -21,13 +21,14 @@ pub struct JobHandle {
     pub child_pid: Option<u32>,
 }
 
-/// Executor runs a TrainJobSpec and produces a stream of JobEvents.
+/// Executor runs a job spec and produces a stream of JobEvents.
 ///
 /// Uses std::sync::mpsc (not async) — matches the sync stdout-reading
 /// pattern. A future CloudExecutor can spawn a tokio task that polls HTTP
 /// and sends into the same channel type.
 pub trait Executor {
     fn submit(&mut self, spec: &TrainJobSpec) -> Result<JobHandle>;
+    fn submit_generate(&mut self, spec: &GenerateJobSpec) -> Result<JobHandle>;
     fn events(&mut self, job_id: &str) -> Result<mpsc::Receiver<JobEvent>>;
     #[allow(dead_code)]
     fn cancel(&self, job_id: &str) -> Result<()>;
@@ -99,12 +100,15 @@ impl Executor for LocalExecutor {
 
         // Set up Python worker command
         let worker_root = resolve_worker_python_root()?;
-        let py_path = match env::var("PYTHONPATH") {
-            Ok(current) if !current.trim().is_empty() => {
-                format!("{}:{}", worker_root.display(), current)
-            }
-            _ => worker_root.to_string_lossy().to_string(),
-        };
+        let mut py_path = worker_root.to_string_lossy().to_string();
+        if let Ok(Some(aitk_dir)) = runtime::aitoolkit_path() {
+            py_path = format!("{}:{}", py_path, aitk_dir.display());
+        }
+        if let Ok(current) = env::var("PYTHONPATH")
+            && !current.trim().is_empty()
+        {
+            py_path = format!("{}:{}", py_path, current);
+        }
 
         let mut command = Command::new(&self.python_path);
         command
@@ -126,6 +130,81 @@ impl Executor for LocalExecutor {
         let mut child = command.spawn().with_context(|| {
             format!(
                 "Failed to start training worker using {}",
+                self.python_path.display()
+            )
+        })?;
+
+        let child_pid = child.id();
+
+        // Set up event channel
+        let (tx, rx) = mpsc::channel::<JobEvent>();
+        let job_id_clone = job_id.clone();
+
+        let stdout = child
+            .stdout
+            .take()
+            .context("Failed to capture worker stdout")?;
+
+        // Spawn reader thread
+        thread::spawn(move || {
+            read_worker_stdout(stdout, &job_id_clone, tx);
+        });
+
+        self.jobs.insert(
+            job_id.clone(),
+            JobState {
+                child: Some(child),
+                receiver: Some(rx),
+            },
+        );
+
+        Ok(JobHandle {
+            job_id,
+            child_pid: Some(child_pid),
+        })
+    }
+
+    fn submit_generate(&mut self, spec: &GenerateJobSpec) -> Result<JobHandle> {
+        let job_id = format!("gen-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+
+        // Write spec YAML to jobs dir
+        let jobs_dir = self.runtime_root.join("jobs");
+        std::fs::create_dir_all(&jobs_dir)
+            .with_context(|| format!("Failed to create jobs dir: {}", jobs_dir.display()))?;
+
+        let spec_path = jobs_dir.join(format!("{}.yaml", job_id));
+        let yaml = serde_yaml::to_string(spec).context("Failed to serialize generate spec")?;
+        std::fs::write(&spec_path, &yaml)
+            .with_context(|| format!("Failed to write spec: {}", spec_path.display()))?;
+
+        // Set up Python worker command
+        let worker_root = resolve_worker_python_root()?;
+        let mut py_path = worker_root.to_string_lossy().to_string();
+        if let Ok(Some(aitk_dir)) = runtime::aitoolkit_path() {
+            py_path = format!("{}:{}", py_path, aitk_dir.display());
+        }
+        if let Ok(current) = env::var("PYTHONPATH")
+            && !current.trim().is_empty()
+        {
+            py_path = format!("{}:{}", py_path, current);
+        }
+
+        let mut command = Command::new(&self.python_path);
+        command
+            .arg("-m")
+            .arg("mods_worker.main")
+            .arg("generate")
+            .arg("--config")
+            .arg(&spec_path)
+            .arg("--job-id")
+            .arg(&job_id)
+            .env("PYTHONPATH", py_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "Failed to start generate worker using {}",
                 self.python_path.display()
             )
         })?;

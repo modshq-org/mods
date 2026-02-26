@@ -4,6 +4,7 @@ mod datasets;
 mod doctor;
 mod export;
 mod gc;
+mod generate;
 mod import;
 mod info;
 mod init;
@@ -185,6 +186,33 @@ pub enum Commands {
         dry_run: bool,
     },
 
+    /// Generate images using diffusers
+    Generate {
+        /// Text prompt for image generation
+        prompt: String,
+        /// Base model to use (default: flux-schnell)
+        #[arg(long)]
+        base: Option<String>,
+        /// LoRA name or path to apply
+        #[arg(long)]
+        lora: Option<String>,
+        /// Random seed for reproducibility
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Image size preset (1:1, 16:9, 9:16, 4:3, 3:4) or WxH
+        #[arg(long, default_value = "1:1")]
+        size: String,
+        /// Number of inference steps
+        #[arg(long)]
+        steps: Option<u32>,
+        /// Guidance scale
+        #[arg(long)]
+        guidance: Option<f32>,
+        /// Number of images to generate
+        #[arg(long, default_value = "1")]
+        count: u32,
+    },
+
     /// Manage datasets for training
     Dataset {
         #[command(subcommand)]
@@ -256,6 +284,28 @@ pub async fn run(cli: Cli) -> Result<()> {
                 .await
             }
         },
+        Commands::Generate {
+            prompt,
+            base,
+            lora,
+            seed,
+            size,
+            steps,
+            guidance,
+            count,
+        } => {
+            generate::run(
+                &prompt,
+                base.as_deref(),
+                lora.as_deref(),
+                seed,
+                &size,
+                steps,
+                guidance,
+                count,
+            )
+            .await
+        }
         Commands::Dataset { command } => datasets::run(command).await,
         Commands::Runtime { command } => runtime::run(command).await,
         Commands::Doctor { verify_hashes } => doctor::run(verify_hashes).await,

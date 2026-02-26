@@ -16,6 +16,48 @@ pub struct TrainJobSpec {
     pub labels: std::collections::HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateJobSpec {
+    pub prompt: String,
+    pub model: ModelRef,
+    #[serde(default)]
+    pub lora: Option<LoraRef>,
+    pub output: GenerateOutputRef,
+    pub params: GenerateParams,
+    pub runtime: RuntimeRef,
+    pub target: ExecutionTarget,
+    #[serde(default)]
+    pub labels: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoraRef {
+    pub name: String,
+    pub path: String,
+    #[serde(default = "default_lora_weight")]
+    pub weight: f32,
+}
+
+fn default_lora_weight() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateOutputRef {
+    pub output_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateParams {
+    pub width: u32,
+    pub height: u32,
+    pub steps: u32,
+    pub guidance: f32,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    pub count: u32,
+}
+
 // ---------------------------------------------------------------------------
 // Ref types
 // ---------------------------------------------------------------------------

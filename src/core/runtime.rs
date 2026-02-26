@@ -8,6 +8,8 @@ use std::process::{Command, Stdio};
 use tar::Archive;
 use zstd::stream::read::Decoder as ZstdDecoder;
 
+use console::style;
+
 use crate::core::download;
 use crate::core::store::Store;
 
@@ -18,7 +20,8 @@ const TRAINER_CU126_INDEX_URL: &str = "https://download.pytorch.org/whl/cu126";
 const TRAINER_TORCH_VERSION: &str = "2.7.0";
 const TRAINER_TORCHVISION_VERSION: &str = "0.22.0";
 const TRAINER_TORCHAUDIO_VERSION: &str = "2.7.0";
-const AITOOLKIT_GIT_URL: &str = "git+https://github.com/ostris/ai-toolkit.git";
+const AITOOLKIT_REPO_URL: &str = "https://github.com/ostris/ai-toolkit.git";
+const AITOOLKIT_CLONE_DIR: &str = "ai-toolkit";
 const DEFAULT_PYTHON_ARTIFACT_URL: &str = "https://github.com/modshq/mods-runtime-manifests/releases/download/v2026.02.1/cpython-3.11.11-linux-x86_64.tar.gz";
 const PYTHON_ARTIFACT_URL_ENV: &str = "MODS_PYTHON_ARTIFACT_URL";
 
@@ -260,9 +263,16 @@ pub async fn bootstrap(
         &lock.profile,
         requirements_path.as_path(),
         created_env,
+        install_result.runtime_root.as_path(),
     )?;
 
-    let detected = detect_train_command_template(python_path.as_path());
+    let aitoolkit_dir = aitoolkit_clone_dir(install_result.runtime_root.as_path());
+    let aitoolkit_opt = if aitoolkit_dir.join("toolkit").exists() {
+        Some(aitoolkit_dir.as_path())
+    } else {
+        None
+    };
+    let detected = detect_train_command_template(python_path.as_path(), aitoolkit_opt);
     if detected.is_some() {
         update_train_command_template(install_result.runtime_root.as_path(), detected)?;
     }
@@ -517,13 +527,16 @@ fn run_command_status(cmd: &mut Command) -> bool {
     }
 }
 
-fn detect_train_command_template(python_path: &Path) -> Option<String> {
-    if run_command_status(
-        Command::new(python_path)
-            .arg("-m")
-            .arg("toolkit.job")
-            .arg("--help"),
-    ) {
+fn detect_train_command_template(
+    python_path: &Path,
+    aitoolkit_dir: Option<&Path>,
+) -> Option<String> {
+    let mut cmd = Command::new(python_path);
+    cmd.arg("-m").arg("toolkit.job").arg("--help");
+    if let Some(dir) = aitoolkit_dir {
+        cmd.env("PYTHONPATH", dir);
+    }
+    if run_command_status(&mut cmd) {
         return Some("{python} -m toolkit.job --config {config}".to_string());
     }
 
@@ -563,6 +576,7 @@ fn ensure_profile_dependencies(
     profile: &str,
     requirements_path: &Path,
     created_env: bool,
+    runtime_root: &Path,
 ) -> Result<()> {
     let marker_path = bootstrap_marker_path(env_dir);
 
@@ -571,6 +585,11 @@ fn ensure_profile_dependencies(
     }
 
     if profile == "trainer-cu124" {
+        println!(
+            "  {} Installing PyTorch {} …",
+            style("→").dim(),
+            style(TRAINER_TORCH_VERSION).dim()
+        );
         run_command(
             Command::new(python_path)
                 .arg("-m")
@@ -585,18 +604,31 @@ fn ensure_profile_dependencies(
             "Failed to install pinned torch dependencies for trainer-cu124",
         )?;
 
-        run_command(
-            Command::new(python_path)
-                .arg("-m")
-                .arg("pip")
-                .arg("install")
-                .arg("--no-cache-dir")
-                .arg(AITOOLKIT_GIT_URL),
-            "Failed to install ai-toolkit from git",
-        )?;
+        println!("  {} Cloning ai-toolkit …", style("→").dim());
+        clone_or_update_aitoolkit(runtime_root)?;
+
+        let aitoolkit_dir = aitoolkit_clone_dir(runtime_root);
+        let aitoolkit_reqs = aitoolkit_dir.join("requirements.txt");
+        if aitoolkit_reqs.exists() {
+            println!(
+                "  {} Installing ai-toolkit dependencies …",
+                style("→").dim()
+            );
+            run_command(
+                Command::new(python_path)
+                    .arg("-m")
+                    .arg("pip")
+                    .arg("install")
+                    .arg("--no-cache-dir")
+                    .arg("-r")
+                    .arg(&aitoolkit_reqs),
+                "Failed to install ai-toolkit requirements",
+            )?;
+        }
     }
 
     if requirements_path.exists() {
+        println!("  {} Installing profile requirements …", style("→").dim());
         run_command(
             Command::new(python_path)
                 .arg("-m")
@@ -615,6 +647,49 @@ fn ensure_profile_dependencies(
         .with_context(|| format!("Failed to write {}", marker_path.display()))?;
 
     Ok(())
+}
+
+fn aitoolkit_clone_dir(root: &Path) -> PathBuf {
+    root.join(AITOOLKIT_CLONE_DIR)
+}
+
+fn clone_or_update_aitoolkit(root: &Path) -> Result<()> {
+    let dir = aitoolkit_clone_dir(root);
+    if dir.join("toolkit").exists() {
+        // Already cloned – fast-forward update
+        run_command(
+            Command::new("git")
+                .arg("pull")
+                .arg("--ff-only")
+                .current_dir(&dir),
+            "Failed to update ai-toolkit (git pull)",
+        )?;
+    } else {
+        if dir.exists() {
+            fs::remove_dir_all(&dir)
+                .with_context(|| format!("Failed to remove stale {}", dir.display()))?;
+        }
+        run_command(
+            Command::new("git")
+                .arg("clone")
+                .arg("--depth")
+                .arg("1")
+                .arg(AITOOLKIT_REPO_URL)
+                .arg(&dir),
+            "Failed to clone ai-toolkit",
+        )?;
+    }
+    Ok(())
+}
+
+pub fn aitoolkit_path() -> Result<Option<PathBuf>> {
+    let root = runtime_root()?;
+    let dir = aitoolkit_clone_dir(&root);
+    if dir.join("toolkit").exists() {
+        Ok(Some(dir))
+    } else {
+        Ok(None)
+    }
 }
 
 fn bootstrap_marker_path(env_dir: &Path) -> PathBuf {
