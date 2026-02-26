@@ -1,5 +1,6 @@
 mod auth;
 mod config;
+mod datasets;
 mod doctor;
 mod export;
 mod gc;
@@ -162,24 +163,30 @@ pub enum Commands {
         period: String,
     },
 
-    /// Train a LoRA with managed runtime (Phase 1 bridge)
+    /// Train a LoRA with managed runtime
     Train {
-        /// Dataset directory path
+        /// Dataset name or directory path
         #[arg(long)]
-        dataset: String,
-        /// Base model id (e.g. flux-schnell)
-        #[arg(long, default_value = "flux-schnell")]
-        base: String,
+        dataset: Option<String>,
+        /// Base model id (e.g. flux-schnell, flux-dev)
+        #[arg(long)]
+        base: Option<String>,
         /// Output LoRA name
         #[arg(long)]
-        name: String,
+        name: Option<String>,
         /// Trigger word used during training
-        #[arg(long, default_value = "OHWX")]
-        trigger: String,
-        /// Training steps
-        #[arg(long, default_value_t = 2000)]
-        steps: u32,
-        /// Generate config and bootstrap runtime but do not execute proxy
+        #[arg(long)]
+        trigger: Option<String>,
+        /// Training preset: quick, standard, advanced
+        #[arg(long)]
+        preset: Option<String>,
+        /// Override training steps
+        #[arg(long)]
+        steps: Option<u32>,
+        /// Load a full TrainJobSpec YAML (escape hatch)
+        #[arg(long)]
+        config: Option<String>,
+        /// Generate spec and print it without executing
         #[arg(long)]
         dry_run: bool,
     },
@@ -189,6 +196,12 @@ pub enum Commands {
         /// Force re-install of training dependencies
         #[arg(long)]
         reinstall: bool,
+    },
+
+    /// Manage datasets for training
+    Datasets {
+        #[command(subcommand)]
+        command: datasets::DatasetCommands,
     },
 
     /// Manage embedded Python runtime
@@ -250,10 +263,25 @@ pub async fn run(cli: Cli) -> Result<()> {
             base,
             name,
             trigger,
+            preset,
             steps,
+            config,
             dry_run,
-        } => train::run(&dataset, &base, &name, &trigger, steps, dry_run).await,
+        } => {
+            train::run(
+                dataset.as_deref(),
+                base.as_deref(),
+                name.as_deref(),
+                trigger.as_deref(),
+                preset.as_deref(),
+                steps,
+                config.as_deref(),
+                dry_run,
+            )
+            .await
+        }
         Commands::TrainSetup { reinstall } => train_setup::run(reinstall).await,
+        Commands::Datasets { command } => datasets::run(command).await,
         Commands::Runtime { command } => runtime::run(command).await,
     }
 }

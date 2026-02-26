@@ -1,8 +1,13 @@
+pub mod artifacts;
 pub mod config;
+pub mod dataset;
 pub mod db;
 pub mod download;
+pub mod executor;
 pub mod gpu;
+pub mod job;
 pub mod manifest;
+pub mod presets;
 pub mod registry;
 pub mod resolver;
 pub mod runtime;

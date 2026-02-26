@@ -64,6 +64,37 @@ impl Database {
                 child_id    TEXT NOT NULL REFERENCES installed(id),
                 PRIMARY KEY (parent_id, child_id)
             );
+
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_id       TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL DEFAULT 'train',
+                status       TEXT NOT NULL DEFAULT 'queued',
+                spec_json    TEXT NOT NULL,
+                target       TEXT NOT NULL DEFAULT 'local',
+                provider     TEXT,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                started_at   TEXT,
+                completed_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS job_events (
+                job_id    TEXT NOT NULL REFERENCES jobs(job_id),
+                sequence  INTEGER NOT NULL,
+                event_json TEXT NOT NULL,
+                timestamp  TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(job_id, sequence)
+            );
+
+            CREATE TABLE IF NOT EXISTS artifacts (
+                artifact_id TEXT PRIMARY KEY,
+                job_id      TEXT REFERENCES jobs(job_id),
+                kind        TEXT NOT NULL,
+                path        TEXT NOT NULL,
+                sha256      TEXT NOT NULL,
+                size_bytes  INTEGER NOT NULL,
+                metadata    TEXT,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             ",
             )
             .context("Failed to run database migrations")?;
@@ -172,6 +203,202 @@ impl Database {
 
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .context("Failed to collect results")
+    }
+
+    // -----------------------------------------------------------------------
+    // Jobs CRUD
+    // -----------------------------------------------------------------------
+
+    /// Insert a new training job
+    pub fn insert_job(
+        &self,
+        job_id: &str,
+        kind: &str,
+        status: &str,
+        spec_json: &str,
+        target: &str,
+        provider: Option<&str>,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO jobs (job_id, kind, status, spec_json, target, provider)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![job_id, kind, status, spec_json, target, provider],
+            )
+            .context("Failed to insert job")?;
+        Ok(())
+    }
+
+    /// Update job status (and optional timestamp fields)
+    pub fn update_job_status(&self, job_id: &str, status: &str) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        match status {
+            "running" => {
+                self.conn
+                    .execute(
+                        "UPDATE jobs SET status = ?1, started_at = ?2 WHERE job_id = ?3",
+                        params![status, now, job_id],
+                    )
+                    .context("Failed to update job status")?;
+            }
+            "completed" | "error" | "cancelled" => {
+                self.conn
+                    .execute(
+                        "UPDATE jobs SET status = ?1, completed_at = ?2 WHERE job_id = ?3",
+                        params![status, now, job_id],
+                    )
+                    .context("Failed to update job status")?;
+            }
+            _ => {
+                self.conn
+                    .execute(
+                        "UPDATE jobs SET status = ?1 WHERE job_id = ?2",
+                        params![status, job_id],
+                    )
+                    .context("Failed to update job status")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// List all jobs, optionally filtered by status
+    #[allow(dead_code)]
+    pub fn list_jobs(&self, status_filter: Option<&str>) -> Result<Vec<JobRecord>> {
+        let sql = if status_filter.is_some() {
+            "SELECT job_id, kind, status, target, provider, created_at, started_at, completed_at FROM jobs WHERE status = ?1 ORDER BY created_at DESC"
+        } else {
+            "SELECT job_id, kind, status, target, provider, created_at, started_at, completed_at FROM jobs ORDER BY created_at DESC"
+        };
+
+        let mut stmt = self.conn.prepare(sql).context("Failed to prepare query")?;
+
+        let rows = if let Some(s) = status_filter {
+            stmt.query_map(params![s], JobRecord::from_row)
+                .context("Failed to query jobs")?
+        } else {
+            stmt.query_map([], JobRecord::from_row)
+                .context("Failed to query jobs")?
+        };
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to collect job results")
+    }
+
+    /// Insert a job event
+    pub fn insert_job_event(&self, job_id: &str, sequence: u64, event_json: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO job_events (job_id, sequence, event_json)
+                 VALUES (?1, ?2, ?3)",
+                params![job_id, sequence as i64, event_json],
+            )
+            .context("Failed to insert job event")?;
+        Ok(())
+    }
+
+    /// Insert an artifact record
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_artifact(
+        &self,
+        artifact_id: &str,
+        job_id: Option<&str>,
+        kind: &str,
+        path: &str,
+        sha256: &str,
+        size_bytes: u64,
+        metadata: Option<&str>,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO artifacts (artifact_id, job_id, kind, path, sha256, size_bytes, metadata)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![artifact_id, job_id, kind, path, sha256, size_bytes as i64, metadata],
+            )
+            .context("Failed to insert artifact")?;
+        Ok(())
+    }
+
+    /// List artifacts, optionally filtered by job_id
+    #[allow(dead_code)]
+    pub fn list_artifacts(&self, job_id: Option<&str>) -> Result<Vec<ArtifactRecord>> {
+        let sql = if job_id.is_some() {
+            "SELECT artifact_id, job_id, kind, path, sha256, size_bytes, metadata, created_at FROM artifacts WHERE job_id = ?1 ORDER BY created_at DESC"
+        } else {
+            "SELECT artifact_id, job_id, kind, path, sha256, size_bytes, metadata, created_at FROM artifacts ORDER BY created_at DESC"
+        };
+
+        let mut stmt = self.conn.prepare(sql).context("Failed to prepare query")?;
+
+        let rows = if let Some(jid) = job_id {
+            stmt.query_map(params![jid], ArtifactRecord::from_row)
+                .context("Failed to query artifacts")?
+        } else {
+            stmt.query_map([], ArtifactRecord::from_row)
+                .context("Failed to query artifacts")?
+        };
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to collect artifact results")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Record types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct JobRecord {
+    pub job_id: String,
+    pub kind: String,
+    pub status: String,
+    pub target: String,
+    pub provider: Option<String>,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+impl JobRecord {
+    fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            job_id: row.get(0)?,
+            kind: row.get(1)?,
+            status: row.get(2)?,
+            target: row.get(3)?,
+            provider: row.get(4)?,
+            created_at: row.get(5)?,
+            started_at: row.get(6)?,
+            completed_at: row.get(7)?,
+        })
+    }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct ArtifactRecord {
+    pub artifact_id: String,
+    pub job_id: Option<String>,
+    pub kind: String,
+    pub path: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub metadata: Option<String>,
+    pub created_at: String,
+}
+
+impl ArtifactRecord {
+    fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            artifact_id: row.get(0)?,
+            job_id: row.get(1)?,
+            kind: row.get(2)?,
+            path: row.get(3)?,
+            sha256: row.get(4)?,
+            size_bytes: row.get::<_, i64>(5)? as u64,
+            metadata: row.get(6)?,
+            created_at: row.get(7)?,
+        })
     }
 }
 

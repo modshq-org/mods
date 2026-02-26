@@ -1,0 +1,298 @@
+use crate::core::job::{Preset, TrainingParams};
+
+/// Dataset statistics needed for preset resolution
+#[derive(Debug, Clone)]
+pub struct DatasetStats {
+    pub image_count: u32,
+    #[allow(dead_code)]
+    pub caption_coverage: f32,
+}
+
+/// GPU context for auto-settings
+#[derive(Debug, Clone)]
+pub struct GpuContext {
+    pub vram_mb: u64,
+}
+
+/// Which base model family (affects resolution)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseModelFamily {
+    Flux,
+    Sdxl,
+    Sd15,
+}
+
+impl BaseModelFamily {
+    /// Infer family from a base model ID string
+    pub fn from_model_id(id: &str) -> Self {
+        let lower = id.to_lowercase();
+        if lower.contains("flux") {
+            Self::Flux
+        } else if lower.contains("sdxl") || lower.contains("xl") {
+            Self::Sdxl
+        } else if lower.contains("sd-1.5") || lower.contains("sd15") || lower.contains("1.5") {
+            Self::Sd15
+        } else {
+            // Default to Flux for modern models
+            Self::Flux
+        }
+    }
+
+    pub fn default_resolution(&self) -> u32 {
+        match self {
+            Self::Flux | Self::Sdxl => 1024,
+            Self::Sd15 => 512,
+        }
+    }
+}
+
+/// Pure logic: resolve training parameters from preset + context.
+/// No I/O — only takes values and returns computed params.
+pub fn resolve_params(
+    preset: Preset,
+    dataset: &DatasetStats,
+    gpu: Option<&GpuContext>,
+    base_model: &str,
+    trigger_word: &str,
+) -> TrainingParams {
+    let family = BaseModelFamily::from_model_id(base_model);
+    let resolution = family.default_resolution();
+    let vram_mb = gpu.map(|g| g.vram_mb).unwrap_or(0);
+    let quantize = vram_mb > 0 && vram_mb < 40_000;
+    let img_count = dataset.image_count;
+
+    let (steps, rank, learning_rate) = match preset {
+        Preset::Quick => {
+            let steps = compute_steps(img_count, 150, 1000, 1500);
+            (steps, 8, 1e-4)
+        }
+        Preset::Standard => {
+            let steps = compute_steps(img_count, 200, 2000, 4000);
+            let rank = if img_count < 20 { 16 } else { 32 };
+            let lr = if img_count < 10 { 5e-5 } else { 1e-4 };
+            (steps, rank, lr)
+        }
+        Preset::Advanced => {
+            // Advanced starts with Standard defaults; user edits in $EDITOR later
+            let steps = compute_steps(img_count, 200, 2000, 4000);
+            (steps, 16, 1e-4)
+        }
+    };
+
+    TrainingParams {
+        preset,
+        trigger_word: trigger_word.to_string(),
+        steps,
+        rank,
+        learning_rate,
+        optimizer: "adamw8bit".to_string(),
+        resolution,
+        seed: None,
+        quantize,
+    }
+}
+
+/// steps_per_image * images, clamped to [min, max]
+fn compute_steps(image_count: u32, per_image: u32, min: u32, max: u32) -> u32 {
+    let raw = image_count.saturating_mul(per_image);
+    raw.clamp(min, max)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gpu(vram_mb: u64) -> GpuContext {
+        GpuContext { vram_mb }
+    }
+
+    fn dataset(image_count: u32) -> DatasetStats {
+        DatasetStats {
+            image_count,
+            caption_coverage: 1.0,
+        }
+    }
+
+    // --- Quick preset ---
+
+    #[test]
+    fn quick_min_steps() {
+        let p = resolve_params(
+            Preset::Quick,
+            &dataset(3),
+            Some(&gpu(24576)),
+            "flux-schnell",
+            "OHWX",
+        );
+        // 3 * 150 = 450, clamped to min 1000
+        assert_eq!(p.steps, 1000);
+        assert_eq!(p.rank, 8);
+        assert!((p.learning_rate - 1e-4).abs() < 1e-10);
+    }
+
+    #[test]
+    fn quick_max_steps() {
+        let p = resolve_params(
+            Preset::Quick,
+            &dataset(50),
+            Some(&gpu(24576)),
+            "flux-schnell",
+            "OHWX",
+        );
+        // 50 * 150 = 7500, clamped to max 1500
+        assert_eq!(p.steps, 1500);
+    }
+
+    #[test]
+    fn quick_normal_scaling() {
+        let p = resolve_params(
+            Preset::Quick,
+            &dataset(8),
+            Some(&gpu(24576)),
+            "flux-schnell",
+            "OHWX",
+        );
+        // 8 * 150 = 1200
+        assert_eq!(p.steps, 1200);
+    }
+
+    // --- Standard preset ---
+
+    #[test]
+    fn standard_small_dataset() {
+        let p = resolve_params(
+            Preset::Standard,
+            &dataset(8),
+            Some(&gpu(24576)),
+            "flux-dev",
+            "OHWX",
+        );
+        // 8 * 200 = 1600, min 2000 → 2000
+        assert_eq!(p.steps, 2000);
+        assert_eq!(p.rank, 16); // < 20 images → 16
+        assert!((p.learning_rate - 5e-5).abs() < 1e-10); // < 10 images → 5e-5
+    }
+
+    #[test]
+    fn standard_large_dataset() {
+        let p = resolve_params(
+            Preset::Standard,
+            &dataset(25),
+            Some(&gpu(24576)),
+            "flux-dev",
+            "OHWX",
+        );
+        // 25 * 200 = 5000, max 4000
+        assert_eq!(p.steps, 4000);
+        assert_eq!(p.rank, 32); // >= 20 images → 32
+        assert!((p.learning_rate - 1e-4).abs() < 1e-10); // >= 10 images → 1e-4
+    }
+
+    #[test]
+    fn standard_medium_dataset() {
+        let p = resolve_params(
+            Preset::Standard,
+            &dataset(15),
+            Some(&gpu(24576)),
+            "flux-dev",
+            "OHWX",
+        );
+        // 15 * 200 = 3000
+        assert_eq!(p.steps, 3000);
+        assert_eq!(p.rank, 16); // < 20
+        assert!((p.learning_rate - 1e-4).abs() < 1e-10); // >= 10
+    }
+
+    // --- Advanced preset ---
+
+    #[test]
+    fn advanced_defaults() {
+        let p = resolve_params(
+            Preset::Advanced,
+            &dataset(10),
+            Some(&gpu(24576)),
+            "flux-schnell",
+            "OHWX",
+        );
+        assert_eq!(p.rank, 16);
+        assert!((p.learning_rate - 1e-4).abs() < 1e-10);
+    }
+
+    // --- Auto settings ---
+
+    #[test]
+    fn quantize_when_low_vram() {
+        let p = resolve_params(
+            Preset::Quick,
+            &dataset(10),
+            Some(&gpu(24576)),
+            "flux-schnell",
+            "OHWX",
+        );
+        assert!(p.quantize); // 24GB < 40GB
+    }
+
+    #[test]
+    fn no_quantize_when_high_vram() {
+        let p = resolve_params(
+            Preset::Quick,
+            &dataset(10),
+            Some(&gpu(49152)),
+            "flux-schnell",
+            "OHWX",
+        );
+        assert!(!p.quantize); // 48GB >= 40GB
+    }
+
+    #[test]
+    fn no_quantize_when_no_gpu_info() {
+        let p = resolve_params(Preset::Quick, &dataset(10), None, "flux-schnell", "OHWX");
+        assert!(!p.quantize); // no GPU info → don't quantize
+    }
+
+    #[test]
+    fn resolution_from_base_model() {
+        let flux = resolve_params(Preset::Quick, &dataset(10), None, "flux-dev", "OHWX");
+        assert_eq!(flux.resolution, 1024);
+
+        let sdxl = resolve_params(
+            Preset::Quick,
+            &dataset(10),
+            None,
+            "stable-diffusion-xl",
+            "OHWX",
+        );
+        assert_eq!(sdxl.resolution, 1024);
+
+        let sd15 = resolve_params(Preset::Quick, &dataset(10), None, "sd-1.5", "OHWX");
+        assert_eq!(sd15.resolution, 512);
+    }
+
+    #[test]
+    fn optimizer_always_adamw8bit() {
+        let p = resolve_params(
+            Preset::Standard,
+            &dataset(10),
+            Some(&gpu(24576)),
+            "flux-schnell",
+            "OHWX",
+        );
+        assert_eq!(p.optimizer, "adamw8bit");
+    }
+
+    #[test]
+    fn trigger_word_passthrough() {
+        let p = resolve_params(
+            Preset::Quick,
+            &dataset(10),
+            None,
+            "flux-schnell",
+            "MY_TRIGGER",
+        );
+        assert_eq!(p.trigger_word, "MY_TRIGGER");
+    }
+}
