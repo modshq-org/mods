@@ -31,6 +31,18 @@ fn datasets_root() -> PathBuf {
         .join("datasets")
 }
 
+/// Resolve a name or path to a dataset directory.
+/// If it looks like a path (contains / or \), use it directly.
+/// Otherwise, look under ~/.mods/datasets/<name>.
+pub fn resolve_path(name_or_path: &str) -> PathBuf {
+    let path = PathBuf::from(name_or_path);
+    if path.is_absolute() || name_or_path.contains('/') || name_or_path.contains('\\') {
+        path
+    } else {
+        datasets_root().join(name_or_path)
+    }
+}
+
 /// Create a managed dataset by copying images from a source directory.
 ///
 /// Copies images matching valid extensions from `from_dir` into

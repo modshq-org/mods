@@ -115,7 +115,7 @@ pub async fn run(
     guidance: Option<f32>,
     count: u32,
     cloud: bool,
-    provider: Option<&str>,
+    provider: Option<CloudProvider>,
 ) -> Result<()> {
     let db = Database::open()?;
 
@@ -212,7 +212,7 @@ pub async fn run(
 async fn execute_generate(
     spec: GenerateJobSpec,
     cloud: bool,
-    provider: Option<&str>,
+    provider: Option<CloudProvider>,
 ) -> Result<()> {
     let db = Database::open()?;
     let spec_json = serde_json::to_string(&spec)?;
@@ -222,7 +222,7 @@ async fn execute_generate(
     // 1. Bootstrap executor
     // -------------------------------------------------------------------
     let mut executor: Box<dyn Executor> = if cloud {
-        let cloud_provider = resolve_cloud_provider(provider)?;
+        let cloud_provider = resolve_cloud_provider(provider);
         println!(
             "{} Preparing cloud generation via {}...",
             style("→").cyan(),
@@ -352,19 +352,20 @@ async fn execute_generate(
 }
 
 /// Resolve cloud provider from --provider flag or config default.
-fn resolve_cloud_provider(provider: Option<&str>) -> Result<CloudProvider> {
+fn resolve_cloud_provider(provider: Option<CloudProvider>) -> CloudProvider {
     if let Some(p) = provider {
-        return p.parse();
+        return p;
     }
 
     // Check config for default provider
     if let Ok(config) = crate::core::config::Config::load()
         && let Some(ref cloud) = config.cloud
         && let Some(ref default) = cloud.default_provider
+        && let Ok(p) = default.parse()
     {
-        return default.parse();
+        return p;
     }
 
     // Default to Modal
-    Ok(CloudProvider::Modal)
+    CloudProvider::Modal
 }

@@ -218,19 +218,8 @@ fn print_dataset_summary(info: &dataset::DatasetInfo) {
 }
 
 /// Resolve a name or path to a dataset directory.
-/// If it looks like a path (contains / or \), use it directly.
-/// Otherwise, look under ~/.mods/datasets/<name>.
 fn resolve_dataset_path(name_or_path: &str) -> PathBuf {
-    let path = PathBuf::from(name_or_path);
-    if path.is_absolute() || name_or_path.contains('/') || name_or_path.contains('\\') {
-        path
-    } else {
-        dirs::home_dir()
-            .expect("Could not determine home directory")
-            .join(".mods")
-            .join("datasets")
-            .join(name_or_path)
-    }
+    dataset::resolve_path(name_or_path)
 }
 
 // ---------------------------------------------------------------------------

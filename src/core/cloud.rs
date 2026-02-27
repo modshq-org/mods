@@ -9,10 +9,11 @@ use crate::core::job::{GenerateJobSpec, JobEvent, TrainJobSpec};
 // ---------------------------------------------------------------------------
 
 /// Supported cloud providers for remote training/generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum CloudProvider {
     Modal,
     Replicate,
+    #[value(name = "runpod")]
     RunPod,
 }
 

@@ -20,12 +20,12 @@ pub async fn run(
     base: Option<&str>,
     name: Option<&str>,
     trigger: Option<&str>,
-    preset_arg: Option<&str>,
+    preset_arg: Option<Preset>,
     steps: Option<u32>,
     config: Option<&str>,
     dry_run: bool,
     cloud: bool,
-    provider: Option<&str>,
+    provider: Option<CloudProvider>,
 ) -> Result<()> {
     // -------------------------------------------------------------------
     // Fast path: --config <yaml> loads a full spec directly
@@ -53,7 +53,7 @@ pub async fn run(
     // Resolve dataset
     // -------------------------------------------------------------------
     let dataset_path = match dataset_arg {
-        Some(d) => resolve_dataset_path(d),
+        Some(d) => dataset::resolve_path(d),
         None => {
             // Interactive: pick from managed datasets or enter path
             let datasets = dataset::list()?;
@@ -138,7 +138,7 @@ pub async fn run(
     // Resolve preset
     // -------------------------------------------------------------------
     let preset = match preset_arg {
-        Some(p) => p.parse::<Preset>()?,
+        Some(p) => p,
         None => {
             let presets_list = &[
                 "Quick (~20 min)",
@@ -256,7 +256,11 @@ pub async fn run(
 }
 
 /// Execute training: persist job, run executor, collect artifacts.
-async fn execute_training(spec: TrainJobSpec, cloud: bool, provider: Option<&str>) -> Result<()> {
+async fn execute_training(
+    spec: TrainJobSpec,
+    cloud: bool,
+    provider: Option<CloudProvider>,
+) -> Result<()> {
     let db = Database::open()?;
 
     let spec_json = serde_json::to_string(&spec)?;
@@ -266,7 +270,7 @@ async fn execute_training(spec: TrainJobSpec, cloud: bool, provider: Option<&str
     // 1. Bootstrap executor
     // -------------------------------------------------------------------
     let mut executor: Box<dyn Executor> = if cloud {
-        let cloud_provider = resolve_cloud_provider(provider)?;
+        let cloud_provider = resolve_cloud_provider(provider);
         println!(
             "{} Preparing cloud training via {}...",
             style("→").cyan(),
@@ -491,20 +495,6 @@ async fn execute_training(spec: TrainJobSpec, cloud: bool, provider: Option<&str
     Ok(())
 }
 
-/// Resolve dataset name-or-path to a directory path.
-fn resolve_dataset_path(name_or_path: &str) -> PathBuf {
-    let path = PathBuf::from(name_or_path);
-    if path.is_absolute() || name_or_path.contains('/') || name_or_path.contains('\\') {
-        path
-    } else {
-        dirs::home_dir()
-            .expect("Could not determine home directory")
-            .join(".mods")
-            .join("datasets")
-            .join(name_or_path)
-    }
-}
-
 /// Open text in $EDITOR, return edited content.
 fn edit_in_editor(content: &str) -> Result<String> {
     let tmp_dir = std::env::temp_dir();
@@ -528,19 +518,20 @@ fn edit_in_editor(content: &str) -> Result<String> {
 }
 
 /// Resolve cloud provider from --provider flag or config default.
-fn resolve_cloud_provider(provider: Option<&str>) -> Result<CloudProvider> {
+fn resolve_cloud_provider(provider: Option<CloudProvider>) -> CloudProvider {
     if let Some(p) = provider {
-        return p.parse();
+        return p;
     }
 
     // Check config for default provider
     if let Ok(config) = crate::core::config::Config::load()
         && let Some(ref cloud) = config.cloud
         && let Some(ref default) = cloud.default_provider
+        && let Ok(p) = default.parse()
     {
-        return default.parse();
+        return p;
     }
 
     // Default to Modal
-    Ok(CloudProvider::Modal)
+    CloudProvider::Modal
 }

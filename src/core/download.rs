@@ -28,6 +28,16 @@ pub async fn download_file(
 
     let mut retries = 0;
 
+    // Build client once — reused across retries to benefit from connection pooling.
+    // connect_timeout guards against stalled TCP handshakes; the overall download
+    // progress is monitored chunk-by-chunk below (a read timeout would kill large
+    // file downloads that are simply slow).
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("Failed to build HTTP client")?;
+
     loop {
         // Check for existing partial download
         let start_byte: u64 = if partial_path.exists() {
@@ -48,10 +58,6 @@ pub async fn download_file(
             return Ok(());
         }
 
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .context("Failed to build HTTP client")?;
         let mut request = client.get(url);
 
         if let Some(token) = auth_token {

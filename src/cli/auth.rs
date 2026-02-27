@@ -3,17 +3,12 @@ use console::style;
 use dialoguer::Password;
 
 use crate::auth::{AuthStore, CivitaiAuth, HuggingFaceAuth};
+use crate::cli::AuthProvider;
 
-pub async fn run(provider: &str) -> Result<()> {
+pub async fn run(provider: AuthProvider) -> Result<()> {
     match provider {
-        "huggingface" | "hf" => configure_huggingface().await,
-        "civitai" => configure_civitai().await,
-        _ => {
-            anyhow::bail!(
-                "Unknown provider '{}'. Supported: huggingface, civitai",
-                provider
-            );
-        }
+        AuthProvider::Huggingface => configure_huggingface().await,
+        AuthProvider::Civitai => configure_civitai().await,
     }
 }
 

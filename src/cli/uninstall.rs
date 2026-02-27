@@ -4,6 +4,7 @@ use indicatif::HumanBytes;
 
 use crate::core::config::Config;
 use crate::core::db::Database;
+use crate::core::manifest::AssetType;
 
 pub async fn run(id: &str, force: bool) -> Result<()> {
     let db = Database::open()?;
@@ -37,7 +38,9 @@ pub async fn run(id: &str, force: bool) -> Result<()> {
                 let link_path = crate::compat::symlink_path(
                     &target.path,
                     &target.tool_type,
-                    &parse_asset_type(&m.asset_type),
+                    &m.asset_type
+                        .parse::<AssetType>()
+                        .unwrap_or(AssetType::Checkpoint),
                     &m.file_name,
                 );
                 if link_path.is_symlink() {
@@ -69,20 +72,6 @@ pub async fn run(id: &str, force: bool) -> Result<()> {
     println!("{} Uninstalled '{}'.", style("✓").green(), id);
 
     Ok(())
-}
-
-fn parse_asset_type(s: &str) -> crate::core::manifest::AssetType {
-    match s {
-        "checkpoint" => crate::core::manifest::AssetType::Checkpoint,
-        "lora" => crate::core::manifest::AssetType::Lora,
-        "vae" => crate::core::manifest::AssetType::Vae,
-        "text_encoder" => crate::core::manifest::AssetType::TextEncoder,
-        "controlnet" => crate::core::manifest::AssetType::Controlnet,
-        "upscaler" => crate::core::manifest::AssetType::Upscaler,
-        "embedding" => crate::core::manifest::AssetType::Embedding,
-        "ipadapter" => crate::core::manifest::AssetType::Ipadapter,
-        _ => crate::core::manifest::AssetType::Checkpoint,
-    }
 }
 
 fn remove_trained_artifact(

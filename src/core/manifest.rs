@@ -97,13 +97,15 @@ pub struct Manifest {
     pub updated: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum AssetType {
     Checkpoint,
+    #[value(name = "diffusion_model")]
     DiffusionModel,
     Lora,
     Vae,
+    #[value(name = "text_encoder", alias = "textencoder")]
     TextEncoder,
     Controlnet,
     Upscaler,

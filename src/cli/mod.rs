@@ -23,7 +23,19 @@ mod update;
 mod upgrade;
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+
+use crate::core::cloud::CloudProvider;
+use crate::core::job::Preset;
+use crate::core::manifest::AssetType;
+
+/// Auth provider for `mods auth` command.
+#[derive(Clone, Debug, ValueEnum)]
+pub enum AuthProvider {
+    #[value(alias = "hf")]
+    Huggingface,
+    Civitai,
+}
 
 #[derive(Parser)]
 #[command(
@@ -66,8 +78,8 @@ pub enum ModelCommands {
     /// List installed models
     Ls {
         /// Filter by asset type (checkpoint, lora, vae, text_encoder, etc.)
-        #[arg(long, short = 't')]
-        r#type: Option<String>,
+        #[arg(long, short = 't', value_enum)]
+        r#type: Option<AssetType>,
     },
 
     /// Show detailed info about a model
@@ -81,8 +93,8 @@ pub enum ModelCommands {
         /// Search query
         query: String,
         /// Filter by asset type
-        #[arg(long, short = 't')]
-        r#type: Option<String>,
+        #[arg(long, short = 't', value_enum)]
+        r#type: Option<AssetType>,
         /// Filter by compatible base model
         #[arg(long)]
         r#for: Option<String>,
@@ -97,13 +109,11 @@ pub enum ModelCommands {
     /// Show popular/trending models
     Popular {
         /// Filter by asset type
-        r#type: Option<String>,
+        #[arg(long, short = 't', value_enum)]
+        r#type: Option<AssetType>,
         /// Filter by compatible base model
         #[arg(long)]
         r#for: Option<String>,
-        /// Time period: day, week, month
-        #[arg(long, default_value = "week")]
-        period: String,
     },
 
     /// Link an existing tool's model folder into mods
@@ -174,8 +184,8 @@ pub enum Commands {
         #[arg(long)]
         trigger: Option<String>,
         /// Training preset: quick, standard, advanced
-        #[arg(long)]
-        preset: Option<String>,
+        #[arg(long, value_enum)]
+        preset: Option<Preset>,
         /// Override training steps
         #[arg(long)]
         steps: Option<u32>,
@@ -189,8 +199,8 @@ pub enum Commands {
         #[arg(long)]
         cloud: bool,
         /// Cloud provider to use (modal, replicate, runpod)
-        #[arg(long)]
-        provider: Option<String>,
+        #[arg(long, value_enum)]
+        provider: Option<CloudProvider>,
     },
 
     /// Generate images using diffusers
@@ -222,8 +232,8 @@ pub enum Commands {
         #[arg(long)]
         cloud: bool,
         /// Cloud provider to use (modal, replicate, runpod)
-        #[arg(long)]
-        provider: Option<String>,
+        #[arg(long, value_enum)]
+        provider: Option<CloudProvider>,
     },
 
     /// Manage datasets for training
@@ -256,7 +266,8 @@ pub enum Commands {
     /// Configure authentication (HuggingFace, Civitai)
     Auth {
         /// Auth provider: huggingface or civitai
-        provider: String,
+        #[arg(value_enum)]
+        provider: AuthProvider,
     },
 
     /// Browse and manage generated outputs and training artifacts
@@ -297,12 +308,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                     base.as_deref(),
                     name.as_deref(),
                     trigger.as_deref(),
-                    preset.as_deref(),
+                    preset,
                     steps,
                     config.as_deref(),
                     dry_run,
                     cloud,
-                    provider.as_deref(),
+                    provider,
                 )
                 .await
             }
@@ -329,7 +340,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 guidance,
                 count,
                 cloud,
-                provider.as_deref(),
+                provider,
             )
             .await
         }
@@ -337,7 +348,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Runtime { command } => runtime::run(command).await,
         Commands::Doctor { verify_hashes } => doctor::run(verify_hashes).await,
         Commands::Config { key, value } => config::run(key.as_deref(), value.as_deref()).await,
-        Commands::Auth { provider } => auth::run(&provider).await,
+        Commands::Auth { provider } => auth::run(provider).await,
         Commands::Outputs { command } => outputs::run(command).await,
         Commands::Upgrade => upgrade::run().await,
         Commands::CliSchema => {
@@ -356,7 +367,7 @@ async fn run_model(command: ModelCommands) -> Result<()> {
             force,
         } => install::run(&id, variant.as_deref(), dry_run, force).await,
         ModelCommands::Rm { id, force } => uninstall::run(&id, force).await,
-        ModelCommands::Ls { r#type } => list::run(r#type.as_deref()).await,
+        ModelCommands::Ls { r#type } => list::run(r#type).await,
         ModelCommands::Info { id } => info::run(&id).await,
         ModelCommands::Search {
             query,
@@ -364,21 +375,8 @@ async fn run_model(command: ModelCommands) -> Result<()> {
             r#for,
             tag,
             min_rating,
-        } => {
-            search::run(
-                &query,
-                r#type.as_deref(),
-                r#for.as_deref(),
-                tag.as_deref(),
-                min_rating,
-            )
-            .await
-        }
-        ModelCommands::Popular {
-            r#type,
-            r#for,
-            period,
-        } => popular::run(r#type.as_deref(), r#for.as_deref(), &period).await,
+        } => search::run(&query, r#type, r#for.as_deref(), tag.as_deref(), min_rating).await,
+        ModelCommands::Popular { r#type, r#for } => popular::run(r#type, r#for.as_deref()).await,
         ModelCommands::Link { comfyui, a1111 } => {
             link::run(comfyui.as_deref(), a1111.as_deref()).await
         }
