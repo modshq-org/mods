@@ -273,7 +273,11 @@ impl Executor for LocalExecutor {
 }
 
 /// Read stdout from the Python worker, parse JSON events, send through channel.
-fn read_worker_stdout(stdout: impl std::io::Read, job_id: &str, tx: mpsc::Sender<JobEvent>) {
+pub(crate) fn read_worker_stdout(
+    stdout: impl std::io::Read,
+    job_id: &str,
+    tx: mpsc::Sender<JobEvent>,
+) {
     let reader = BufReader::new(stdout);
 
     for line in reader.lines() {
@@ -333,7 +337,7 @@ fn read_worker_stdout(stdout: impl std::io::Read, job_id: &str, tx: mpsc::Sender
 }
 
 /// Parse a JSON value from the Python worker protocol into a typed JobEvent.
-fn parse_worker_event(raw: &serde_json::Value, job_id: &str) -> Option<JobEvent> {
+pub(crate) fn parse_worker_event(raw: &serde_json::Value, job_id: &str) -> Option<JobEvent> {
     let event_val = raw.get("event")?;
     let event_type = event_val.get("type")?.as_str()?;
 

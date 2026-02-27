@@ -31,6 +31,19 @@ pub struct GenerateJobSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptionJobSpec {
+    pub dataset_path: String,
+    #[serde(default = "default_caption_model")]
+    pub model: String,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+fn default_caption_model() -> String {
+    "florence-2".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoraRef {
     pub name: String,
     pub path: String,
@@ -317,6 +330,28 @@ mod tests {
             let back: JobStatus = s.parse().unwrap();
             assert_eq!(back, status);
         }
+    }
+
+    #[test]
+    fn test_caption_job_spec_roundtrip() {
+        let spec = CaptionJobSpec {
+            dataset_path: "/tmp/my-dataset".into(),
+            model: "florence-2".into(),
+            overwrite: false,
+        };
+        let yaml = serde_yaml::to_string(&spec).unwrap();
+        let back: CaptionJobSpec = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.dataset_path, "/tmp/my-dataset");
+        assert_eq!(back.model, "florence-2");
+        assert!(!back.overwrite);
+    }
+
+    #[test]
+    fn test_caption_job_spec_defaults() {
+        let yaml = "dataset_path: /data/photos\n";
+        let spec: CaptionJobSpec = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(spec.model, "florence-2");
+        assert!(!spec.overwrite);
     }
 
     #[test]

@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-from mods_worker.adapters import run_train, run_generate
+from mods_worker.adapters import run_train, run_generate, run_caption
 from mods_worker.protocol import EventEmitter, fatal
 
 
@@ -18,6 +18,10 @@ def _build_parser() -> argparse.ArgumentParser:
     gen = sub.add_parser("generate", help="Run inference/generation adapter")
     gen.add_argument("--config", required=True, help="Path to generate spec yaml")
     gen.add_argument("--job-id", default="", help="Job ID for event envelope")
+
+    cap = sub.add_parser("caption", help="Run auto-captioning adapter")
+    cap.add_argument("--config", required=True, help="Path to caption spec yaml")
+    cap.add_argument("--job-id", default="", help="Job ID for event envelope")
 
     return parser
 
@@ -38,6 +42,11 @@ def main() -> int:
         config_path = Path(args.config)
         emitter.job_accepted(worker_pid=os.getpid())
         return run_generate(config_path, emitter)
+
+    if args.command == "caption":
+        config_path = Path(args.config)
+        emitter.job_accepted(worker_pid=os.getpid())
+        return run_caption(config_path, emitter)
 
     fatal(f"Unsupported command: {args.command}")
     return 1

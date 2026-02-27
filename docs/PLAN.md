@@ -37,7 +37,7 @@ The key missing pieces are E2E testing on a real GPU and a few UX gaps.
 | Runtime management | ✅ Done | Python venv bootstrap, ai-toolkit install, setup command |
 | Doctor/GC/Export/Import | ✅ Done | Health checks, garbage collection, lockfile round-trip |
 | `mods upgrade` | ✅ Done | Self-update from GitHub releases |
-| Dataset caption | ❌ Not started | Florence-2/BLIP auto-captioning |
+| Dataset caption | ✅ Implemented | Florence-2/BLIP auto-captioning |
 | Batch generation | ❌ Not started | `mods generate --batch prompts.txt` |
 | Output management CLI | ❌ Not started | `mods outputs`, search, open |
 | `--cloud` flag | ❌ Not started | Architecture ready (dyn Executor), no CloudExecutor yet |
@@ -164,16 +164,19 @@ Likely issues to fix:
 - Runtime bootstrap edge cases (torch version, CUDA compatibility)
 - Diffusers pipeline loading (from_pretrained vs from_single_file logic)
 
-### Priority 2: Dataset Captioning
+### Priority 2: Dataset Captioning ✅
 
 ```
-[ ] mods dataset caption <name>
-    - Run Florence-2 or BLIP on uncaptioned images
+[x] mods dataset caption <name>
+    - Run Florence-2 or BLIP on uncaptioned images (--model flag)
     - Write .txt files alongside images
     - Show captions for review in terminal
+    - --overwrite flag to re-caption existing
+    - Progress bar with per-image status
 ```
 
-Needs a new Python adapter (`caption_adapter.py`) and a CLI subcommand.
+Implemented via `caption_adapter.py` Python adapter + CLI subcommand.
+CLI: `mods dataset caption <name> [--model florence-2|blip] [--overwrite]`
 
 ### Priority 3: Output Management
 
