@@ -55,6 +55,9 @@ struct DatasetImage {
 // ---------------------------------------------------------------------------
 
 pub async fn start(port: u16, open_browser: bool) -> Result<()> {
+    // Kill any existing server on this port so `mods preview` is always re-entrant
+    kill_existing_on_port(port);
+
     let app = Router::new()
         .route("/", get(index_page))
         .route("/api/runs", get(api_list_runs))
@@ -86,6 +89,30 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Kill any existing process listening on the given port (best-effort).
+fn kill_existing_on_port(port: u16) {
+    // Try to connect — if it succeeds, something is already listening
+    let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
+    if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200)).is_ok() {
+        // Use lsof to find the PID, then kill it
+        if let Ok(output) = std::process::Command::new("lsof")
+            .args(["-ti", &format!(":{port}")])
+            .output()
+        {
+            let pids = String::from_utf8_lossy(&output.stdout);
+            let my_pid = std::process::id().to_string();
+            for pid_str in pids.split_whitespace() {
+                if pid_str != my_pid {
+                    let _ = std::process::Command::new("kill").arg(pid_str).status();
+                    eprintln!("  Killed existing server (PID {pid_str}) on port {port}");
+                }
+            }
+            // Brief pause to let the port free up
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+}
 
 fn mods_root() -> PathBuf {
     dirs::home_dir()
