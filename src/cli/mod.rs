@@ -13,6 +13,7 @@ mod link;
 mod list;
 mod outputs;
 mod popular;
+mod preview;
 mod runtime;
 mod search;
 mod space;
@@ -26,7 +27,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 use crate::core::cloud::CloudProvider;
-use crate::core::job::Preset;
+use crate::core::job::{LoraType, Preset};
 use crate::core::manifest::AssetType;
 
 /// Auth provider for `mods auth` command.
@@ -183,6 +184,9 @@ pub enum Commands {
         /// Trigger word used during training
         #[arg(long)]
         trigger: Option<String>,
+        /// LoRA type: style, character, object
+        #[arg(long, value_enum, rename_all = "snake_case")]
+        lora_type: Option<LoraType>,
         /// Training preset: quick, standard, advanced
         #[arg(long, value_enum)]
         preset: Option<Preset>,
@@ -276,6 +280,16 @@ pub enum Commands {
         command: outputs::OutputCommands,
     },
 
+    /// Launch web UI to preview training samples, datasets, and configs
+    Preview {
+        /// Port to bind the preview server on
+        #[arg(long, default_value = "3333")]
+        port: u16,
+        /// Don't auto-open the browser
+        #[arg(long)]
+        no_open: bool,
+    },
+
     /// Update mods CLI to the latest release
     Upgrade,
 
@@ -294,6 +308,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             base,
             name,
             trigger,
+            lora_type,
             preset,
             steps,
             config,
@@ -308,6 +323,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     base.as_deref(),
                     name.as_deref(),
                     trigger.as_deref(),
+                    lora_type,
                     preset,
                     steps,
                     config.as_deref(),
@@ -350,6 +366,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Config { key, value } => config::run(key.as_deref(), value.as_deref()).await,
         Commands::Auth { provider } => auth::run(provider).await,
         Commands::Outputs { command } => outputs::run(command).await,
+        Commands::Preview { port, no_open } => preview::run(port, no_open).await,
         Commands::Upgrade => upgrade::run().await,
         Commands::CliSchema => {
             dump_cli_schema();

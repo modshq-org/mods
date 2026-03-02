@@ -2,6 +2,7 @@ mod auth;
 mod cli;
 mod compat;
 mod core;
+mod ui;
 
 use anyhow::Result;
 use clap::Parser;

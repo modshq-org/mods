@@ -79,6 +79,10 @@ pub struct Manifest {
     #[serde(default)]
     pub recipe: Option<RecipeConfig>,
 
+    // Vision-language: HuggingFace repo ID (multi-file transformer checkpoints)
+    #[serde(default)]
+    pub huggingface_repo: Option<String>,
+
     // Publisher (distinct from author, for community contributions)
     #[serde(default)]
     pub publisher: Option<String>,
@@ -112,6 +116,8 @@ pub enum AssetType {
     Embedding,
     Ipadapter,
     Segmentation,
+    #[value(name = "vision_language")]
+    VisionLanguage,
     Recipe,
 }
 
@@ -128,6 +134,7 @@ impl std::fmt::Display for AssetType {
             Self::Embedding => write!(f, "embedding"),
             Self::Ipadapter => write!(f, "ipadapter"),
             Self::Segmentation => write!(f, "segmentation"),
+            Self::VisionLanguage => write!(f, "vision_language"),
             Self::Recipe => write!(f, "recipe"),
         }
     }
@@ -148,6 +155,7 @@ impl std::str::FromStr for AssetType {
             "embedding" => Ok(Self::Embedding),
             "ipadapter" => Ok(Self::Ipadapter),
             "segmentation" => Ok(Self::Segmentation),
+            "vision_language" => Ok(Self::VisionLanguage),
             "recipe" => Ok(Self::Recipe),
             _ => anyhow::bail!("Unknown asset type: {}", s),
         }

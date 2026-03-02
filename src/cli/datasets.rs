@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::core::dataset;
 use crate::core::job::{CaptionJobSpec, ResizeJobSpec, TagJobSpec};
+use crate::core::registry::RegistryIndex;
 
 #[derive(clap::Subcommand)]
 pub enum DatasetCommands {
@@ -217,6 +218,40 @@ fn print_dataset_summary(info: &dataset::DatasetInfo) {
     );
 }
 
+/// Resolve a VL model name (e.g. "florence-2", "blip") to a HuggingFace repo ID
+/// by looking it up in the registry. Falls back to hardcoded IDs if the registry
+/// is unavailable or doesn't contain the model.
+async fn resolve_vl_model(model_name: &str) -> Option<String> {
+    use crate::core::manifest::AssetType;
+
+    // Map short CLI names → registry manifest IDs
+    let registry_id = match model_name {
+        "florence-2" | "florence2" | "florence" => "florence-2-large",
+        "blip" | "blip-2" | "blip2" => "blip2-opt-2-7b",
+        other => other,
+    };
+
+    // Try loading the registry (don't fail if unavailable — fall back gracefully)
+    let index = match RegistryIndex::load_or_fetch().await {
+        Ok(idx) => idx,
+        Err(_) => return None,
+    };
+
+    // Find the manifest and extract huggingface_repo
+    if let Some(manifest) = index.find(registry_id)
+        && manifest.asset_type == AssetType::VisionLanguage
+    {
+        return manifest.huggingface_repo.clone();
+    }
+
+    // Fallback: hardcoded repo IDs for backwards compat
+    match model_name {
+        "florence-2" | "florence2" | "florence" => Some("microsoft/Florence-2-large".to_string()),
+        "blip" | "blip-2" | "blip2" => Some("Salesforce/blip2-opt-2.7b".to_string()),
+        _ => None,
+    }
+}
+
 /// Resolve a name or path to a dataset directory.
 fn resolve_dataset_path(name_or_path: &str) -> PathBuf {
     dataset::resolve_path(name_or_path)
@@ -263,6 +298,17 @@ async fn run_caption(name_or_path: &str, model: &str, overwrite: bool) -> Result
         style(model_id).bold()
     );
 
+    // Resolve the VL model from the registry to get the canonical HuggingFace repo ID.
+    // This makes the registry the source of truth for model identity.
+    let resolved_model_path = resolve_vl_model(model).await;
+    if let Some(ref repo) = resolved_model_path {
+        println!(
+            "{} Resolved from registry: {}",
+            style("ℹ").dim(),
+            style(repo).bold()
+        );
+    }
+
     println!(
         "{} Captioning {} / {} images in '{}' using {}",
         style("→").cyan(),
@@ -276,6 +322,7 @@ async fn run_caption(name_or_path: &str, model: &str, overwrite: bool) -> Result
         dataset_path: path.to_string_lossy().to_string(),
         model: model.to_string(),
         overwrite,
+        model_path: resolved_model_path,
     };
     let yaml = serde_yaml::to_string(&spec).context("Failed to serialize caption spec")?;
 
@@ -547,6 +594,10 @@ async fn run_tag(name_or_path: &str, model: &str, overwrite: bool) -> Result<()>
         style("ℹ").dim(),
         style(model_id).bold()
     );
+
+    // Resolve VL model from registry
+    let resolved_model_path = resolve_vl_model(model).await;
+
     println!(
         "{} Tagging {} / {} images in '{}' using {}",
         style("→").cyan(),
@@ -560,6 +611,7 @@ async fn run_tag(name_or_path: &str, model: &str, overwrite: bool) -> Result<()>
         dataset_path: path.to_string_lossy().to_string(),
         model: model.to_string(),
         overwrite,
+        model_path: resolved_model_path,
     };
     let yaml = serde_yaml::to_string(&spec).context("Failed to serialize tag spec")?;
 

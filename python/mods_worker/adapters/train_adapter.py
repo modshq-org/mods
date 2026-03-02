@@ -60,6 +60,102 @@ def _build_train_command(config_path: Path) -> List[str]:
     return [sys.executable, "-m", "toolkit.job", "--config", str(config_path)]
 
 
+def _build_sample_prompts(trigger_word: str, lora_type: str) -> list[str]:
+    """Auto-generate sample prompts using the trigger word so we get visual
+    feedback during training at each sample_every checkpoint."""
+    if lora_type == "style":
+        return [
+            f"a portrait of a woman in {trigger_word} style",
+            f"a cat sitting on a windowsill, {trigger_word} style",
+            f"a landscape with mountains and a river, {trigger_word} style",
+            f"a still life of fruit and flowers, {trigger_word} style",
+        ]
+    elif lora_type == "character":
+        return [
+            f"a photo of {trigger_word}",
+            f"a portrait of {trigger_word} smiling",
+            f"{trigger_word} in a park",
+        ]
+    else:  # object
+        return [
+            f"a photo of {trigger_word}",
+            f"a {trigger_word} on a table",
+            f"a {trigger_word} in a natural setting",
+        ]
+
+
+def _build_train_block(family: str, params: dict, lora_type: str) -> dict:
+    """Build the 'train' config block with per-architecture settings."""
+    steps = params.get("steps", 2000)
+    is_style = lora_type == "style"
+
+    train = {
+        "batch_size": 2 if is_style else 1,
+        "steps": steps,
+        "gradient_accumulation_steps": 1,
+        "train_unet": True,
+        "gradient_checkpointing": True,
+        "optimizer": params.get("optimizer", "adamw8bit"),
+        "lr": params.get("learning_rate", 1e-4),
+    }
+
+    if is_style:
+        # Bias timestep sampling toward noisier steps where style lives
+        train["content_or_style"] = "style"
+
+    if family == "flux":
+        train["train_text_encoder"] = False
+        train["noise_scheduler"] = "flowmatch"
+        train["dtype"] = "bf16"
+        train["ema_config"] = {"use_ema": True, "ema_decay": 0.99}
+    elif family == "sdxl":
+        train["train_text_encoder"] = True
+        train["noise_scheduler"] = "ddpm"
+        train["dtype"] = "fp16"
+        train["max_denoising_steps"] = 1000
+        # SDXL was trained with noise_offset 0.0357
+        train["noise_offset"] = 0.0357 if is_style else 0.0
+        train["ema_config"] = {"use_ema": True, "ema_decay": 0.99}
+    else:  # sd15
+        train["train_text_encoder"] = True
+        train["noise_scheduler"] = "ddpm"
+        train["dtype"] = "fp16"
+        train["max_denoising_steps"] = 1000
+
+    return train
+
+
+def _build_sample_block(family: str, params: dict, resolution: int, lora_type: str) -> dict:
+    """Build the 'sample' config block with per-architecture settings."""
+    steps = params.get("steps", 2000)
+
+    if family == "flux":
+        sampler = "flowmatch"
+        guidance = 4
+        sample_steps = 20
+    elif family == "sdxl":
+        sampler = "euler"
+        guidance = 7.5
+        sample_steps = 30
+    else:  # sd15
+        sampler = "euler"
+        guidance = 7.5
+        sample_steps = 30
+
+    return {
+        "sampler": sampler,
+        "sample_every": max(steps // 5, 50),
+        "width": resolution,
+        "height": resolution,
+        "prompts": _build_sample_prompts(params.get("trigger_word", "OHWX"), lora_type),
+        "neg": "blurry, low quality, deformed" if family != "flux" else "",
+        "seed": params.get("seed") or 42,
+        "walk_seed": True,
+        "guidance_scale": guidance,
+        "sample_steps": sample_steps,
+    }
+
+
 def spec_to_aitoolkit_config(spec: dict) -> dict:
     """Translate a TrainJobSpec (parsed from YAML) into ai-toolkit's config format.
 
@@ -73,42 +169,70 @@ def spec_to_aitoolkit_config(spec: dict) -> dict:
 
     base_model_id = model.get("base_model_id", "")
 
-    # Detect model architecture from the base model ID
-    is_flux = "flux" in base_model_id.lower()
+    # Detect lora type
+    lora_type = params.get("lora_type", "character")
 
-    # ai-toolkit's FLUX loading path uses from_pretrained() which requires
-    # HuggingFace diffusers directory format (transformer/, scheduler/, vae/,
-    # text_encoder/, text_encoder_2/, tokenizer/, tokenizer_2/).  Single
-    # safetensors files (like the fp8 checkpoint) are NOT compatible.
+    # Detect model architecture from the base model ID
+    bid_lower = base_model_id.lower()
+    if "flux" in bid_lower:
+        family = "flux"
+    elif "sdxl" in bid_lower or "xl" in bid_lower:
+        family = "sdxl"
+    elif "sd-1.5" in bid_lower or "sd15" in bid_lower or "1.5" in bid_lower:
+        family = "sd15"
+    else:
+        family = "sdxl"  # default to sdxl for unknown models
+
     # Map mods model IDs → HuggingFace hub IDs so ai-toolkit can resolve
     # configs and weights from the hub (cached in ~/.cache/huggingface/).
     HF_MODEL_MAP = {
         "flux-dev": "black-forest-labs/FLUX.1-dev",
         "flux-schnell": "black-forest-labs/FLUX.1-schnell",
+        "sdxl-base-1.0": "stabilityai/stable-diffusion-xl-base-1.0",
+        "sdxl-turbo": "stabilityai/sdxl-turbo",
+        "sd-1.5": "stable-diffusion-v1-5/stable-diffusion-v1-5",
     }
 
-    if is_flux:
+    if family == "flux":
         model_path = HF_MODEL_MAP.get(base_model_id, base_model_id)
     else:
-        model_path = model.get("base_model_path") or base_model_id
+        # For SDXL/SD1.5, prefer the HF map, then store path, then raw ID
+        model_path = HF_MODEL_MAP.get(base_model_id,
+            model.get("base_model_path") or base_model_id)
 
-    # Build model config
+    # Build model config per architecture family
     model_config = {
         "name_or_path": model_path,
     }
-    if is_flux:
+    if family == "flux":
         model_config["is_flux"] = True
-        # Quantize fp16 → fp8 for 24 GB GPUs (4090, 3090, etc.)
         model_config["quantize"] = True
-        # low_vram: quantize on CPU to avoid loading the full fp16 model onto GPU
         model_config["low_vram"] = True
+    elif family == "sdxl":
+        model_config["arch"] = "sdxl"
 
-    # FLUX uses multi-resolution and different training dtype
-    resolution = params.get("resolution", 1024)
-    if is_flux:
+    # Resolution and dataset config per family
+    resolution = params.get("resolution", 1024 if family != "sd15" else 512)
+    if family == "flux":
         dataset_resolution = [512, 768, 1024]
-    else:
-        dataset_resolution = resolution
+    elif family == "sdxl":
+        dataset_resolution = [768, 1024]
+    else:  # sd15
+        dataset_resolution = [512]
+
+    # Network config: style uses higher rank for more capacity
+    # Alpha = rank gives scale=1.0 (simplest, most stable)
+    rank = params.get("rank", 16)
+    is_style = lora_type == "style"
+    network_config = {
+        "type": "lora",
+        "linear": rank,
+        "linear_alpha": rank,
+    }
+
+    # Style: more repeats + higher caption dropout to learn style over content
+    num_repeats = 10 if is_style else 1
+    caption_dropout = 0.3 if is_style else 0.05
 
     config = {
         "job": "extension",
@@ -120,55 +244,26 @@ def spec_to_aitoolkit_config(spec: dict) -> dict:
                     "training_folder": output.get("destination_dir", "output"),
                     "device": "cuda:0",
                     "trigger_word": params.get("trigger_word", "OHWX"),
-                    "network": {
-                        "type": "lora",
-                        "linear": params.get("rank", 16),
-                        "linear_alpha": params.get("rank", 16),
-                    },
+                    "network": network_config,
                     "save": {
                         "dtype": "float16",
-                        "save_every": params.get("steps", 2000),
-                        "max_step_saves_to_keep": 1,
+                        "save_every": max(params.get("steps", 2000) // 5, 500) if is_style else params.get("steps", 2000),
+                        "max_step_saves_to_keep": 5 if is_style else 1,
                     },
                     "datasets": [
                         {
                             "folder_path": dataset.get("path", ""),
                             "caption_ext": "txt",
-                            "caption_dropout_rate": 0.05,
+                            "caption_dropout_rate": caption_dropout,
                             "resolution": dataset_resolution,
                             "cache_latents_to_disk": True,
                             "default_caption": params.get("trigger_word", "OHWX"),
+                            "num_repeats": num_repeats,
                         }
                     ],
-                    "train": {
-                        "batch_size": 1,
-                        "steps": params.get("steps", 2000),
-                        "gradient_accumulation_steps": 1,
-                        "train_unet": True,
-                        "train_text_encoder": False,
-                        "gradient_checkpointing": True,
-                        "noise_scheduler": "flowmatch",
-                        "optimizer": params.get("optimizer", "adamw8bit"),
-                        "lr": params.get("learning_rate", 1e-4),
-                        "dtype": "bf16" if is_flux else "fp16",
-                        "ema_config": {
-                            "use_ema": True,
-                            "ema_decay": 0.99,
-                        },
-                    },
+                    "train": _build_train_block(family, params, lora_type),
                     "model": model_config,
-                    "sample": {
-                        "sampler": "flowmatch",
-                        "sample_every": params.get("steps", 2000),
-                        "width": resolution,
-                        "height": resolution,
-                        "prompts": [],
-                        "neg": "",
-                        "seed": params.get("seed") or 42,
-                        "walk_seed": True,
-                        "guidance_scale": 4,
-                        "sample_steps": 20,
-                    },
+                    "sample": _build_sample_block(family, params, resolution, lora_type),
                 }
             ],
         },

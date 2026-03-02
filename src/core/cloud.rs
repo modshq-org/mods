@@ -214,6 +214,7 @@ mod tests {
             },
             params: crate::core::job::TrainingParams {
                 preset: crate::core::job::Preset::Quick,
+                lora_type: crate::core::job::LoraType::Character,
                 trigger_word: "OHWX".into(),
                 steps: 1000,
                 rank: 8,

@@ -17,7 +17,7 @@ from typing import List
 
 from mods_worker.protocol import EventEmitter
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def _find_images(dataset_path: Path) -> List[Path]:
@@ -73,6 +73,9 @@ def _resize_image(image_path: Path, resolution: int, method: str) -> dict:
         save_kwargs["format"] = "JPEG"
     elif ext == ".png":
         save_kwargs["format"] = "PNG"
+    elif ext == ".webp":
+        save_kwargs["quality"] = 95
+        save_kwargs["format"] = "WEBP"
 
     img.save(image_path, **save_kwargs)
     final_w, final_h = img.size

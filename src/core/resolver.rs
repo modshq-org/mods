@@ -133,6 +133,7 @@ mod tests {
             cloud_available: false,
             cloud_training: None,
             cloud_inference: None,
+            huggingface_repo: None,
             category: None,
             training_details: None,
             sample_images: vec![],

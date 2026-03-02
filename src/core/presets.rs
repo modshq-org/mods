@@ -1,4 +1,4 @@
-use crate::core::job::{Preset, TrainingParams};
+use crate::core::job::{LoraType, Preset, TrainingParams};
 
 /// Dataset statistics needed for preset resolution
 #[derive(Debug, Clone)]
@@ -50,6 +50,7 @@ impl BaseModelFamily {
 /// No I/O — only takes values and returns computed params.
 pub fn resolve_params(
     preset: Preset,
+    lora_type: LoraType,
     dataset: &DatasetStats,
     gpu: Option<&GpuContext>,
     base_model: &str,
@@ -61,19 +62,38 @@ pub fn resolve_params(
     let quantize = vram_mb > 0 && vram_mb < 40_000;
     let img_count = dataset.image_count;
 
-    let (steps, rank, learning_rate) = match preset {
-        Preset::Quick => {
+    let (steps, rank, learning_rate) = match (preset, lora_type) {
+        // --- Style presets: high rank, many more steps ---
+        // Style requires much longer training than character/subject.
+        // Reference: ~15 epochs with repeats for proper style transfer.
+        (Preset::Quick, LoraType::Style) => {
+            // Quick style: ~5 epochs worth. batch=2, repeats=10
+            // epoch ≈ img_count * 10 / 2 steps, so 5 epochs ≈ img * 25
+            let steps = compute_steps(img_count, 25, 4000, 15000);
+            (steps, 32, 1e-4)
+        }
+        (Preset::Standard, LoraType::Style) => {
+            // Standard style: ~15 epochs
+            let steps = compute_steps(img_count, 75, 8000, 40000);
+            (steps, 64, 1e-4)
+        }
+        (Preset::Advanced, LoraType::Style) => {
+            let steps = compute_steps(img_count, 75, 8000, 50000);
+            (steps, 128, 1e-4)
+        }
+
+        // --- Character / Object presets: lower rank, lower LR ---
+        (Preset::Quick, _) => {
             let steps = compute_steps(img_count, 150, 1000, 1500);
             (steps, 8, 1e-4)
         }
-        Preset::Standard => {
+        (Preset::Standard, _) => {
             let steps = compute_steps(img_count, 200, 2000, 4000);
             let rank = if img_count < 20 { 16 } else { 32 };
             let lr = if img_count < 10 { 5e-5 } else { 1e-4 };
             (steps, rank, lr)
         }
-        Preset::Advanced => {
-            // Advanced starts with Standard defaults; user edits in $EDITOR later
+        (Preset::Advanced, _) => {
             let steps = compute_steps(img_count, 200, 2000, 4000);
             (steps, 16, 1e-4)
         }
@@ -81,6 +101,7 @@ pub fn resolve_params(
 
     TrainingParams {
         preset,
+        lora_type,
         trigger_word: trigger_word.to_string(),
         steps,
         rank,
@@ -123,6 +144,7 @@ mod tests {
     fn quick_min_steps() {
         let p = resolve_params(
             Preset::Quick,
+            LoraType::Character,
             &dataset(3),
             Some(&gpu(24576)),
             "flux-schnell",
@@ -138,6 +160,7 @@ mod tests {
     fn quick_max_steps() {
         let p = resolve_params(
             Preset::Quick,
+            LoraType::Character,
             &dataset(50),
             Some(&gpu(24576)),
             "flux-schnell",
@@ -151,6 +174,7 @@ mod tests {
     fn quick_normal_scaling() {
         let p = resolve_params(
             Preset::Quick,
+            LoraType::Character,
             &dataset(8),
             Some(&gpu(24576)),
             "flux-schnell",
@@ -166,6 +190,7 @@ mod tests {
     fn standard_small_dataset() {
         let p = resolve_params(
             Preset::Standard,
+            LoraType::Character,
             &dataset(8),
             Some(&gpu(24576)),
             "flux-dev",
@@ -181,6 +206,7 @@ mod tests {
     fn standard_large_dataset() {
         let p = resolve_params(
             Preset::Standard,
+            LoraType::Character,
             &dataset(25),
             Some(&gpu(24576)),
             "flux-dev",
@@ -196,6 +222,7 @@ mod tests {
     fn standard_medium_dataset() {
         let p = resolve_params(
             Preset::Standard,
+            LoraType::Character,
             &dataset(15),
             Some(&gpu(24576)),
             "flux-dev",
@@ -213,6 +240,7 @@ mod tests {
     fn advanced_defaults() {
         let p = resolve_params(
             Preset::Advanced,
+            LoraType::Character,
             &dataset(10),
             Some(&gpu(24576)),
             "flux-schnell",
@@ -228,6 +256,7 @@ mod tests {
     fn quantize_when_low_vram() {
         let p = resolve_params(
             Preset::Quick,
+            LoraType::Character,
             &dataset(10),
             Some(&gpu(24576)),
             "flux-schnell",
@@ -240,6 +269,7 @@ mod tests {
     fn no_quantize_when_high_vram() {
         let p = resolve_params(
             Preset::Quick,
+            LoraType::Character,
             &dataset(10),
             Some(&gpu(49152)),
             "flux-schnell",
@@ -250,17 +280,32 @@ mod tests {
 
     #[test]
     fn no_quantize_when_no_gpu_info() {
-        let p = resolve_params(Preset::Quick, &dataset(10), None, "flux-schnell", "OHWX");
+        let p = resolve_params(
+            Preset::Quick,
+            LoraType::Character,
+            &dataset(10),
+            None,
+            "flux-schnell",
+            "OHWX",
+        );
         assert!(!p.quantize); // no GPU info → don't quantize
     }
 
     #[test]
     fn resolution_from_base_model() {
-        let flux = resolve_params(Preset::Quick, &dataset(10), None, "flux-dev", "OHWX");
+        let flux = resolve_params(
+            Preset::Quick,
+            LoraType::Character,
+            &dataset(10),
+            None,
+            "flux-dev",
+            "OHWX",
+        );
         assert_eq!(flux.resolution, 1024);
 
         let sdxl = resolve_params(
             Preset::Quick,
+            LoraType::Character,
             &dataset(10),
             None,
             "stable-diffusion-xl",
@@ -268,7 +313,14 @@ mod tests {
         );
         assert_eq!(sdxl.resolution, 1024);
 
-        let sd15 = resolve_params(Preset::Quick, &dataset(10), None, "sd-1.5", "OHWX");
+        let sd15 = resolve_params(
+            Preset::Quick,
+            LoraType::Character,
+            &dataset(10),
+            None,
+            "sd-1.5",
+            "OHWX",
+        );
         assert_eq!(sd15.resolution, 512);
     }
 
@@ -276,6 +328,7 @@ mod tests {
     fn optimizer_always_adamw8bit() {
         let p = resolve_params(
             Preset::Standard,
+            LoraType::Character,
             &dataset(10),
             Some(&gpu(24576)),
             "flux-schnell",
@@ -288,6 +341,7 @@ mod tests {
     fn trigger_word_passthrough() {
         let p = resolve_params(
             Preset::Quick,
+            LoraType::Character,
             &dataset(10),
             None,
             "flux-schnell",

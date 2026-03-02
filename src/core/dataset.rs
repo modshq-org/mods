@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 /// Valid image extensions for training datasets
-const VALID_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
+const VALID_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 
 /// Scanned image entry
 #[derive(Debug, Clone)]
@@ -334,9 +334,17 @@ mod tests {
     #[test]
     fn test_scan_ignores_non_images() {
         let tmp = tempfile::TempDir::new().unwrap();
-        create_test_dataset(tmp.path(), &["a.jpg", "b.txt", "c.bmp", "d.webp"], &[]);
+        create_test_dataset(tmp.path(), &["a.jpg", "b.txt", "c.bmp", "d.gif"], &[]);
         let info = scan(tmp.path()).unwrap();
         assert_eq!(info.image_count, 1); // only a.jpg
+    }
+
+    #[test]
+    fn test_scan_accepts_webp() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        create_test_dataset(tmp.path(), &["a.jpg", "b.webp", "c.png"], &[]);
+        let info = scan(tmp.path()).unwrap();
+        assert_eq!(info.image_count, 3); // jpg, webp, png all valid
     }
 
     #[test]

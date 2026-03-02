@@ -24,7 +24,7 @@ from typing import List, Tuple
 
 from mods_worker.protocol import EventEmitter
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def _find_images(dataset_path: Path, overwrite: bool) -> List[Tuple[Path, str]]:
@@ -50,19 +50,25 @@ def _find_images(dataset_path: Path, overwrite: bool) -> List[Tuple[Path, str]]:
 # ---------------------------------------------------------------------------
 
 
-def _load_florence2(emitter: EventEmitter) -> Tuple:
-    """Load Florence-2 model and processor."""
+def _load_florence2(emitter: EventEmitter, model_path: str | None = None) -> Tuple:
+    """Load Florence-2 model and processor.
+    
+    If model_path is provided, loads from that local directory (pre-downloaded
+    via mods registry). Otherwise falls back to HuggingFace Hub download.
+    """
     from transformers import AutoModelForCausalLM, AutoProcessor
     import torch
 
-    model_id = "microsoft/Florence-2-large"
-    emitter.info(f"Loading {model_id}...")
+    model_id = model_path or "microsoft/Florence-2-large"
+    source = "local" if model_path else "HuggingFace Hub"
+    emitter.info(f"Loading Florence-2 from {source}: {model_id}")
 
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.float16,
         trust_remote_code=True,
+        attn_implementation="eager",
     ).to("cuda")
 
     return model, processor
@@ -93,6 +99,7 @@ def _tag_florence2(model, processor, image_path: Path) -> str:
                 max_new_tokens=256,
                 num_beams=3,
                 do_sample=False,
+                use_cache=False,
             )
         text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
         parsed = processor.post_process_generation(
@@ -214,6 +221,7 @@ def run_tag(config_path: Path, emitter: EventEmitter) -> int:
     dataset_path = Path(spec.get("dataset_path", ""))
     model_name = spec.get("model", "florence-2")
     overwrite = spec.get("overwrite", False)
+    model_path = spec.get("model_path")  # Local path from registry, if available
 
     if not dataset_path.exists() or not dataset_path.is_dir():
         emitter.error(
@@ -236,7 +244,7 @@ def run_tag(config_path: Path, emitter: EventEmitter) -> int:
     # Load model
     try:
         if model_name.lower() in ("florence-2", "florence2", "florence"):
-            model, processor = _load_florence2(emitter)
+            model, processor = _load_florence2(emitter, model_path)
             tag_fn = lambda img_path: _tag_florence2(model, processor, img_path)
         elif model_name.lower() in ("wd-tagger", "wd", "wdtagger"):
             _load_wd_tagger(emitter)

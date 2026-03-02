@@ -37,6 +37,11 @@ pub struct CaptionJobSpec {
     pub model: String,
     #[serde(default)]
     pub overwrite: bool,
+    /// Local path to a pre-downloaded VL model (from registry).
+    /// When set, the Python adapter loads from this path instead of
+    /// downloading from HuggingFace Hub.
+    #[serde(default)]
+    pub model_path: Option<String>,
 }
 
 fn default_caption_model() -> String {
@@ -58,6 +63,9 @@ pub struct TagJobSpec {
     pub model: String,
     #[serde(default)]
     pub overwrite: bool,
+    /// Local path to a pre-downloaded VL model (from registry).
+    #[serde(default)]
+    pub model_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +157,7 @@ pub struct OutputRef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrainingParams {
     pub preset: Preset,
+    pub lora_type: LoraType,
     pub trigger_word: String,
     pub steps: u32,
     pub rank: u32,
@@ -158,6 +167,36 @@ pub struct TrainingParams {
     #[serde(default)]
     pub seed: Option<u64>,
     pub quantize: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum LoraType {
+    Style,
+    Character,
+    Object,
+}
+
+impl std::fmt::Display for LoraType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Style => write!(f, "style"),
+            Self::Character => write!(f, "character"),
+            Self::Object => write!(f, "object"),
+        }
+    }
+}
+
+impl std::str::FromStr for LoraType {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "style" => Ok(Self::Style),
+            "character" | "char" => Ok(Self::Character),
+            "object" | "obj" => Ok(Self::Object),
+            _ => anyhow::bail!("Unknown lora type: {s}. Expected style, character, or object."),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +381,7 @@ mod tests {
             },
             params: TrainingParams {
                 preset: Preset::Standard,
+                lora_type: LoraType::Character,
                 trigger_word: "OHWX".into(),
                 steps: 3000,
                 rank: 16,
@@ -388,6 +428,7 @@ mod tests {
             dataset_path: "/tmp/my-dataset".into(),
             model: "florence-2".into(),
             overwrite: false,
+            model_path: None,
         };
         let yaml = serde_yaml::to_string(&spec).unwrap();
         let back: CaptionJobSpec = serde_yaml::from_str(&yaml).unwrap();

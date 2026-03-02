@@ -20,6 +20,7 @@ pub async fn run(
     base: Option<&str>,
     name: Option<&str>,
     trigger: Option<&str>,
+    lora_type_arg: Option<LoraType>,
     preset_arg: Option<Preset>,
     steps: Option<u32>,
     config: Option<&str>,
@@ -96,7 +97,7 @@ pub async fn run(
     let base_model = match base {
         Some(b) => b.to_string(),
         None => {
-            let models = &["flux-dev", "flux-schnell"];
+            let models = &["flux-dev", "flux-schnell", "sdxl-base-1.0", "sdxl-turbo"];
             let selection = dialoguer::Select::new()
                 .with_prompt("Base model")
                 .items(models)
@@ -131,6 +132,31 @@ pub async fn run(
                 .default(default_name)
                 .interact_text()
                 .context("Name input cancelled")?
+        }
+    };
+
+    // -------------------------------------------------------------------
+    // Resolve LoRA type (style, character, object)
+    // -------------------------------------------------------------------
+    let lora_type = match lora_type_arg {
+        Some(t) => t,
+        None => {
+            let types = &[
+                "Style (art style, visual aesthetic)",
+                "Character (person, face)",
+                "Object (item, concept)",
+            ];
+            let selection = dialoguer::Select::new()
+                .with_prompt("LoRA type")
+                .items(types)
+                .default(0)
+                .interact()
+                .context("LoRA type selection cancelled")?;
+            match selection {
+                0 => LoraType::Style,
+                1 => LoraType::Character,
+                _ => LoraType::Object,
+            }
         }
     };
 
@@ -180,6 +206,7 @@ pub async fn run(
 
     let mut params = presets::resolve_params(
         preset,
+        lora_type,
         &ds_stats,
         gpu_ctx.as_ref(),
         &base_model,
