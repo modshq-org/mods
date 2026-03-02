@@ -28,11 +28,11 @@
   .header nav button.active { background: var(--bg3); color: var(--fg); border-color: var(--border); }
   .header nav button:hover { color: var(--fg); }
 
-  .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+  .container { margin: 0 auto; padding: 16px 20px; }
 
   /* Sidebar + Main layout for runs */
   .split { display: flex; gap: 24px; }
-  .sidebar { width: 240px; flex-shrink: 0; }
+  .sidebar { width: 200px; flex-shrink: 0; }
   .sidebar-list { list-style: none; }
   .sidebar-list li { padding: 8px 12px; border-radius: var(--radius); cursor: pointer;
     color: var(--fg2); font-size: 14px; border: 1px solid transparent; margin-bottom: 2px; }
@@ -124,18 +124,16 @@
     max-height: 0; opacity: 0; margin-top: 0; }
   .config-details.open { max-height: 2000px; opacity: 1; margin-top: 12px; }
 
-  /* Evolution grid */
+  /* Evolution grid — CSS grid for perfect column alignment */
   .evo-table-wrap { overflow-x: auto; }
   .evo-prompt { font-size: 12px; color: var(--fg2); padding: 8px 0 4px; }
   .evo-prompt:first-child { padding-top: 0; }
-  .evo-step-headers { display: flex; gap: 4px; padding-bottom: 4px; }
-  .evo-step-headers span { min-width: 120px; max-width: 180px; font-size: 11px;
-    font-weight: 600; color: var(--accent); text-align: left; flex-shrink: 0; }
-  .evo-row { display: flex; gap: 4px; padding-bottom: 12px; }
-  .evo-row img { min-width: 120px; max-width: 180px; flex-shrink: 0; display: block;
-    border-radius: 4px; cursor: pointer; transition: opacity 0.15s;
-    border: 1px solid var(--border); }
-  .evo-row img:hover { opacity: 0.85; border-color: var(--accent); }
+  .evo-grid { display: grid; gap: 4px; }
+  .evo-grid .evo-hdr { font-size: 11px; font-weight: 600; color: var(--accent); text-align: left;
+    padding-bottom: 4px; white-space: nowrap; }
+  .evo-grid img { width: 100%; display: block; border-radius: 4px; cursor: pointer;
+    transition: opacity 0.15s; border: 1px solid var(--border); }
+  .evo-grid img:hover { opacity: 0.85; border-color: var(--accent); }
 
   /* Empty state */
   .empty { text-align: center; padding: 60px 20px; color: var(--fg2); }
@@ -403,27 +401,29 @@ async function selectRun(name) {
     if (promptCount === 0) {
       html += '<p style="color:var(--fg2)">No sample images generated yet.</p>';
     } else {
-      html += '<div class="evo-table-wrap">';
-      // Step number headers
-      html += '<div class="evo-step-headers">';
+      const stepCount = run.samples.length;
+      html += `<div class="evo-table-wrap">`;
+      // Use CSS grid with one column per step for perfect alignment
+      html += `<div class="evo-grid" style="grid-template-columns: repeat(${stepCount}, minmax(100px, 1fr));">`;
+      // Step number headers (first row of the grid)
       for (const group of run.samples) {
-        html += `<span>Step ${group.step.toLocaleString()}</span>`;
+        html += `<div class="evo-hdr">Step ${group.step.toLocaleString()}</div>`;
       }
-      html += '</div>';
-
+      // One grid-row per prompt
       for (let i = 0; i < promptCount; i++) {
         const promptText = samplePrompts[i] || `Prompt ${i + 1}`;
-        html += `<div class="evo-prompt">${escapeHtml(promptText)}</div>`;
-        html += '<div class="evo-row">';
+        // Prompt label spans all columns
+        html += `<div class="evo-prompt" style="grid-column: 1 / -1">${escapeHtml(promptText)}</div>`;
         for (const group of run.samples) {
           const img = group.images[i];
           if (img) {
             html += `<img src="/files/${img}" loading="lazy" onclick="openLightbox('/files/${img}')" title="Step ${group.step.toLocaleString()}">`;
+          } else {
+            html += `<div></div>`;
           }
         }
-        html += '</div>';
       }
-
+      html += '</div>';
       html += '</div>';
     }
     html += '</div>';
