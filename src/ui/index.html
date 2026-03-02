@@ -392,7 +392,12 @@ async function selectRun(name) {
 
   // Evolution grid: prompt label as row above images, left-aligned
   if (run.samples.length > 0) {
-    const promptCount = run.samples[0]?.images?.length || 0;
+    // Derive prompt count from the mode (most common image count) across steps,
+    // rather than from step 0 which may have duplicates from resumed runs.
+    const imgCounts = run.samples.map(s => s.images.length).filter(n => n > 0);
+    const promptCount = imgCounts.length > 0
+      ? imgCounts.sort((a,b) => imgCounts.filter(v => v===a).length - imgCounts.filter(v => v===b).length).pop()
+      : 0;
 
     html += '<div class="card"><h2>Sample Evolution</h2>';
     if (promptCount === 0) {

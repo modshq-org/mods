@@ -363,6 +363,9 @@ pub enum Commands {
         /// Don't auto-open the browser
         #[arg(long)]
         no_open: bool,
+        /// Run in foreground (blocks terminal; default is background/daemon)
+        #[arg(long)]
+        foreground: bool,
     },
 
     /// Update mods CLI to the latest release
@@ -467,7 +470,11 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Config { key, value } => config::run(key.as_deref(), value.as_deref()).await,
         Commands::Auth { provider } => auth::run(provider).await,
         Commands::Outputs { command } => outputs::run(command).await,
-        Commands::Preview { port, no_open } => preview::run(port, no_open).await,
+        Commands::Preview {
+            port,
+            no_open,
+            foreground,
+        } => preview::run(port, no_open, foreground).await,
         Commands::Upgrade => upgrade::run().await,
         Commands::CliSchema => {
             dump_cli_schema();
