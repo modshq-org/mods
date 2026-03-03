@@ -1,257 +1,178 @@
-# modl: The Opinionated Image Generation Toolkit
+# modl — Plan & Status
 
-> Last updated: 2026-02-27 — audited against `feat/train-command` branch
+> Last updated: 2026-03-03
+> Single source of truth. Everything else in `docs/` is reference material.
 
-1. CLI-first (like rails/cargo/git)
-2. Opinionated defaults with escape hatches
-3. Covers the *full lifecycle*: models → datasets → training → inference → outputs
-4. Local-first, cloud-burst capable
-5. Actually maintained for modern models (Flux, Z-Image, Qwen, etc.)
+## What modl is
+
+The sane, opinionated way to run diffusion locally.
+
+1. **Opinionated model installer** — `modl pull flux-dev`, deps handled, no thinking
+2. **Opinionated LoRA trainer** — presets (quick/standard/advanced), sensible defaults
+3. **Opinionated generator** — simple flags, seeds, batch, size presets, LoRA stacking
+
+CLI-first. Rust binary + managed Python runtime. Local-first.
 
 ---
 
-## Current Status Summary
+## Current Status
 
-The CLI is on the `feat/train-command` branch. **All 55 unit tests pass.**
-The full Rust+Python pipeline exists for both training and generation.
-The key missing pieces are E2E testing on a real GPU and output management UX.
+**~15K Rust LOC, ~2K Python LOC. 55 unit tests passing. On `main` branch.**
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Model pull/install | ✅ Done | Registry, HF download, content-addressed store, dep resolution, symlinks |
-| Model ls/info/search | ✅ Done | Filtering by type, detailed info, popular/trending |
-| Model link (ComfyUI/A1111) | ✅ Done | Auto-detect layouts, bidirectional symlinks |
-| Config (YAML) | ✅ Done | `modl config`, ~/.modl/config.yaml, targets, storage |
-| GPU detection | ✅ Done | NVML + nvidia-smi fallback, variant auto-selection |
-| Auth (HF, CivitAI) | ✅ Done | Token prompting and storage |
-| Dataset create/ls/validate | ✅ Done | Copy images, pair captions, scan managed datasets |
-| Dataset caption | ✅ Done | Florence-2/BLIP auto-captioning via Python adapter |
-| Training presets | ✅ Done | Quick/Standard/Advanced with full test coverage |
-| TrainJobSpec + events | ✅ Done | All types, serde roundtrips, event protocol |
-| Executor trait + LocalExecutor | ✅ Done | submit, events (mpsc), cancel, stdout→JobEvent parsing |
-| CLI train (interactive + flags) | ✅ Done | Dialoguer prompts, dry-run, $EDITOR for Advanced |
-| Artifact collection | ✅ Done | Hash, store, register in DB, symlink to ~/.modl/loras/ |
-| Job tracking (DB) | ✅ Done | jobs/job_events/artifacts tables, full CRUD |
-| Python train adapter | ✅ Done | spec→ai-toolkit YAML, stdout progress parsing, artifact scan |
-| CLI generate | ✅ Done | Prompt, --lora, --seed, --size presets, --count, progress bar |
-| Python gen adapter | ✅ Done | FluxPipeline/SDXL/SD1.5, LoRA loading, artifact emission |
-| Runtime management | ✅ Done | Python venv bootstrap, ai-toolkit install, setup command |
-| Doctor/GC/Export/Import | ✅ Done | Health checks, garbage collection, lockfile round-trip |
+| Model pull/ls/rm/search/info | ✅ Solid | Registry (68 models), HF direct pulls (`hf:` prefix), content-addressed store |
+| Model link (ComfyUI/A1111) | ✅ Solid | Auto-detect layouts, cross-device fallback |
+| HuggingFace integration | ✅ Done | `modl pull hf:owner/repo`, HF fallback in search |
+| Config / Auth / GPU detect | ✅ Done | YAML config, HF/CivitAI tokens, NVML + nvidia-smi |
+| Dataset create/validate/caption | ✅ Done | Florence-2/BLIP auto-captioning, tag, resize |
+| Training (presets + executor) | ✅ Working | SDXL LoRA trained successfully, previews generated |
+| Generation (CLI) | ✅ Built | Flux/SDXL/SD1.5 via diffusers, LoRA loading |
+| Output management | ✅ Done | `modl outputs` list/show/open/search |
+| Runtime bootstrap | ✅ Done | Python venv + ai-toolkit install |
+| Doctor/GC/Export/Import | ✅ Done | Orphan detection, repair, lockfile round-trip |
 | `modl upgrade` | ✅ Done | Self-update from GitHub releases |
-| Output management CLI | ✅ Done | `modl outputs` list/show/open/search |
-| E2E GPU validation | ❌ Blocked | Need real GPU test of full train→generate flow |
-| Batch generation | ❌ Not started | `modl generate --batch prompts.txt` |
-| `--cloud` flag | 🟡 Stubbed | CloudExecutor struct + provider enum + cred resolution done, submit not-implemented |
-| Cloud training | ❌ Not started | API service + Modal backend + CloudExecutor.submit() |
-| Web UI (`modl serve`) | ⏸️ Deferred | CLI-first. UI reads same DB, build independently later |
 
 ---
 
 ## Architecture
 
 ```
-CLI layer (interactive prompts, progress display)
+modl CLI (Rust, single binary)
     │
-    ├── presets::resolve_params()  ── pure logic, no I/O
-    ├── dataset::validate()        ── filesystem scan
-    ├── gpu::detect()              ── NVML + nvidia-smi
-    │
-    ▼
-TrainJobSpec / GenerateJobSpec  ◄── the serialization boundary
+    ├── presets::resolve_params()   ── pure logic, no I/O
+    ├── dataset::validate()         ── filesystem scan
+    ├── gpu::detect()               ── NVML + nvidia-smi
     │
     ▼
-┌─────────────────────┐
-│  dyn Executor       │  ◄── trait: submit / submit_generate / events / cancel
-├─────────────────────┤
-│  LocalExecutor      │  ◄── Implemented ✅
-│  CloudExecutor      │  ◄── Future (just impl the trait)
-└─────────────────────┘
+TrainJobSpec / GenerateJobSpec      ◄── serialization boundary
     │
     ▼
-artifacts::collect_lora()  ── hash, store, register, symlink
+LocalExecutor                       ◄── spawn Python, parse JSONL events
+    │
+    ▼
+Python runtime (modl_worker/)
+    ├── train_adapter.py            ── spec → ai-toolkit YAML
+    ├── gen_adapter.py              ── diffusers pipeline loading
+    ├── caption_adapter.py          ── Florence-2/BLIP
+    └── protocol.py                 ── JSON-line events over stdout
 ```
-
-The job spec is the contract. Same `TrainJobSpec` struct gets built by presets,
-persisted to DB, and handed to whichever executor runs it. Adding `--cloud`
-means implementing one new struct, not refactoring the pipeline.
-
-### File Map (key modules, ~10500 LOC total)
-
-| File | LOC | Purpose |
-|------|-----|---------|
-| `src/core/runtime.rs` | 803 | Python venv bootstrap, ai-toolkit install, profile management |
-| `src/core/executor.rs` | 627 | Executor trait + LocalExecutor (train + generate) |
-| `src/cli/mod.rs` | 508 | CLI arg definitions, command dispatch |
-| `src/core/db.rs` | 448 | SQLite: installed, symlinks, deps, jobs, events, artifacts |
-| `src/cli/train.rs` | 478 | Interactive prompts, executor dispatch, progress display |
-| `src/cli/install.rs` | 430 | `modl model pull` — download, verify, register |
-| `src/core/job.rs` | 382 | TrainJobSpec, GenerateJobSpec, JobEvent, EventPayload |
-| `src/cli/generate.rs` | 370 | Generate command with LoRA resolution, size presets |
-| `src/core/dataset.rs` | 322 | Dataset create/scan/validate/list |
-| `src/core/presets.rs` | 298 | Quick/Standard/Advanced param resolution |
-| `src/core/cloud.rs` | 238 | CloudExecutor stub + provider enum + credential resolution |
-| `src/core/artifacts.rs` | 217 | LoRA collection: hash, store, register, symlink |
-| `python/modl_worker/adapters/gen_adapter.py` | 250 | Diffusers pipeline loading + inference |
-| `python/modl_worker/adapters/caption_adapter.py` | 240 | Florence-2/BLIP auto-captioning adapter |
-| `python/modl_worker/adapters/train_adapter.py` | 222 | ai-toolkit config translation + process orchestration |
-| `python/modl_worker/protocol.py` | 99 | EventEmitter: JSON-line protocol over stdout |
 
 ---
 
-## The MVP: What modl Actually Does
+## Phases
 
-### Philosophy: CLI is the truth, UI is a window
+### Phase 1 — Bulletproof install + setup ✅
 
-```
-modl model pull flux-dev        # download from HF, deps auto-resolved
-modl model ls                   # list installed (checkpoints, loras, vaes)
-modl model ls --type lora       # filter by type
+*Done.* One `curl | sh` install. `modl doctor` catches broken symlinks, missing
+deps, corrupt files. `modl pull` resolves dependencies. GPU auto-detection picks
+the right variant.
 
-modl dataset create myface --from ~/photos/headshots/
-modl dataset ls                 # table: name, images, captions, coverage
-modl dataset validate myface    # checks image count, warns if < 5
+Remaining polish:
+- [ ] CUDA compatibility edge cases (test on more machines)
+- [ ] `modl init` wizard for first-time setup
 
-modl train                      # interactive: pick dataset, model, preset
-modl train --dataset myface --base flux-schnell --name myface-v1
-modl train --config custom.yml  # escape hatch: full TrainJobSpec YAML
-modl train --dry-run            # print generated spec without running
+### Phase 2 — Validate full train→generate flow 🔄
 
-modl generate "a photo of OHWX on marble countertop"
-modl generate "a photo of OHWX" --lora myface-v1 --seed 42
-modl generate "a cat" --base flux-schnell --size 16:9 --count 4
-```
+The pipeline exists end-to-end. SDXL LoRA training works with preview generation.
 
-### The Three Layers
+- [x] SDXL LoRA training (confirmed working)
+- [x] Training previews / samples
+- [x] Dataset annotation
+- [ ] Flux training E2E validation
+- [ ] Generation E2E validation (`modl generate` → image on disk)
+- [ ] Fix integration issues that surface on GPU
 
-```
-Layer 1: modl CLI (Rust, single binary)
-├── Model manager (download, dep resolution, content-addressed store)
-├── Dataset manager (create, validate, scan)
-├── Training orchestrator (presets → spec → executor → artifacts)
-├── Generation orchestrator (spec → executor → images)
-├── Job tracker (SQLite: jobs, events, artifacts)
-└── Tooling (doctor, gc, export/import, upgrade, init)
+### Phase 3 — Multi-arch training support
 
-Layer 2: modl Python runtime (managed by CLI)
-├── ai-toolkit (training, managed as dependency)
-├── diffusers (inference: Flux, SDXL, SD1.5 pipelines)
-└── LoRA loading + fusion
+Curated ai-toolkit configs for models people actually train on.
+See [multi-arch-training-plan.md](multi-arch-training-plan.md) for full gap analysis.
 
-Layer 3: modl web UI (future, `modl serve`)
-├── Reads from same SQLite + filesystem
-└── Generation playground + training dashboard
-```
+Priority order (by real-world demand):
 
-### Why Rust CLI + Python runtime?
+| # | Model | Status | Effort |
+|---|-------|--------|--------|
+| 1 | flux-dev / flux-schnell | ✅ Config ready | — |
+| 2 | sdxl / sd1.5 | ✅ Working | — |
+| 3 | z-image-turbo | 🟡 Config ready | E2E test |
+| 4 | chroma | 🟡 Config ready | E2E test |
+| 5 | Flux Kontext | ❌ Needs paired dataset support | ~1h |
+| 6 | FLUX.2 | ❌ Needs arch entry | ~30min |
+| 7 | Qwen-Image | ❌ Needs qtype + quant for 24GB | ~1h |
 
-- Rust CLI: fast startup, single binary distribution, file I/O, cross-platform
-- Python runtime: ai-toolkit and diffusers are Python. No point fighting this.
-- The CLI orchestrates Python processes. Like how `cargo` doesn't compile Rust itself — it calls `rustc`.
+### Phase 4 — Polish & batch
+
+- [ ] Batch generation (`modl generate --batch prompts.txt`)
+- [ ] Reproducible export (`modl outputs export <id>` → full YAML spec)
+- [ ] Registry curation: core tier (flux-dev, flux-schnell, sdxl) vs experimental
+- [ ] VRAM-aware config tuning (auto quantize/offload based on GPU)
+
+### Phase 5 — Persistent worker (performance)
+
+Eliminate 20-45s cold start on repeated `modl generate` calls.
+Python daemon with LRU model cache, LoRA hot-swap.
+See [specs/persistent-worker.md](specs/persistent-worker.md) for full spec.
+
+- [ ] Python serve mode (`modl_worker serve` on Unix socket)
+- [ ] Rust worker management (auto-spawn, health check, idle timeout)
+- [ ] Model cache with LRU eviction
+
+### Phase 6 — Web UI (`modl serve`)
+
+Prompt-first generate page. Training dashboard. Gallery.
+Build only after the CLI flow is rock-solid.
+See [archive/ui-architecture.md](archive/ui-architecture.md) for product spec.
+
+- [ ] REST + WebSocket API
+- [ ] Static UI compiled into binary
+- [ ] Generate page (prompt → image, LoRA selector)
+- [ ] Output gallery
+
+### Phase 7 — Cloud training (`--cloud`)
+
+`modl train --cloud` submits to a managed API. Cloud inference deferred.
+See [archive/cloud-plan.md](archive/cloud-plan.md) for architecture and pricing model.
+
+- [ ] modl API service (auth, billing, job dispatch)
+- [ ] Modal GPU backend
+- [ ] CloudExecutor.submit() implementation
+
+### Backlog — Not planned
+
+| Feature | Why not now |
+|---------|------------|
+| Video model training (Wan, LTX) | Different pipeline, defer until image is solid |
+| CivitAI direct pulls | Need API key setup, lower priority than HF |
+| Cloud inference | Cold start + keep_warm economics are brutal |
+| DAM / tagging / collections | Filesystem + `modl outputs search` is enough |
+| Node/graph editor | ComfyUI owns this, don't compete |
+| Multi-provider cloud (RunPod, etc.) | Get one provider working first |
 
 ---
 
-## What's Left to Ship: Prioritized
+## Reference docs
 
-### Priority 1: E2E Validation (real GPU test)
-
-Everything is wired. The critical next step is running the full flow on a machine
-with a GPU to shake out integration issues:
-
-```bash
-modl dataset create test --from ./some-images/
-modl train --dataset test --base flux-schnell --name test-v1 --preset quick
-modl generate "a photo of OHWX in a park" --lora test-v1
-```
-
-Likely issues to fix:
-- ai-toolkit config field mapping (model names, paths)
-- Runtime bootstrap edge cases (torch version, CUDA compatibility)
-- Diffusers pipeline loading (from_pretrained vs from_single_file logic)
-
-**This blocks everything below. Nothing else matters until generate produces an image.**
-
-### Priority 2: Output Management (mini DAM)
-
-Surface what's already in the DB. The `jobs`, `artifacts`, and `job_events` tables
-already store full specs, file paths, and metadata. This is mostly CLI presentation.
-
-```
-[x] modl outputs                  # list recent generations (table: id, prompt, model, lora, time)
-[x] modl outputs show <id>        # full metadata (prompt, seed, model, loras, params, paths)
-[x] modl outputs open <id>        # open image in system viewer
-[x] modl outputs search <query>   # search by prompt text, model, or lora name
-```
-
-Why before batch/cloud: without a way to find and review what you generated,
-every additional feature just creates more noise.
-
-### Priority 3: Batch Generation
-
-```
-[ ] modl generate --batch prompts.txt
-    - One prompt per line
-    - Sequential generation (VRAM limited to one at a time)
-    - Each image tracked as separate artifact in DB
-```
-
-### Priority 4: Reproducible Export
-
-```
-[ ] modl outputs export <id>      # dump full JobSpec as YAML (all params, model refs, versions)
-```
-
-The spec_json already contains everything needed. This is a one-command feature
-that makes any generation reproducible.
-
-### Priority 5: Cloud Training (`--cloud`, training only)
-
-Cloud inference deferred — cold start + keep_warm economics are brutal for
-interactive use. Cloud training is the real monetization.
-
-See [cloud/plan.md](cloud/plan.md) for full architecture.
-
-```
-[ ] modl API service (auth, job dispatch, S3)
-[ ] Modal backend (train_fn, model volumes)
-[ ] CloudExecutor.submit() implementation
-[ ] modl cloud login / modl cloud status
-```
-
-### Deferred (not blocking v1 UX)
-
-| Feature | Why deferred |
-|---------|-------------|
-| Cloud inference | Cold start UX + keep_warm cost. Generate locally with downloaded LoRA. |
-| Web UI (`modl serve`) | CLI-first. UI reads same DB, can be built independently. |
-| Runs/sessions | Build if grep-search over outputs isn't enough. Nullable `run_id` FK on jobs table. |
-| Tags/notes on outputs | Nice-to-have. Prompt search covers 90% of cases. |
-| Video generation | Architecture supports it (`output_kind` enum on GenerateJobSpec), but adapter not built. |
-| Bundle export (zip) | `modl outputs export` as YAML covers reproducibility. Zip packaging is a later packaging problem. |
-
-### Done ✅
-
-| Feature | Notes |
-|---------|-------|
-| Dataset captioning | `modl dataset caption <name>` — Florence-2/BLIP, --model, --overwrite |
-| CloudExecutor stub | Provider enum + credential resolution. submit() returns not-implemented. |
-| Doctor/GC/Export/Import | Health checks, garbage collection, lockfile round-trip |
-| `modl upgrade` | Self-update from GitHub releases |
+| Doc | What it covers | Status |
+|-----|---------------|--------|
+| [multi-arch-training-plan.md](multi-arch-training-plan.md) | ai-toolkit arch configs, per-model gaps | Active — Phase 3 guide |
+| [specs/aitoolkit-mapping.md](specs/aitoolkit-mapping.md) | TrainJobSpec → ai-toolkit YAML field mapping | Implemented, canonical |
+| [specs/jobs-schema-v1.md](specs/jobs-schema-v1.md) | Job/event/artifact JSON schemas | Implemented, canonical |
+| [specs/worker-protocol.md](specs/worker-protocol.md) | JSONL protocol between Rust and Python | Implemented, canonical |
+| [specs/execution-target.md](specs/execution-target.md) | Executor trait contract | Implemented (local), stubbed (cloud) |
+| [specs/persistent-worker.md](specs/persistent-worker.md) | Daemon architecture for fast generation | Phase 5 spec |
+| [archive/ui-architecture.md](archive/ui-architecture.md) | Web UI product spec | Phase 6 reference |
+| [archive/cloud-plan.md](archive/cloud-plan.md) | Cloud platform architecture + pricing | Phase 7 reference |
+| [archive/runtime-architecture.md](archive/runtime-architecture.md) | ComfyUI sidecar / YAML workflow vision | Aspirational, not planned |
+| [archive/capability-model.md](archive/capability-model.md) | Cloud auth/quota gating | Phase 7 detail |
+| [archive/runtime-profiles.md](archive/runtime-profiles.md) | Reproducible runtime manifests | Over-engineered, current venv works |
 
 ---
 
 ## What modl is NOT
 
-- **Not a node editor.** No graphs. If you want ComfyUI, use ComfyUI.
-- **Not a marketplace.** CivitAI exists. modl can *pull from* CivitAI.
-- **Not a hosted service.** You run it. On your machine or your cloud account.
-- **Not infinitely configurable.** Three training presets. Advanced gives you full YAML. That's it.
-
----
-
-## Verification Checklist
-
-1. **Unit tests** (all passing ✅ — 55 tests): Preset scaling, dataset scanning, spec roundtrips, DB CRUD, event parsing, artifact collection, cloud provider parsing
-2. **Integration test** (TODO): `modl dataset create` → `modl train --dry-run` → verify spec YAML
-3. **E2E with GPU** (TODO — Priority 1): Full training + generation flow on real hardware
-4. **Output management** (TODO — Priority 2): `modl outputs` list/show/open/search
-5. **Cloud training** (TODO — Priority 5): Implement CloudExecutor.submit(), test with Modal
+- Not a node editor (use ComfyUI)
+- Not a marketplace (use CivitAI)
+- Not a hosted service (you run it)
+- Not infinitely configurable (three presets, Advanced gives full YAML)
+- Not a DAM (filesystem + metadata JSON is enough)
+- Not a cloud platform (maybe later, not now)
