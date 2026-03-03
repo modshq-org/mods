@@ -31,9 +31,11 @@ _ERROR_PATTERNS = [
 
 _TAIL_BUFFER_SIZE = 30
 
-# Qwen-Image defaults tuned for 32GB-class cards (e.g. RTX 5090).
-# Users can override the quantization type via env when needed.
-_QWEN_DEFAULT_QTYPE = "uint6"
+# Qwen-Image quantization defaults:
+# - style: 24GB-friendly 3-bit + ARA
+# - character/object: 32GB-class default (e.g. RTX 5090)
+# Users can override via MODS_QWEN_QTYPE.
+_QWEN_32GB_DEFAULT_QTYPE = "uint6"
 _QWEN_24GB_QTYPE = "uint3|ostris/accuracy_recovery_adapters/qwen_image_torchao_uint3.safetensors"
 
 
@@ -413,20 +415,25 @@ def spec_to_aitoolkit_config(spec: dict) -> dict:
     model_config = {"name_or_path": model_path}
     model_config.update(arch["model_flags"])
     if arch_key == "qwen_image":
-        qtype = os.getenv("MODS_QWEN_QTYPE", _QWEN_DEFAULT_QTYPE).strip()
+        qwen_default_qtype = _QWEN_24GB_QTYPE if lora_type == "style" else _QWEN_32GB_DEFAULT_QTYPE
+        qtype = os.getenv("MODS_QWEN_QTYPE", qwen_default_qtype).strip()
         if qtype == "int6":
             qtype = "uint6"  # ai-toolkit uses uint* naming
         if not qtype:
-            qtype = _QWEN_DEFAULT_QTYPE
+            qtype = qwen_default_qtype
         model_config["qtype"] = qtype
         print(
             f"[mods] Qwen-Image profile active: qtype={qtype}, cache_text_embeddings=true "
             "(targets ~30GB VRAM on 1024px, e.g. RTX 5090 32GB)"
         )
-        if qtype == _QWEN_DEFAULT_QTYPE:
+        if qtype == _QWEN_32GB_DEFAULT_QTYPE:
             print(
                 f"[mods] NOTE: For 24GB cards, use MODS_QWEN_QTYPE='{_QWEN_24GB_QTYPE}' "
                 "to reduce VRAM at quality cost."
+            )
+        if lora_type == "style":
+            print(
+                "[mods] NOTE: Qwen style LoRAs work best with literal captions and usually no trigger word."
             )
 
     # Resolution and dataset config from arch table
@@ -495,7 +502,9 @@ def spec_to_aitoolkit_config(spec: dict) -> dict:
                             "cache_text_embeddings": arch_key == "qwen_image",
                             "resolution": dataset_resolution,
                             "cache_latents_to_disk": True,
-                            "default_caption": params.get("trigger_word", "OHWX"),
+                            # For Qwen + cached text embeddings, avoid injecting trigger
+                            # words as default captions. Literal per-image captions are preferred.
+                            "default_caption": "" if arch_key == "qwen_image" else params.get("trigger_word", "OHWX"),
                             "num_repeats": num_repeats,
                         }
                     ],

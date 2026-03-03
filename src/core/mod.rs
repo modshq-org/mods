@@ -17,3 +17,4 @@ pub mod store;
 pub mod symlink;
 pub mod training;
 pub mod training_status;
+pub mod update_check;
