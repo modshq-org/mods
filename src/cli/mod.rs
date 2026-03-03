@@ -409,6 +409,9 @@ pub enum Commands {
         /// Also verify SHA256 hashes (slow for large files)
         #[arg(long)]
         verify_hashes: bool,
+        /// Re-populate database from orphaned store files
+        #[arg(long)]
+        repair: bool,
     },
 
     /// View or update configuration (e.g., storage.root, gpu.vram_mb)
@@ -547,7 +550,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Dataset { command } => datasets::run(command).await,
         Commands::Runtime { command } => runtime::run(command).await,
-        Commands::Doctor { verify_hashes } => doctor::run(verify_hashes).await,
+        Commands::Doctor {
+            verify_hashes,
+            repair,
+        } => doctor::run(verify_hashes, repair).await,
         Commands::Config { key, value } => config::run(key.as_deref(), value.as_deref()).await,
         Commands::Auth { provider } => auth::run(provider).await,
         Commands::Outputs { command } => outputs::run(command).await,
