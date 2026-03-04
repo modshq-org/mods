@@ -442,6 +442,9 @@ pub enum Commands {
         /// Cloud provider to use (modal, replicate, runpod)
         #[arg(long, value_enum)]
         provider: Option<CloudProvider>,
+        /// Output result as JSON (suppresses progress output)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Manage datasets for training
@@ -675,6 +678,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             count,
             cloud,
             provider,
+            json,
         } => {
             generate::run(
                 &prompt,
@@ -688,6 +692,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 count,
                 cloud,
                 provider,
+                json,
             )
             .await
         }

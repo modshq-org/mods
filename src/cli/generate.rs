@@ -118,6 +118,7 @@ pub async fn run(
     count: u32,
     cloud: bool,
     provider: Option<CloudProvider>,
+    json: bool,
 ) -> Result<()> {
     let db = Database::open()?;
 
@@ -200,31 +201,34 @@ pub async fn run(
     // -------------------------------------------------------------------
     // Print summary
     // -------------------------------------------------------------------
-    println!("{} Generating image(s)...", style("→").cyan());
-    println!("  Prompt: {}", style(prompt).italic());
-    println!("  Model:  {}", base_model);
-    if let Some(ref lr) = lora_ref {
-        println!("  LoRA:   {} (strength: {:.2})", lr.name, lr.weight);
-    }
-    println!("  Size:   {}×{}", width, height);
-    println!("  Steps:  {}", steps);
-    if let Some(s) = seed {
-        println!("  Seed:   {}", s);
-    }
-    if count > 1 {
-        println!("  Count:  {}", count);
+    if !json {
+        println!("{} Generating image(s)...", style("→").cyan());
+        println!("  Prompt: {}", style(prompt).italic());
+        println!("  Model:  {}", base_model);
+        if let Some(ref lr) = lora_ref {
+            println!("  LoRA:   {} (strength: {:.2})", lr.name, lr.weight);
+        }
+        println!("  Size:   {}×{}", width, height);
+        println!("  Steps:  {}", steps);
+        if let Some(s) = seed {
+            println!("  Seed:   {}", s);
+        }
+        if count > 1 {
+            println!("  Count:  {}", count);
+        }
     }
 
     // -------------------------------------------------------------------
     // Execute
     // -------------------------------------------------------------------
-    execute_generate(spec, cloud, provider).await
+    execute_generate(spec, cloud, provider, json).await
 }
 
 async fn execute_generate(
     spec: GenerateJobSpec,
     cloud: bool,
     provider: Option<CloudProvider>,
+    json: bool,
 ) -> Result<()> {
     let db = Database::open()?;
     let spec_json = serde_json::to_string(&spec)?;
@@ -235,14 +239,18 @@ async fn execute_generate(
     // -------------------------------------------------------------------
     let mut executor: Box<dyn Executor> = if cloud {
         let cloud_provider = resolve_cloud_provider(provider);
-        println!(
-            "{} Preparing cloud generation via {}...",
-            style("→").cyan(),
-            style(cloud_provider.to_string()).bold()
-        );
+        if !json {
+            println!(
+                "{} Preparing cloud generation via {}...",
+                style("→").cyan(),
+                style(cloud_provider.to_string()).bold()
+            );
+        }
         Box::new(CloudExecutor::new(cloud_provider)?)
     } else {
-        println!("{} Preparing runtime...", style("→").cyan());
+        if !json {
+            println!("{} Preparing runtime...", style("→").cyan());
+        }
         Box::new(LocalExecutor::from_runtime_setup().await?)
     };
 
@@ -267,13 +275,18 @@ async fn execute_generate(
     let rx = executor.events(job_id)?;
     db.update_job_status(job_id, "running")?;
 
-    let pb = ProgressBar::new(spec.params.count as u64);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} images {msg}",
-        )?
-        .progress_chars("█▓░"),
-    );
+    let pb = if json {
+        ProgressBar::hidden()
+    } else {
+        let pb = ProgressBar::new(spec.params.count as u64);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} images {msg}",
+            )?
+            .progress_chars("█▓░"),
+        );
+        pb
+    };
 
     let mut artifact_paths: Vec<String> = Vec::new();
     let mut final_status = "completed";
@@ -330,16 +343,6 @@ async fn execute_generate(
     // 5. Print results
     // -------------------------------------------------------------------
     if final_status == "completed" && !artifact_paths.is_empty() {
-        println!();
-        println!(
-            "{} Generated {} image(s):",
-            style("✓").green().bold(),
-            artifact_paths.len()
-        );
-        for path in &artifact_paths {
-            println!("  {}", path);
-        }
-
         // Register artifacts in DB
         for (i, path) in artifact_paths.iter().enumerate() {
             let artifact_id = format!("{}-img-{}", job_id, i);
@@ -353,10 +356,41 @@ async fn execute_generate(
                 None,
             );
         }
+
+        if json {
+            let output = serde_json::json!({
+                "status": "completed",
+                "job_id": job_id,
+                "images": artifact_paths,
+            });
+            println!("{}", serde_json::to_string(&output)?);
+        } else {
+            println!();
+            println!(
+                "{} Generated {} image(s):",
+                style("✓").green().bold(),
+                artifact_paths.len()
+            );
+            for path in &artifact_paths {
+                println!("  {}", path);
+            }
+        }
     } else if artifact_paths.is_empty() && final_status == "completed" {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"status": "completed", "images": []})
+            );
+        } else {
+            println!(
+                "\n{} Generation completed but no images were produced.",
+                style("⚠").yellow()
+            );
+        }
+    } else if json {
         println!(
-            "\n{} Generation completed but no images were produced.",
-            style("⚠").yellow()
+            "{}",
+            serde_json::json!({"status": final_status, "images": artifact_paths})
         );
     }
 

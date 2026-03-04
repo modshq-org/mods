@@ -165,6 +165,17 @@
   /* Empty state */
   .empty { text-align: center; padding: 60px 20px; color: var(--fg2); }
   .empty h2 { font-size: 20px; margin-bottom: 8px; color: var(--fg); }
+
+  /* Generated outputs */
+  .outputs-date-group { margin-bottom: 28px; }
+  .outputs-date-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--fg2); font-weight: 600; margin-bottom: 10px; }
+  .outputs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+  .outputs-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--radius);
+    border: 1px solid var(--border); cursor: pointer; transition: opacity 0.15s, border-color 0.15s; display: block; }
+  .outputs-grid img:hover { opacity: 0.85; border-color: var(--accent); }
+  .outputs-fname { font-size: 10px; color: var(--fg2); opacity: 0.6; font-family: monospace;
+    margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
 </head>
 <body>
@@ -174,6 +185,7 @@
   <nav>
     <button id="tab-runs" class="active" onclick="switchTab('runs')">Training Runs</button>
     <button id="tab-datasets" onclick="switchTab('datasets')">Datasets</button>
+    <button id="tab-outputs" onclick="switchTab('outputs')">Generated</button>
   </nav>
 </div>
 
@@ -210,6 +222,10 @@
       </div>
     </div>
   </div>
+
+  <div id="view-outputs" style="display:none">
+    <div id="outputs-content"><div class="loading">Loading...</div></div>
+  </div>
 </div>
 
 <div class="lightbox" id="lightbox" onclick="closeLightbox()">
@@ -229,10 +245,15 @@ function switchTab(tab) {
   currentTab = tab;
   document.getElementById('tab-runs').classList.toggle('active', tab === 'runs');
   document.getElementById('tab-datasets').classList.toggle('active', tab === 'datasets');
+  document.getElementById('tab-outputs').classList.toggle('active', tab === 'outputs');
   document.getElementById('view-runs').style.display = tab === 'runs' ? '' : 'none';
   document.getElementById('view-datasets').style.display = tab === 'datasets' ? '' : 'none';
+  document.getElementById('view-outputs').style.display = tab === 'outputs' ? '' : 'none';
   if (tab === 'datasets' && !document.getElementById('datasets-list').dataset.loaded) {
     loadDatasets();
+  }
+  if (tab === 'outputs' && !document.getElementById('outputs-content').dataset.loaded) {
+    loadOutputs();
   }
 }
 
@@ -637,6 +658,36 @@ function startAutoRefresh() {
       } catch (e) { /* ignore */ }
     }
   }, 15000);
+}
+
+// ---- Generated Outputs ----
+async function loadOutputs() {
+  const el = document.getElementById('outputs-content');
+  try {
+    const res = await fetch('/api/outputs');
+    const groups = await res.json();
+    el.dataset.loaded = '1';
+    if (!groups.length) {
+      el.innerHTML = '<div class="empty"><h2>No generated images yet</h2><p>Run <code>modl generate</code> to create images.</p></div>';
+      return;
+    }
+    el.innerHTML = groups.map(g => `
+      <div class="outputs-date-group">
+        <div class="outputs-date-label">${escapeHtml(g.date)}</div>
+        <div class="outputs-grid">
+          ${g.images.map(img => `
+            <div>
+              <img src="/files/${escapeHtml(img.path)}" alt="${escapeHtml(img.filename)}"
+                loading="lazy" onclick="openLightbox(this.src)">
+              <div class="outputs-fname">${escapeHtml(img.filename)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="loading">Failed to load outputs: ${escapeHtml(String(e))}</div>`;
+  }
 }
 
 // Init

@@ -55,6 +55,83 @@ struct SampleGroup {
 }
 
 #[derive(Serialize)]
+struct GeneratedOutput {
+    date: String,
+    images: Vec<GeneratedImage>,
+}
+
+#[derive(Serialize)]
+struct GeneratedImage {
+    /// Relative path usable as /files/<path>
+    path: String,
+    /// Filename without directory
+    filename: String,
+    /// mtime as unix timestamp (seconds)
+    modified: u64,
+}
+
+/// Scan ~/.modl/outputs/ for generated images, grouped by date.
+fn scan_outputs_dir() -> Vec<GeneratedOutput> {
+    let outputs_root = modl_root().join("outputs");
+    let mut result: Vec<GeneratedOutput> = Vec::new();
+
+    let Ok(dates) = std::fs::read_dir(&outputs_root) else {
+        return result;
+    };
+
+    let mut date_entries: Vec<_> = dates.filter_map(|e| e.ok()).collect();
+    date_entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+
+    for date_entry in date_entries {
+        let date_path = date_entry.path();
+        if !date_path.is_dir() {
+            continue;
+        }
+        let date_str = date_entry.file_name().to_string_lossy().to_string();
+
+        let Ok(files) = std::fs::read_dir(&date_path) else {
+            continue;
+        };
+
+        let mut images: Vec<GeneratedImage> = files
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".webp")
+            })
+            .map(|e| {
+                let filename = e.file_name().to_string_lossy().to_string();
+                let rel = format!("outputs/{}/{}", date_str, filename);
+                let modified = e
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                GeneratedImage {
+                    path: rel,
+                    filename,
+                    modified,
+                }
+            })
+            .collect();
+
+        images.sort_by_key(|i| std::cmp::Reverse(i.modified));
+
+        if !images.is_empty() {
+            result.push(GeneratedOutput {
+                date: date_str,
+                images,
+            });
+        }
+    }
+
+    result
+}
+
+#[derive(Serialize)]
 struct DatasetOverview {
     name: String,
     image_count: u32,
@@ -86,6 +163,7 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         .route("/api/status/{name}", get(api_training_status_single))
         .route("/api/datasets", get(api_list_datasets))
         .route("/api/datasets/{name}", get(api_get_dataset))
+        .route("/api/outputs", get(api_list_outputs))
         .route("/files/{*path}", get(serve_file));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -383,6 +461,10 @@ async fn api_training_status_single(Path(name): Path<String>) -> impl IntoRespon
         )
             .into_response(),
     }
+}
+
+async fn api_list_outputs() -> impl IntoResponse {
+    Json(scan_outputs_dir())
 }
 
 async fn api_list_datasets() -> impl IntoResponse {
