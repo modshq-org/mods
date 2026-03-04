@@ -418,6 +418,9 @@ pub enum Commands {
         /// LoRA name or path to apply
         #[arg(long)]
         lora: Option<String>,
+        /// LoRA strength/weight (0.0 = no effect, 1.0 = full strength)
+        #[arg(long, default_value = "1.0")]
+        lora_strength: f32,
         /// Random seed for reproducibility
         #[arg(long)]
         seed: Option<u64>,
@@ -664,6 +667,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             prompt,
             base,
             lora,
+            lora_strength,
             seed,
             size,
             steps,
@@ -676,6 +680,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 &prompt,
                 base.as_deref(),
                 lora.as_deref(),
+                lora_strength,
                 seed,
                 &size,
                 steps,

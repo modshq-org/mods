@@ -40,7 +40,7 @@ fn resolve_size(size: &str) -> Result<(u32, u32)> {
 }
 
 /// Resolve a LoRA name to its store path by looking in the DB.
-fn resolve_lora(name: &str, db: &Database) -> Result<Option<LoraRef>> {
+fn resolve_lora(name: &str, weight: f32, db: &Database) -> Result<Option<LoraRef>> {
     // Check if the name is a direct path to a .safetensors file
     let path = PathBuf::from(name);
     if path.exists() && path.extension().is_some_and(|e| e == "safetensors") {
@@ -51,7 +51,7 @@ fn resolve_lora(name: &str, db: &Database) -> Result<Option<LoraRef>> {
                 .to_string_lossy()
                 .to_string(),
             path: path.to_string_lossy().to_string(),
-            weight: 1.0,
+            weight,
         }));
     }
 
@@ -62,7 +62,7 @@ fn resolve_lora(name: &str, db: &Database) -> Result<Option<LoraRef>> {
             return Ok(Some(LoraRef {
                 name: model.name.clone(),
                 path: model.store_path.clone(),
-                weight: 1.0,
+                weight,
             }));
         }
     }
@@ -110,6 +110,7 @@ pub async fn run(
     prompt: &str,
     base: Option<&str>,
     lora: Option<&str>,
+    lora_strength: f32,
     seed: Option<u64>,
     size: &str,
     steps: Option<u32>,
@@ -143,7 +144,9 @@ pub async fn run(
     // Resolve LoRA
     // -------------------------------------------------------------------
     let lora_ref = match lora {
-        Some(name) => Some(resolve_lora(name, &db)?.context("LoRA resolution returned None")?),
+        Some(name) => {
+            Some(resolve_lora(name, lora_strength, &db)?.context("LoRA resolution returned None")?)
+        }
         None => None,
     };
 
@@ -201,7 +204,7 @@ pub async fn run(
     println!("  Prompt: {}", style(prompt).italic());
     println!("  Model:  {}", base_model);
     if let Some(ref lr) = lora_ref {
-        println!("  LoRA:   {}", lr.name);
+        println!("  LoRA:   {} (strength: {:.2})", lr.name, lr.weight);
     }
     println!("  Size:   {}×{}", width, height);
     println!("  Steps:  {}", steps);
