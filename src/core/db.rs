@@ -445,6 +445,27 @@ impl Database {
         }
     }
 
+    /// Get an artifact by exact artifact_id (no fuzzy matching).
+    pub fn get_artifact_exact(&self, artifact_id: &str) -> Result<Option<ArtifactRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT artifact_id, job_id, kind, path, sha256, size_bytes, metadata, created_at
+                 FROM artifacts WHERE artifact_id = ?1",
+            )
+            .context("Failed to prepare query")?;
+
+        let mut rows = stmt
+            .query_map(params![artifact_id], ArtifactRecord::from_row)
+            .context("Failed to query artifact")?;
+
+        match rows.next() {
+            Some(Ok(record)) => Ok(Some(record)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
     /// List artifacts, optionally filtered by job_id
     #[allow(dead_code)]
     pub fn list_artifacts(&self, job_id: Option<&str>) -> Result<Vec<ArtifactRecord>> {
@@ -477,6 +498,15 @@ impl Database {
             )
             .context("Failed to delete artifact")?;
         Ok(())
+    }
+
+    /// Delete artifact records by file path. Returns number of deleted rows.
+    pub fn delete_artifacts_by_path(&self, path: &str) -> Result<usize> {
+        let deleted = self
+            .conn
+            .execute("DELETE FROM artifacts WHERE path = ?1", params![path])
+            .context("Failed to delete artifacts by path")?;
+        Ok(deleted)
     }
 }
 

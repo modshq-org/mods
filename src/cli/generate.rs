@@ -77,6 +77,8 @@ fn default_steps(base_model: &str) -> u32 {
     let lower = base_model.to_lowercase();
     if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
         4
+    } else if lower.contains("sdxl") {
+        30
     } else {
         28
     }
@@ -87,6 +89,8 @@ fn default_guidance(base_model: &str) -> f32 {
     let lower = base_model.to_lowercase();
     if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
         0.0
+    } else if lower.contains("sdxl") {
+        7.5
     } else {
         3.5
     }
@@ -288,7 +292,13 @@ async fn execute_generate(
         pb
     };
 
-    let mut artifact_paths: Vec<String> = Vec::new();
+    struct GeneratedArtifact {
+        path: String,
+        sha256: Option<String>,
+        size_bytes: Option<u64>,
+    }
+
+    let mut artifacts: Vec<GeneratedArtifact> = Vec::new();
     let mut final_status = "completed";
 
     for event in rx {
@@ -299,8 +309,16 @@ async fn execute_generate(
                 pb.set_length(*total_steps as u64);
                 pb.set_position(*step as u64);
             }
-            EventPayload::Artifact { path, .. } => {
-                artifact_paths.push(path.clone());
+            EventPayload::Artifact {
+                path,
+                sha256,
+                size_bytes,
+            } => {
+                artifacts.push(GeneratedArtifact {
+                    path: path.clone(),
+                    sha256: sha256.clone(),
+                    size_bytes: *size_bytes,
+                });
             }
             EventPayload::Completed { message } => {
                 pb.finish_with_message(message.as_deref().unwrap_or("done").to_string());
@@ -342,21 +360,38 @@ async fn execute_generate(
     // -------------------------------------------------------------------
     // 5. Print results
     // -------------------------------------------------------------------
-    if final_status == "completed" && !artifact_paths.is_empty() {
+    if final_status == "completed" && !artifacts.is_empty() {
         // Register artifacts in DB
-        for (i, path) in artifact_paths.iter().enumerate() {
+        for (i, artifact) in artifacts.iter().enumerate() {
             let artifact_id = format!("{}-img-{}", job_id, i);
+            let image_seed = spec.params.seed.map(|s| s + i as u64);
+            let metadata = serde_json::json!({
+                "generated_with": "modl.run",
+                "prompt": spec.prompt,
+                "base_model_id": spec.model.base_model_id,
+                "lora_name": spec.lora.as_ref().map(|l| l.name.clone()),
+                "lora_strength": spec.lora.as_ref().map(|l| l.weight),
+                "width": spec.params.width,
+                "height": spec.params.height,
+                "steps": spec.params.steps,
+                "guidance": spec.params.guidance,
+                "seed": image_seed,
+                "image_index": i,
+                "count": spec.params.count,
+            });
+            let metadata_str = metadata.to_string();
             let _ = db.insert_artifact(
                 &artifact_id,
                 Some(job_id),
                 "image",
-                path,
-                "", // sha256 – not computed yet
-                0,  // size_bytes – not computed yet
-                None,
+                &artifact.path,
+                artifact.sha256.as_deref().unwrap_or(""),
+                artifact.size_bytes.unwrap_or(0),
+                Some(&metadata_str),
             );
         }
 
+        let artifact_paths: Vec<String> = artifacts.iter().map(|a| a.path.clone()).collect();
         if json {
             let output = serde_json::json!({
                 "status": "completed",
@@ -375,7 +410,7 @@ async fn execute_generate(
                 println!("  {}", path);
             }
         }
-    } else if artifact_paths.is_empty() && final_status == "completed" {
+    } else if artifacts.is_empty() && final_status == "completed" {
         if json {
             println!(
                 "{}",
@@ -388,6 +423,7 @@ async fn execute_generate(
             );
         }
     } else if json {
+        let artifact_paths: Vec<String> = artifacts.iter().map(|a| a.path.clone()).collect();
         println!(
             "{}",
             serde_json::json!({"status": final_status, "images": artifact_paths})

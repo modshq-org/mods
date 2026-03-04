@@ -10,6 +10,7 @@ Outputs are saved as PNG and emitted as artifact events.
 """
 
 import hashlib
+import json
 import os
 import time
 from pathlib import Path
@@ -190,11 +191,44 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
         if seed is not None:
             generator.manual_seed(seed + i + 1)
 
+        image_seed = seed + i if seed is not None else None
+
         # Save image
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         filename = f"{timestamp}_{i:03d}.png" if count > 1 else f"{timestamp}.png"
         filepath = os.path.join(output_dir, filename)
-        image.save(filepath)
+
+        # Persist provenance in PNG text chunks for portability across tools.
+        save_kwargs = {}
+        if filepath.lower().endswith(".png"):
+            try:
+                from PIL.PngImagePlugin import PngInfo
+
+                embedded_meta = {
+                    "generated_with": "modl.run",
+                    "prompt": prompt,
+                    "base_model_id": base_model_id,
+                    "lora_name": lora_info.get("name") if lora_info else None,
+                    "lora_strength": lora_info.get("weight") if lora_info else None,
+                    "width": width,
+                    "height": height,
+                    "steps": steps,
+                    "guidance": guidance,
+                    "seed": image_seed,
+                    "image_index": i,
+                    "count": count,
+                    "timestamp": timestamp,
+                }
+                pnginfo = PngInfo()
+                pnginfo.add_text("Software", "modl.run")
+                pnginfo.add_text("Comment", "generated with modl.run")
+                pnginfo.add_text("modl_metadata", json.dumps(embedded_meta, separators=(",", ":")))
+                save_kwargs["pnginfo"] = pnginfo
+            except Exception:
+                # Non-fatal: save image even if metadata embedding fails.
+                pass
+
+        image.save(filepath, **save_kwargs)
 
         # Hash the output
         sha256 = hashlib.sha256()
