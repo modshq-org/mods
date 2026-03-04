@@ -30,6 +30,7 @@ export type GeneratedImage = {
   height?: number
   size_bytes?: number
   generated_with?: string
+  favorited?: boolean
 }
 
 export type GeneratedOutput = {
@@ -146,6 +147,12 @@ export const api = {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
+    }),
+  favoriteOutput: (path: string) =>
+    fetchJson<{ favorited: boolean }>('/api/outputs/favorite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
     }),
   generate: (req: GenerateRequest) =>
     fetch('/api/generate', {

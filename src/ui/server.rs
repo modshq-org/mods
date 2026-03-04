@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::path::{Path as FsPath, PathBuf};
+use std::path::PathBuf;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -25,6 +25,7 @@ use tokio::sync::broadcast;
 
 use crate::core::dataset;
 use crate::core::db::Database;
+use crate::core::outputs as output_service;
 use crate::core::training_status;
 
 // ---------------------------------------------------------------------------
@@ -65,276 +66,11 @@ struct SampleGroup {
     images: Vec<String>, // relative paths served by /files/
 }
 
-#[derive(Serialize)]
-struct GeneratedOutput {
-    date: String,
-    images: Vec<GeneratedImage>,
-}
+// GeneratedOutput, GeneratedImage types are in core::outputs
 
-#[derive(Serialize)]
-struct GeneratedImage {
-    /// Relative path usable as /files/<path>
-    path: String,
-    /// Filename without directory
-    filename: String,
-    /// mtime as unix timestamp (seconds)
-    modified: u64,
-    /// Artifact ID in DB, if tracked
-    artifact_id: Option<String>,
-    /// Job ID that produced the image, if tracked
-    job_id: Option<String>,
-    /// Prompt used to generate the image, if available
-    prompt: Option<String>,
-    /// Base model ID used for generation, if available
-    base_model_id: Option<String>,
-    /// LoRA name used, if any
-    lora_name: Option<String>,
-    /// LoRA strength used, if any
-    lora_strength: Option<f64>,
-    /// Per-image seed, if available
-    seed: Option<u64>,
-    /// Inference steps, if available
-    steps: Option<u32>,
-    /// Guidance scale, if available
-    guidance: Option<f64>,
-    /// Output width, if available
-    width: Option<u32>,
-    /// Output height, if available
-    height: Option<u32>,
-    /// Stored artifact size, if tracked
-    size_bytes: Option<u64>,
-    /// Marker embedded by generator
-    generated_with: Option<String>,
-}
-
-#[derive(Clone)]
-struct OutputArtifactInfo {
-    artifact_id: String,
-    job_id: Option<String>,
-    size_bytes: u64,
-    metadata: Option<String>,
-}
-
-#[derive(Default)]
-struct OutputMetaSummary {
-    prompt: Option<String>,
-    base_model_id: Option<String>,
-    lora_name: Option<String>,
-    lora_strength: Option<f64>,
-    seed: Option<u64>,
-    steps: Option<u32>,
-    guidance: Option<f64>,
-    width: Option<u32>,
-    height: Option<u32>,
-    generated_with: Option<String>,
-}
-
-fn parse_output_meta(metadata: Option<&str>) -> OutputMetaSummary {
-    let Some(raw) = metadata else {
-        return OutputMetaSummary::default();
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return OutputMetaSummary::default();
-    };
-
-    OutputMetaSummary {
-        prompt: v
-            .get("prompt")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string()),
-        base_model_id: v
-            .get("base_model_id")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string()),
-        lora_name: v
-            .get("lora_name")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string()),
-        lora_strength: v.get("lora_strength").and_then(|x| x.as_f64()),
-        seed: v.get("seed").and_then(|x| x.as_u64()),
-        steps: v.get("steps").and_then(|x| x.as_u64()).map(|n| n as u32),
-        guidance: v.get("guidance").and_then(|x| x.as_f64()),
-        width: v.get("width").and_then(|x| x.as_u64()).map(|n| n as u32),
-        height: v.get("height").and_then(|x| x.as_u64()).map(|n| n as u32),
-        generated_with: v
-            .get("generated_with")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string()),
-    }
-}
-
-fn parse_generate_job_spec_meta(spec_json: &str) -> Option<OutputMetaSummary> {
-    let spec: serde_json::Value = serde_json::from_str(spec_json).ok()?;
-    Some(OutputMetaSummary {
-        prompt: spec
-            .get("prompt")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string()),
-        base_model_id: spec
-            .pointer("/model/base_model_id")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string()),
-        lora_name: spec
-            .pointer("/lora/name")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string()),
-        lora_strength: spec.pointer("/lora/weight").and_then(|x| x.as_f64()),
-        seed: spec.pointer("/params/seed").and_then(|x| x.as_u64()),
-        steps: spec
-            .pointer("/params/steps")
-            .and_then(|x| x.as_u64())
-            .map(|n| n as u32),
-        guidance: spec.pointer("/params/guidance").and_then(|x| x.as_f64()),
-        width: spec
-            .pointer("/params/width")
-            .and_then(|x| x.as_u64())
-            .map(|n| n as u32),
-        height: spec
-            .pointer("/params/height")
-            .and_then(|x| x.as_u64())
-            .map(|n| n as u32),
-        generated_with: Some("modl.run".to_string()),
-    })
-}
-
-fn load_output_artifact_index() -> HashMap<String, OutputArtifactInfo> {
-    let mut by_path: HashMap<String, OutputArtifactInfo> = HashMap::new();
-    let Ok(db) = Database::open() else {
-        return by_path;
-    };
-    let Ok(artifacts) = db.list_artifacts(None) else {
-        return by_path;
-    };
-
-    for artifact in artifacts {
-        if artifact.kind != "image" || artifact.path.is_empty() {
-            continue;
-        }
-        if by_path.contains_key(&artifact.path) {
-            continue;
-        }
-
-        // Fallback for older rows that didn't store per-image metadata.
-        let metadata =
-            if artifact.metadata.is_none() || artifact.metadata.as_deref() == Some("null") {
-                if let Some(job_id) = &artifact.job_id {
-                    if let Ok(Some(job)) = db.get_job(job_id) {
-                        parse_generate_job_spec_meta(&job.spec_json).map(|m| {
-                            serde_json::json!({
-                                "generated_with": m.generated_with,
-                                "prompt": m.prompt,
-                                "base_model_id": m.base_model_id,
-                                "lora_name": m.lora_name,
-                                "lora_strength": m.lora_strength,
-                                "seed": m.seed,
-                                "steps": m.steps,
-                                "guidance": m.guidance,
-                                "width": m.width,
-                                "height": m.height,
-                            })
-                            .to_string()
-                        })
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                artifact.metadata.clone()
-            };
-
-        by_path.insert(
-            artifact.path.clone(),
-            OutputArtifactInfo {
-                artifact_id: artifact.artifact_id,
-                job_id: artifact.job_id,
-                size_bytes: artifact.size_bytes,
-                metadata,
-            },
-        );
-    }
-
-    by_path
-}
-
-/// Scan ~/.modl/outputs/ for generated images, grouped by date.
-fn scan_outputs_dir() -> Vec<GeneratedOutput> {
-    let outputs_root = modl_root().join("outputs");
-    let mut result: Vec<GeneratedOutput> = Vec::new();
-    let artifacts_by_path = load_output_artifact_index();
-
-    let Ok(dates) = std::fs::read_dir(&outputs_root) else {
-        return result;
-    };
-
-    let mut date_entries: Vec<_> = dates.filter_map(|e| e.ok()).collect();
-    date_entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
-
-    for date_entry in date_entries {
-        let date_path = date_entry.path();
-        if !date_path.is_dir() {
-            continue;
-        }
-        let date_str = date_entry.file_name().to_string_lossy().to_string();
-
-        let Ok(files) = std::fs::read_dir(&date_path) else {
-            continue;
-        };
-
-        let mut images: Vec<GeneratedImage> = files
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                let name = e.file_name();
-                let name = name.to_string_lossy();
-                name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".webp")
-            })
-            .map(|e| {
-                let filename = e.file_name().to_string_lossy().to_string();
-                let rel = format!("outputs/{}/{}", date_str, filename);
-                let abs = date_path.join(&filename).to_string_lossy().to_string();
-                let modified = e
-                    .metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let artifact = artifacts_by_path.get(&abs);
-                let meta = parse_output_meta(artifact.and_then(|a| a.metadata.as_deref()));
-                GeneratedImage {
-                    path: rel,
-                    filename,
-                    modified,
-                    artifact_id: artifact.map(|a| a.artifact_id.clone()),
-                    job_id: artifact.and_then(|a| a.job_id.clone()),
-                    prompt: meta.prompt,
-                    base_model_id: meta.base_model_id,
-                    lora_name: meta.lora_name,
-                    lora_strength: meta.lora_strength,
-                    seed: meta.seed,
-                    steps: meta.steps,
-                    guidance: meta.guidance,
-                    width: meta.width,
-                    height: meta.height,
-                    size_bytes: artifact.and_then(|a| (a.size_bytes > 0).then_some(a.size_bytes)),
-                    generated_with: meta.generated_with,
-                }
-            })
-            .collect();
-
-        images.sort_by_key(|i| std::cmp::Reverse(i.modified));
-
-        if !images.is_empty() {
-            result.push(GeneratedOutput {
-                date: date_str,
-                images,
-            });
-        }
-    }
-
-    result
-}
+// OutputMetaSummary, parse_output_meta moved to core::outputs
+// parse_generate_job_spec_meta, load_output_artifact_index, scan_outputs_dir
+// all moved to core::outputs service layer.
 
 #[derive(Serialize)]
 struct DatasetOverview {
@@ -432,6 +168,7 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
             "/api/outputs",
             get(api_list_outputs).delete(api_delete_output),
         )
+        .route("/api/outputs/favorite", post(api_toggle_favorite))
         .route("/assets/{*path}", get(serve_ui_asset))
         .route("/files/{*path}", get(serve_file))
         .with_state(state);
@@ -632,6 +369,19 @@ fn build_lineage(lora_name: &str) -> Option<TrainingLineage> {
         return None;
     }
 
+    // If any job is marked "running" in the DB, verify the process is actually
+    // alive. A crashed or killed training session leaves the DB in "running"
+    // state forever; we surface those as "interrupted" so the UI doesn't
+    // falsely show a green "Running" badge.
+    let has_db_running = jobs.iter().any(|j| j.status == "running");
+    let is_actually_running = if has_db_running {
+        training_status::get_status(lora_name)
+            .map(|s| s.is_running)
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     // Extract dataset + model info from the first job's spec
     let first_spec: serde_json::Value = serde_json::from_str(&jobs[0].spec_json).ok()?;
 
@@ -660,9 +410,15 @@ fn build_lineage(lora_name: &str) -> Option<TrainingLineage> {
                     // Show just the filename, not the full path
                     s.rsplit('/').next().unwrap_or(s).to_string()
                 });
+            // Reconcile stale "running" DB state with actual process liveness
+            let status = if j.status == "running" && !is_actually_running {
+                "interrupted".to_string()
+            } else {
+                j.status.clone()
+            };
             JobSummary {
                 job_id: j.job_id.clone(),
-                status: j.status.clone(),
+                status,
                 steps,
                 created_at: j.created_at.clone(),
                 resumed_from,
@@ -683,20 +439,25 @@ fn build_lineage(lora_name: &str) -> Option<TrainingLineage> {
 // ---------------------------------------------------------------------------
 
 async fn api_list_runs() -> impl IntoResponse {
-    let output_dir = modl_root().join("training_output");
-    let mut runs = Vec::new();
+    let runs = tokio::task::spawn_blocking(|| {
+        let output_dir = modl_root().join("training_output");
+        let mut runs = Vec::new();
 
-    if output_dir.exists()
-        && let Ok(entries) = std::fs::read_dir(&output_dir)
-    {
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                let name = entry.file_name().to_string_lossy().to_string();
-                runs.push(name);
+        if output_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&output_dir)
+        {
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    runs.push(name);
+                }
             }
         }
-    }
-    runs.sort();
+        runs.sort();
+        runs
+    })
+    .await
+    .unwrap_or_default();
     Json(runs)
 }
 
@@ -804,94 +565,125 @@ async fn api_generate_stream(
 }
 
 async fn api_gpu_status() -> impl IntoResponse {
-    let training_active = training_status::get_all_status(true)
-        .map(|runs| runs.iter().any(|r| r.is_running))
-        .unwrap_or(false);
+    let status = tokio::task::spawn_blocking(|| {
+        let training_active = training_status::get_all_status(true)
+            .map(|runs| runs.iter().any(|r| r.is_running))
+            .unwrap_or(false);
 
-    let (name, vram_total_mb, vram_free_mb) = if let Ok(nvml) = nvml_wrapper::Nvml::init() {
-        if let Ok(device) = nvml.device_by_index(0) {
-            let name = device.name().ok();
-            let mem = device.memory_info().ok();
-            (
-                name,
-                mem.as_ref().map(|m| m.total / (1024 * 1024)),
-                mem.as_ref().map(|m| m.free / (1024 * 1024)),
-            )
+        let (name, vram_total_mb, vram_free_mb) = if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+            if let Ok(device) = nvml.device_by_index(0) {
+                let name = device.name().ok();
+                let mem = device.memory_info().ok();
+                (
+                    name,
+                    mem.as_ref().map(|m| m.total / (1024 * 1024)),
+                    mem.as_ref().map(|m| m.free / (1024 * 1024)),
+                )
+            } else {
+                (None, None, None)
+            }
         } else {
             (None, None, None)
-        }
-    } else {
-        (None, None, None)
-    };
+        };
 
-    Json(GpuStatus {
-        name,
-        vram_total_mb,
-        vram_free_mb,
-        training_active,
+        GpuStatus {
+            name,
+            vram_total_mb,
+            vram_free_mb,
+            training_active,
+        }
     })
+    .await
+    .unwrap_or(GpuStatus {
+        name: None,
+        vram_total_mb: None,
+        vram_free_mb: None,
+        training_active: false,
+    });
+    Json(status)
 }
 
 async fn api_list_models() -> impl IntoResponse {
-    let db = match Database::open() {
-        Ok(db) => db,
-        Err(_) => return Json(Vec::<InstalledModel>::new()).into_response(),
-    };
+    let result = tokio::task::spawn_blocking(|| {
+        let db = match Database::open() {
+            Ok(db) => db,
+            Err(_) => return Vec::new(),
+        };
 
-    let Ok(models) = db.list_installed(None) else {
-        return Json(Vec::<InstalledModel>::new()).into_response();
-    };
+        let Ok(models) = db.list_installed(None) else {
+            return Vec::new();
+        };
 
-    let result: Vec<InstalledModel> = models
-        .iter()
-        .filter(|m| matches!(m.asset_type.as_str(), "checkpoint" | "lora"))
-        .map(|m| InstalledModel {
-            id: m.id.clone(),
-            name: m.name.clone(),
-            model_type: m.asset_type.clone(),
-            variant: m.variant.clone(),
-            size_bytes: m.size,
-        })
-        .collect();
-
-    Json(result).into_response()
+        models
+            .iter()
+            .filter(|m| matches!(m.asset_type.as_str(), "checkpoint" | "lora"))
+            .map(|m| InstalledModel {
+                id: m.id.clone(),
+                name: m.name.clone(),
+                model_type: m.asset_type.clone(),
+                variant: m.variant.clone(),
+                size_bytes: m.size,
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default();
+    Json(result)
 }
 
 async fn api_get_run(Path(name): Path<String>) -> impl IntoResponse {
-    match scan_training_run(&name) {
-        Ok(run) => Json(run).into_response(),
-        Err(e) => (
+    match tokio::task::spawn_blocking(move || scan_training_run(&name)).await {
+        Ok(Ok(run)) => Json(run).into_response(),
+        Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Error scanning run: {e}"),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
         )
             .into_response(),
     }
 }
 
 async fn api_training_status() -> impl IntoResponse {
-    match training_status::get_all_status(false) {
-        Ok(runs) => Json(runs).into_response(),
-        Err(e) => (
+    match tokio::task::spawn_blocking(|| training_status::get_all_status(false)).await {
+        Ok(Ok(runs)) => Json(runs).into_response(),
+        Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Error getting training status: {e}"),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
         )
             .into_response(),
     }
 }
 
 async fn api_training_status_single(Path(name): Path<String>) -> impl IntoResponse {
-    match training_status::get_status(&name) {
-        Ok(run) => Json(run).into_response(),
-        Err(e) => (
+    match tokio::task::spawn_blocking(move || training_status::get_status(&name)).await {
+        Ok(Ok(run)) => Json(run).into_response(),
+        Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Error getting training status: {e}"),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
         )
             .into_response(),
     }
 }
 
 async fn api_list_outputs() -> impl IntoResponse {
-    Json(scan_outputs_dir())
+    let outputs = tokio::task::spawn_blocking(output_service::list_outputs)
+        .await
+        .unwrap_or_default();
+    Json(outputs)
 }
 
 #[derive(Deserialize)]
@@ -909,124 +701,85 @@ struct DeleteOutputResponse {
 }
 
 async fn api_delete_output(Json(req): Json<DeleteOutputRequest>) -> impl IntoResponse {
-    let db = match Database::open() {
-        Ok(db) => db,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to open database: {e}"),
-            )
-                .into_response();
-        }
-    };
-
-    let mut target_file: Option<PathBuf> = None;
-    let mut deleted_records = 0usize;
-
-    if let Some(artifact_id) = req.artifact_id.as_deref()
-        && !artifact_id.trim().is_empty()
+    match tokio::task::spawn_blocking(move || {
+        output_service::delete_output(req.artifact_id.as_deref(), req.path.as_deref())
+    })
+    .await
     {
-        match db.get_artifact_exact(artifact_id) {
-            Ok(Some(artifact)) => {
-                target_file = Some(PathBuf::from(&artifact.path));
-                if let Err(e) = db.delete_artifact(artifact_id) {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to delete artifact row: {e}"),
-                    )
-                        .into_response();
-                }
-                deleted_records += 1;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to query artifact: {e}"),
-                )
-                    .into_response();
-            }
+        Ok(Ok(result)) => (
+            StatusCode::OK,
+            Json(DeleteOutputResponse {
+                deleted_file: result.deleted_file,
+                deleted_records: result.deleted_records,
+            }),
+        )
+            .into_response(),
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            let status = if msg.contains("must be under") || msg.contains("Missing") {
+                StatusCode::BAD_REQUEST
+            } else if msg.contains("within the outputs") {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, msg).into_response()
         }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
+        )
+            .into_response(),
     }
-
-    if target_file.is_none()
-        && let Some(rel_path) = req.path.as_deref()
-    {
-        if !rel_path.starts_with("outputs/") {
-            return (StatusCode::BAD_REQUEST, "Path must be under outputs/").into_response();
-        }
-        target_file = Some(modl_root().join(rel_path));
-    }
-
-    let Some(target_file) = target_file else {
-        return (StatusCode::BAD_REQUEST, "Missing artifact_id or path").into_response();
-    };
-
-    let outputs_root = modl_root().join("outputs");
-    if !is_within_outputs_root(&target_file, &outputs_root) {
-        return (StatusCode::FORBIDDEN, "Forbidden").into_response();
-    }
-
-    let deleted_file = if target_file.exists() {
-        match std::fs::remove_file(&target_file) {
-            Ok(()) => true,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to delete file: {e}"),
-                )
-                    .into_response();
-            }
-        }
-    } else {
-        false
-    };
-
-    let target_str = target_file.to_string_lossy().to_string();
-    match db.delete_artifacts_by_path(&target_str) {
-        Ok(n) => deleted_records += n,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to delete artifact rows by path: {e}"),
-            )
-                .into_response();
-        }
-    }
-
-    (
-        StatusCode::OK,
-        Json(DeleteOutputResponse {
-            deleted_file,
-            deleted_records,
-        }),
-    )
-        .into_response()
 }
 
-fn is_within_outputs_root(path: &FsPath, outputs_root: &FsPath) -> bool {
-    if path.exists() {
-        let Ok(path_canon) = path.canonicalize() else {
-            return false;
-        };
-        let Ok(root_canon) = outputs_root.canonicalize() else {
-            return false;
-        };
-        path_canon.starts_with(root_canon)
-    } else {
-        path.starts_with(outputs_root)
+#[derive(Deserialize)]
+struct ToggleFavoriteRequest {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct ToggleFavoriteResponse {
+    favorited: bool,
+}
+
+async fn api_toggle_favorite(Json(req): Json<ToggleFavoriteRequest>) -> impl IntoResponse {
+    match tokio::task::spawn_blocking(move || output_service::toggle_favorite(&req.path)).await {
+        Ok(Ok(result)) => Json(ToggleFavoriteResponse {
+            favorited: result.favorited,
+        })
+        .into_response(),
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            let status = if msg.contains("must be under") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, msg).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
+        )
+            .into_response(),
     }
 }
 
 async fn api_list_datasets() -> impl IntoResponse {
-    match dataset::list() {
-        Ok(datasets) => {
+    match tokio::task::spawn_blocking(dataset::list).await {
+        Ok(Ok(datasets)) => {
             let names: Vec<String> = datasets.iter().map(|d| d.name.clone()).collect();
             Json(names).into_response()
         }
-        Err(e) => (
+        Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Error listing datasets: {e}"),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
         )
             .into_response(),
     }
@@ -1048,10 +801,10 @@ async fn api_get_dataset(
     Path(name): Path<String>,
     Query(q): Query<DatasetQuery>,
 ) -> impl IntoResponse {
-    let ds_path = dataset::resolve_path(&name);
+    match tokio::task::spawn_blocking(move || {
+        let ds_path = dataset::resolve_path(&name);
 
-    match dataset::scan(&ds_path) {
-        Ok(info) => {
+        dataset::scan(&ds_path).map(|info| {
             let mut images: Vec<DatasetImage> = Vec::new();
             let page = info.images.iter().skip(q.offset).take(q.limit);
 
@@ -1075,19 +828,26 @@ async fn api_get_dataset(
                 });
             }
 
-            let overview = DatasetOverview {
+            DatasetOverview {
                 name: info.name,
                 image_count: info.image_count,
                 captioned_count: info.captioned_count,
                 coverage: info.caption_coverage,
                 images,
-            };
-
-            Json(overview).into_response()
-        }
-        Err(e) => (
+            }
+        })
+    })
+    .await
+    {
+        Ok(Ok(overview)) => Json(overview).into_response(),
+        Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Error scanning dataset: {e}"),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
         )
             .into_response(),
     }

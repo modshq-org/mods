@@ -9,6 +9,7 @@ pub mod gpu;
 pub mod huggingface;
 pub mod job;
 pub mod manifest;
+pub mod outputs;
 pub mod preflight;
 pub mod presets;
 pub mod registry;

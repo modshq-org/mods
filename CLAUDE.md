@@ -484,6 +484,38 @@ items:
     sha256: "..."
 ```
 
+## Design Principles
+
+### CLI is the master for all operations
+
+Every user-facing operation (install, delete, favourite, generate, etc.) **must** be available as a CLI command first. The web UI is a convenience layer that calls the same underlying logic — it must never be the only way to do something.
+
+When adding a new feature:
+1. Implement the core logic in `src/core/` (database, filesystem, etc.)
+2. Expose it as a CLI subcommand in `src/cli/`
+3. Wire it up in the web UI server (`src/ui/server.rs`) and frontend (`src/ui/web/`)
+
+The CLI and web UI should have **full feature parity**. If the UI can do it, the CLI can do it, and vice versa. The CLI is the source of truth.
+
+### Service layer abstraction (`src/core/`)
+
+The web UI server and CLI must **never** talk to the database or filesystem directly for domain operations. All mutations (delete, favourite, etc.) go through a service layer in `src/core/`.
+
+```
+  CLI handler (src/cli/)           UI handler (src/ui/server.rs)
+         │                                  │
+         └──────────┐          ┌────────────┘
+                    ▼          ▼
+            Service layer (src/core/outputs.rs, etc.)
+                    │
+                    ▼
+            DB + Filesystem
+```
+
+This abstraction exists so that the storage backend can be swapped later (e.g., local filesystem → cloud storage) without changing the CLI or UI code. The service layer is the only place that knows *how* data is stored.
+
+**Example:** `core::outputs` handles `list_outputs()`, `delete_output()`, `toggle_favorite()`, `set_favorite()`. Both `cli::outputs` and `ui::server` call these functions instead of touching `Database` or `std::fs` directly for output operations.
+
 ## Important Implementation Notes
 
 ### Download Resilience

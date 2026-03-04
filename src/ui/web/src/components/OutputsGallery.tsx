@@ -1,6 +1,15 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { api, type GeneratedImage, type GeneratedOutput } from '../api'
 import type { GenerateFormState } from './generate-form-state'
 import { ImageDetail } from './ImageDetail'
@@ -33,10 +42,44 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
     },
   })
 
+  const favoriteMutation = useMutation<{ favorited: boolean }, Error, string, { prev: GeneratedOutput[] | undefined }>({
+    mutationFn: (path: string) => api.favoriteOutput(path),
+    onMutate: async (path: string) => {
+      await queryClient.cancelQueries({ queryKey: ['outputs'] })
+      const prev = queryClient.getQueryData<GeneratedOutput[]>(['outputs'])
+      queryClient.setQueryData<GeneratedOutput[]>(['outputs'], (old) =>
+        old?.map((g) => ({
+          ...g,
+          images: g.images.map((img) =>
+            img.path === path ? { ...img, favorited: !img.favorited } : img,
+          ),
+        }))
+      )
+      return { prev }
+    },
+    onError: (_err, _path, context) => {
+      if (context?.prev) {
+        queryClient.setQueryData(['outputs'], context.prev)
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['outputs'] })
+    },
+  })
+
   const [selected, setSelected] = useState<GeneratedImage | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<GeneratedImage | null>(null)
   const [modelFilter, setModelFilter] = useState<string | null>(null)
   const [dateFilter, setDateFilter] = useState<string | null>(null)
   const [sortNewestFirst, setSortNewestFirst] = useState(true)
+  const [gridSize, setGridSize] = useState<'s' | 'm' | 'l'>('m')
+  const [favoriteFilter, setFavoriteFilter] = useState(false)
+
+  const gridClass = {
+    s: 'grid-cols-3 gap-1.5 md:grid-cols-5 lg:grid-cols-7 xl:grid-cols-9',
+    m: 'grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6',
+    l: 'grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
+  }[gridSize]
 
   const modelOptions = useMemo(() => {
     const models = new Set<string>()
@@ -63,7 +106,11 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
       }
 
       const filteredImages = group.images
-        .filter((image) => (modelFilter ? image.base_model_id === modelFilter : true))
+        .filter(
+          (image) =>
+            (modelFilter ? image.base_model_id === modelFilter : true) &&
+            (!favoriteFilter || image.favorited),
+        )
         .sort((a, b) => {
           const left = a.modified ?? 0
           const right = b.modified ?? 0
@@ -77,17 +124,18 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
 
     next.sort((a, b) => (sortNewestFirst ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date)))
     return next
-  }, [groups, dateFilter, modelFilter, sortNewestFirst])
+  }, [groups, dateFilter, modelFilter, sortNewestFirst, favoriteFilter])
+
+  const allFilteredImages = useMemo(() => {
+    return filteredGroups.flatMap((g) => g.images)
+  }, [filteredGroups])
 
   const onDelete = async (image: GeneratedImage) => {
-    if (!window.confirm(`Delete ${image.filename}?`)) {
-      return
-    }
-
     await deleteMutation.mutateAsync({ artifact_id: image.artifact_id, path: image.path })
+    setDeleteTarget(null)
   }
 
-  const combinedError = error ?? deleteMutation.error
+  const combinedError = error ?? deleteMutation.error ?? favoriteMutation.error
 
   return (
     <div className="space-y-6">
@@ -116,6 +164,16 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
               {model}
             </Button>
           ))}
+          <div className="mx-1 h-4 w-px bg-border/50" />
+          <Button
+            type="button"
+            size="sm"
+            variant={favoriteFilter ? 'secondary' : 'ghost'}
+            className={`h-7 px-2.5 text-xs ${favoriteFilter ? 'text-yellow-400' : ''}`}
+            onClick={() => setFavoriteFilter((prev) => !prev)}
+          >
+            ⭐ Starred
+          </Button>
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -148,6 +206,22 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
           <Button type="button" size="sm" variant="ghost" className="h-7 px-2.5 text-xs text-muted-foreground" onClick={() => void refetch()}>
             {isFetching ? 'Refreshing…' : 'Refresh'}
           </Button>
+          <div className="flex items-center rounded-md border border-border/50">
+            {(['s', 'm', 'l'] as const).map((size) => (
+              <button
+                key={size}
+                type="button"
+                onClick={() => setGridSize(size)}
+                className={`h-7 w-7 text-[10px] font-semibold uppercase transition-colors first:rounded-l-md last:rounded-r-md ${
+                  gridSize === size
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -156,7 +230,7 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
       ) : null}
 
       {isLoading ? (
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+        <div className={`grid ${gridClass}`}>
           {Array.from({ length: 10 }).map((_, i) => (
             <div key={i} className="aspect-square animate-pulse rounded-lg bg-secondary/50" />
           ))}
@@ -170,7 +244,7 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
       {filteredGroups.map((group) => (
         <section key={group.date} className="space-y-2">
           <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{group.date}</div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+          <div className={`grid ${gridClass}`}>
             {group.images.map((image) => (
               <article key={image.path} className="group relative overflow-hidden rounded-lg">
                 <LazyImage
@@ -184,6 +258,20 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
                 <div className="absolute inset-x-0 bottom-0 translate-y-full px-2 pb-2 pt-6 opacity-0 transition-all group-hover:translate-y-0 group-hover:opacity-100" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)' }}>
                   <p className="truncate font-mono text-[10px] text-white/70">{image.filename}</p>
                 </div>
+                <button
+                  type="button"
+                  className={`absolute top-1.5 left-1.5 text-base leading-none drop-shadow transition-opacity ${
+                    image.favorited
+                      ? 'opacity-100'
+                      : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100'
+                  }`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    favoriteMutation.mutate(image.path)
+                  }}
+                >
+                  {image.favorited ? '⭐' : '☆'}
+                </button>
                 <div className="pointer-events-none absolute top-1.5 right-1.5 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                   <Button
                     type="button"
@@ -198,11 +286,11 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
                     type="button"
                     size="sm"
                     variant="destructive"
-                    className="h-6 px-2 text-[10px]"
-                    onClick={() => void onDelete(image)}
+                    className="h-6 w-6 p-0"
+                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(image) }}
                     disabled={deleteMutation.isPending}
                   >
-                    ✕
+                    <Trash2 className="size-3" />
                   </Button>
                 </div>
               </article>
@@ -211,11 +299,38 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
         </section>
       ))}
 
+      <Dialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+        <DialogContent className="max-w-sm" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Delete image?</DialogTitle>
+            <DialogDescription className="break-all">
+              {deleteTarget?.filename} will be permanently deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={() => deleteTarget && void onDelete(deleteTarget)}
+            >
+              <Trash2 className="mr-1.5 size-4" />
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <ImageDetail
         image={selected}
         onClose={() => setSelected(null)}
         setForm={setForm}
         setActiveTab={setActiveTab}
+        allImages={allFilteredImages}
+        onNavigate={setSelected}
+        onToggleFavorite={(path) => favoriteMutation.mutate(path)}
       />
     </div>
   )

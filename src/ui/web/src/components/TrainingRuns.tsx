@@ -2,6 +2,13 @@ import { Fragment, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { api, type TrainingRun } from '../api'
 import { LazyImage } from './LazyImage'
 
@@ -109,6 +116,9 @@ function deriveRunStatus(run?: TrainingRun): { label: string; className: string 
   if (statuses.includes('running')) {
     return { label: 'Running', className: 'border-emerald-500/50 text-emerald-300' }
   }
+  if (statuses.includes('interrupted')) {
+    return { label: 'Interrupted', className: 'border-amber-500/50 text-amber-300' }
+  }
   if (statuses.length > 0 && statuses.every((status) => status === 'completed')) {
     return { label: 'Completed', className: 'border-primary/50 text-primary' }
   }
@@ -119,10 +129,19 @@ function deriveRunStatus(run?: TrainingRun): { label: string; className: string 
   return null
 }
 
+type SampleLightboxImage = {
+  src: string
+  step: number
+  promptIndex: number
+  prompt: string
+  runName: string
+}
+
 export function TrainingRuns() {
   const [selectedRun, setSelectedRun] = useState<string | null>(null)
   const [detailsOpenByRun, setDetailsOpenByRun] = useState<Record<string, boolean>>({})
   const [copiedRun, setCopiedRun] = useState<string | null>(null)
+  const [lightboxImage, setLightboxImage] = useState<SampleLightboxImage | null>(null)
 
   const {
     data: runs = [],
@@ -217,6 +236,7 @@ export function TrainingRuns() {
   }
 
   return (
+    <>
     <div className="flex min-h-[520px] overflow-hidden">
       {/* Left: runs list */}
       <div className="flex w-48 shrink-0 flex-col border-r border-border/60">
@@ -393,6 +413,15 @@ export function TrainingRuns() {
                                 src={`/files/${image}`}
                                 alt={`Prompt ${row.id + 1} - step ${runDetail.samples[idx]?.step}`}
                                 className="aspect-square"
+                                onClick={() =>
+                                  setLightboxImage({
+                                    src: `/files/${image}`,
+                                    step: runDetail.samples[idx]?.step ?? 0,
+                                    promptIndex: row.id,
+                                    prompt: row.label,
+                                    runName: runDetail.name,
+                                  })
+                                }
                               />
                             ) : (
                               <div className="aspect-square w-full bg-secondary/20" />
@@ -409,5 +438,43 @@ export function TrainingRuns() {
         ) : null}
       </div>
     </div>
+
+    {/* Sample image lightbox */}
+    <Dialog open={Boolean(lightboxImage)} onOpenChange={(open) => !open && setLightboxImage(null)}>
+      <DialogContent className="max-w-[96vw] gap-0 p-0 sm:max-w-4xl">
+        {lightboxImage ? (
+          <div className="grid max-h-[90vh] gap-0 lg:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="flex items-center justify-center overflow-auto bg-black/70 p-4">
+              <img
+                src={lightboxImage.src}
+                alt={`Step ${lightboxImage.step} — Prompt ${lightboxImage.promptIndex + 1}`}
+                className="max-h-[80vh] rounded object-contain"
+              />
+            </div>
+            <div className="flex flex-col border-l border-border/70 bg-card">
+              <DialogHeader className="px-4 pt-4">
+                <DialogTitle className="text-sm">Sample Details</DialogTitle>
+                <DialogDescription className="text-xs">{lightboxImage.runName}</DialogDescription>
+              </DialogHeader>
+              <div className="flex-1 overflow-auto px-4 py-3">
+                <div className="grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-3 text-xs">
+                  <div className="text-muted-foreground">Step</div>
+                  <div className="font-mono text-foreground">
+                    {lightboxImage.step.toLocaleString()}
+                  </div>
+                  <div className="text-muted-foreground">Prompt&nbsp;#</div>
+                  <div className="font-mono text-foreground">{lightboxImage.promptIndex + 1}</div>
+                  <div className="text-muted-foreground">Prompt</div>
+                  <div className="break-words leading-relaxed text-foreground">
+                    {lightboxImage.prompt}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }

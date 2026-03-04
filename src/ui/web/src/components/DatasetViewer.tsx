@@ -1,15 +1,32 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { api } from '../api'
+import { api, type DatasetImage } from '../api'
+import { LazyImage } from './LazyImage'
 
 const PAGE_SIZE = 50
+
+type LightboxImage = DatasetImage & { datasetName: string }
 
 export function DatasetViewer() {
   const [selectedDataset, setSelectedDataset] = useState<string | null>(null)
   const [page, setPage] = useState(0)
+  const [lightbox, setLightbox] = useState<LightboxImage | null>(null)
+  const [gridSize, setGridSize] = useState<'s' | 'm' | 'l'>('m')
+
+  const gridClass = {
+    s: 'grid-cols-3 gap-1.5 md:grid-cols-5 lg:grid-cols-7 xl:grid-cols-9',
+    m: 'grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6',
+    l: 'grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
+  }[gridSize]
 
   const {
     data: datasets = [],
@@ -21,9 +38,10 @@ export function DatasetViewer() {
     staleTime: 60_000,
   })
 
-  const current = selectedDataset && datasets.includes(selectedDataset)
-    ? selectedDataset
-    : (datasets[0] ?? null)
+  const current =
+    selectedDataset && datasets.includes(selectedDataset)
+      ? selectedDataset
+      : (datasets[0] ?? null)
 
   const {
     data: overview,
@@ -40,106 +58,106 @@ export function DatasetViewer() {
   const totalPages = overview ? Math.max(1, Math.ceil(overview.image_count / PAGE_SIZE)) : 1
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Datasets</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ScrollArea className="h-[480px] pr-3">
-            <div className="space-y-2">
-              {datasets.map((name) => (
-                <Button
-                  key={name}
-                  type="button"
-                  className="w-full justify-start"
-                  variant={name === current ? 'secondary' : 'ghost'}
-                  onClick={() => {
-                    setSelectedDataset(name)
-                    setPage(0)
-                  }}
-                >
-                  {name}
-                </Button>
-              ))}
+    <>
+    <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Dataset</span>
+          {datasetsLoading ? (
+            <span className="text-xs text-muted-foreground">Loading…</span>
+          ) : datasetsError ? (
+            <span className="text-xs text-destructive">Failed to load</span>
+          ) : datasets.length === 0 ? (
+            <span className="text-xs text-muted-foreground">No datasets found</span>
+          ) : datasets.map((name) => (
+            <Button
+              key={name}
+              type="button"
+              size="sm"
+              variant={name === current ? 'secondary' : 'ghost'}
+              className="h-7 px-2.5 text-xs"
+              onClick={() => { setSelectedDataset(name); setPage(0) }}
+            >
+              {name}
+            </Button>
+          ))}
+        </div>
 
-              {!datasetsLoading && datasets.length === 0 && !datasetsError ? (
-                <p className="text-sm text-muted-foreground">No datasets found.</p>
-              ) : null}
+        <div className="flex items-center gap-1.5">
+          {overview ? (
+            <span className="text-xs text-muted-foreground">
+              {overview.image_count} images · {Math.round(overview.coverage * 100)}% captioned
+            </span>
+          ) : null}
+          <div className="flex items-center rounded-md border border-border/50">
+            {(['s', 'm', 'l'] as const).map((size) => (
+              <button
+                key={size}
+                type="button"
+                onClick={() => setGridSize(size)}
+                className={`h-7 w-7 text-[10px] font-semibold uppercase transition-colors first:rounded-l-md last:rounded-r-md ${
+                  gridSize === size
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
-              {datasetsError ? (
-                <p className="text-sm text-destructive">Failed to load datasets: {String(datasetsError)}</p>
-              ) : null}
-            </div>
-          </ScrollArea>
-        </CardContent>
-      </Card>
-
-      <div className="space-y-4">
-        {overviewError ? (
-          <Card>
-            <CardContent className="p-4 text-sm text-destructive">
-              Failed to load dataset: {String(overviewError)}
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {!overview && !overviewError ? (
-          <Card>
-            <CardContent className="p-8 text-center text-sm text-muted-foreground">
-              {overviewLoading ? 'Loading dataset...' : 'Select a dataset to view images and captions.'}
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {overview ? (
-          <>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">{overview.name}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-6">
-                  <div>
-                    <div className="text-2xl font-semibold text-primary">{overview.image_count}</div>
-                    <div className="text-xs text-muted-foreground">Images</div>
+      {/* Content */}
+      {overviewError ? (
+        <p className="text-sm text-destructive">Failed to load dataset: {String(overviewError)}</p>
+      ) : !overview && overviewLoading ? (
+        <div className={`grid ${gridClass}`}>
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="aspect-square animate-pulse rounded-lg bg-secondary/50" />
+          ))}
+        </div>
+      ) : !overview ? (
+        <p className="py-8 text-center text-sm text-muted-foreground">Select a dataset above.</p>
+      ) : (
+        <>
+          <div className={`grid ${gridClass}`}>
+            {overview.images.map((image) => (
+              <article
+                key={image.image_url}
+                className="overflow-hidden rounded-lg border border-border/50"
+              >
+                <LazyImage
+                  src={`/files/${image.image_url}`}
+                  alt={image.filename}
+                  className="aspect-square"
+                  onClick={() => setLightbox({ ...image, datasetName: overview.name })}
+                />
+                {image.caption ? (
+                  <div className="px-2 pt-2 text-xs leading-snug text-muted-foreground">
+                    {image.caption}
                   </div>
-                  <div>
-                    <div className="text-2xl font-semibold text-primary">{overview.captioned_count}</div>
-                    <div className="text-xs text-muted-foreground">Captioned</div>
-                  </div>
-                  <div>
-                    <div className="text-2xl font-semibold text-primary">
-                      {Math.round(overview.coverage * 100)}%
-                    </div>
-                    <div className="text-xs text-muted-foreground">Coverage</div>
-                  </div>
+                ) : null}
+                <div className="px-2 pb-2 pt-1 font-mono text-[10px] text-muted-foreground/60">
+                  {image.filename}
                 </div>
-              </CardContent>
-            </Card>
+              </article>
+            ))}
+          </div>
 
-            <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-              {overview.images.map((image) => (
-                <article key={image.image_url} className="overflow-hidden rounded-lg border border-border/70 bg-card">
-                  <img
-                    src={`/files/${image.image_url}`}
-                    loading="lazy"
-                    alt={image.filename}
-                    className="aspect-square w-full object-cover"
-                  />
-                  {image.caption ? (
-                    <div className="px-3 pt-2 text-xs text-muted-foreground">{image.caption}</div>
-                  ) : null}
-                  <div className="px-3 pb-2 pt-1 font-mono text-[11px] text-muted-foreground">{image.filename}</div>
-                </article>
-              ))}
-            </div>
-
-            <div className="flex items-center justify-center gap-2">
-              <Button type="button" variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+          {totalPages > 1 ? (
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={page === 0}
+                onClick={() => setPage((p) => p - 1)}
+              >
                 Prev
               </Button>
-              <span className="text-sm text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 Page {page + 1} / {totalPages}
               </span>
               <Button
@@ -152,9 +170,50 @@ export function DatasetViewer() {
                 Next
               </Button>
             </div>
-          </>
-        ) : null}
-      </div>
+          ) : null}
+        </>
+      )}
     </div>
+
+    {/* Lightbox */}
+    <Dialog open={Boolean(lightbox)} onOpenChange={(open) => !open && setLightbox(null)}>
+      <DialogContent className="max-w-[96vw] gap-0 p-0 sm:max-w-4xl">
+        {lightbox ? (
+          <div className="grid max-h-[90vh] gap-0 lg:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="flex items-center justify-center overflow-auto bg-black/70 p-4">
+              <img
+                src={`/files/${lightbox.image_url}`}
+                alt={lightbox.filename}
+                className="max-h-[80vh] rounded object-contain"
+              />
+            </div>
+            <div className="flex flex-col border-l border-border/70 bg-card">
+              <DialogHeader className="px-4 pt-4">
+                <DialogTitle className="text-sm">Image Details</DialogTitle>
+                <DialogDescription className="text-xs">{lightbox.datasetName}</DialogDescription>
+              </DialogHeader>
+              <ScrollArea className="flex-1 px-4 py-3">
+                <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-3 gap-y-3 text-xs">
+                  <div className="text-muted-foreground">File</div>
+                  <div className="break-all font-mono text-foreground">{lightbox.filename}</div>
+                  {lightbox.caption ? (
+                    <>
+                      <div className="text-muted-foreground">Caption</div>
+                      <div className="leading-relaxed text-foreground">{lightbox.caption}</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-muted-foreground">Caption</div>
+                      <div className="text-muted-foreground/50">No caption</div>
+                    </>
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }

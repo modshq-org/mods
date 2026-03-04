@@ -159,72 +159,64 @@ function App() {
         {/* Scrollable content */}
         <main className="flex-1 overflow-y-auto bg-[#09090e]">
           {/* Tab: Train */}
-          {tab === 'train' && (
-            <div className="flex flex-col py-6 pb-24 md:pb-6 pt-16 md:pt-6">
-              {gpu.training_active && (
-                <div className="px-4 md:px-6 mb-4 space-y-4">
-                  <GpuBanner gpu={gpu} />
-                  <TrainingStatusBar />
-                </div>
-              )}
-              <TrainingRuns />
-            </div>
-          )}
+          <div className={tab === 'train' ? 'flex h-full flex-col pb-24 pt-16 md:pb-0 md:pt-0' : 'hidden'}>
+            {gpu.training_active && (
+              <div className="space-y-4 border-b border-border/50 px-4 py-4 md:px-6">
+                <GpuBanner gpu={gpu} />
+                <TrainingStatusBar />
+              </div>
+            )}
+            <TrainingRuns />
+          </div>
 
           {/* Tab: Generate */}
-          {tab === 'generate' && (
-            <div className="mx-auto max-w-3xl space-y-4 px-4 py-6 pb-24 md:px-6 md:pb-6 pt-16 md:pt-6">
-              {modelError ? (
-                <Card>
-                  <CardContent className="p-4 text-sm text-destructive">
-                    Models unavailable: {String(modelError)}
-                  </CardContent>
-                </Card>
-              ) : null}
+          <div className={tab === 'generate' ? 'mx-auto max-w-3xl space-y-4 px-4 py-6 pb-24 md:px-6 md:pb-6 pt-16 md:pt-6' : 'hidden'}>
+            {modelError ? (
+              <Card>
+                <CardContent className="p-4 text-sm text-destructive">
+                  Models unavailable: {String(modelError)}
+                </CardContent>
+              </Card>
+            ) : null}
 
-              {!modelError ? (
-                <GenerateForm
-                  models={models}
-                  gpu={gpu}
-                  form={form}
-                  setForm={setForm}
-                  onSubmitGenerate={submitGenerate}
-                  isSubmitting={
-                    generateState.status === 'submitting' || generateState.status === 'streaming'
-                  }
-                />
-              ) : null}
-
-              {modelsLoading ? (
-                <Card>
-                  <CardContent className="p-4 text-sm text-muted-foreground">Loading models…</CardContent>
-                </Card>
-              ) : null}
-
-              <GenerateProgress
-                state={generateState}
-                onReset={() => setGenerateState({ status: 'idle' })}
-                onViewOutputs={() => {
-                  setTab('outputs')
-                  setGenerateState({ status: 'idle' })
-                }}
+            {!modelError ? (
+              <GenerateForm
+                models={models}
+                gpu={gpu}
+                form={form}
+                setForm={setForm}
+                onSubmitGenerate={submitGenerate}
+                isSubmitting={
+                  generateState.status === 'submitting' || generateState.status === 'streaming'
+                }
               />
-            </div>
-          )}
+            ) : null}
+
+            {modelsLoading ? (
+              <Card>
+                <CardContent className="p-4 text-sm text-muted-foreground">Loading models…</CardContent>
+              </Card>
+            ) : null}
+
+            <GenerateProgress
+              state={generateState}
+              onReset={() => setGenerateState({ status: 'idle' })}
+              onViewOutputs={() => {
+                setTab('outputs')
+                setGenerateState({ status: 'idle' })
+              }}
+            />
+          </div>
 
           {/* Tab: Outputs */}
-          {tab === 'outputs' && (
-            <div className="px-4 py-6 pb-24 md:px-6 md:pb-6 pt-16 md:pt-6">
-              <OutputsGallery setForm={setForm} setActiveTab={setTab} />
-            </div>
-          )}
+          <div className={tab === 'outputs' ? 'px-4 py-6 pb-24 md:px-6 md:pb-6 pt-16 md:pt-6' : 'hidden'}>
+            <OutputsGallery setForm={setForm} setActiveTab={setTab} />
+          </div>
 
           {/* Tab: Datasets */}
-          {tab === 'datasets' && (
-            <div className="px-4 py-6 pb-24 md:px-6 md:pb-6 pt-16 md:pt-6">
-              <DatasetViewer />
-            </div>
-          )}
+          <div className={tab === 'datasets' ? 'px-4 py-6 pb-24 md:px-6 md:pb-6 pt-16 md:pt-6' : 'hidden'}>
+            <DatasetViewer />
+          </div>
         </main>
       </div>
     </div>
