@@ -31,6 +31,10 @@ def _build_parser() -> argparse.ArgumentParser:
     tg.add_argument("--config", required=True, help="Path to tag spec yaml")
     tg.add_argument("--job-id", default="", help="Job ID for event envelope")
 
+    srv = sub.add_parser("serve", help="Start persistent worker daemon")
+    srv.add_argument("--timeout", type=int, default=600, help="Idle timeout in seconds (default: 600)")
+    srv.add_argument("--max-models", type=int, default=2, help="Max models to cache in VRAM (default: 2)")
+
     return parser
 
 
@@ -65,6 +69,10 @@ def main() -> int:
         config_path = Path(args.config)
         emitter.job_accepted(worker_pid=os.getpid())
         return run_tag(config_path, emitter)
+
+    if args.command == "serve":
+        from modl_worker.serve import run_serve
+        return run_serve(timeout=args.timeout, max_models=args.max_models)
 
     fatal(f"Unsupported command: {args.command}")
     return 1

@@ -1289,6 +1289,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "indicatif",
+ "libc",
  "mockito",
  "nvml-wrapper",
  "open",

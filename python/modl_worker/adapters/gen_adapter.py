@@ -64,7 +64,11 @@ SIZE_PRESETS = {
 
 
 def run_generate(config_path: Path, emitter: EventEmitter) -> int:
-    """Run image generation from a GenerateJobSpec YAML file."""
+    """Run image generation from a GenerateJobSpec YAML file (one-shot mode).
+
+    Loads the pipeline from scratch, runs inference, then exits. For
+    persistent-worker mode, see ``run_generate_with_pipeline()``.
+    """
     import yaml
 
     if not config_path.exists():
@@ -82,29 +86,16 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
         emitter.error("SPEC_PARSE_ERROR", str(exc), recoverable=False)
         return 2
 
-    prompt = spec.get("prompt", "")
     model_info = spec.get("model", {})
-    lora_info = spec.get("lora")
-    output_info = spec.get("output", {})
-    params = spec.get("params", {})
-
     base_model_id = model_info.get("base_model_id", "flux-schnell")
     base_model_path = model_info.get("base_model_path")
-
-    width = params.get("width", 1024)
-    height = params.get("height", 1024)
-    steps = params.get("steps", 28)
-    guidance = params.get("guidance", 3.5)
-    seed = params.get("seed")
-    count = params.get("count", 1)
-
-    output_dir = output_info.get("output_dir", ".")
-    os.makedirs(output_dir, exist_ok=True)
+    lora_info = spec.get("lora")
 
     # -------------------------------------------------------------------
-    # 1. Load pipeline
+    # 1. Load pipeline (cold start)
     # -------------------------------------------------------------------
     emitter.info(f"Loading pipeline for {base_model_id}...")
+    count = spec.get("params", {}).get("count", 1)
     emitter.progress(stage="load", step=0, total_steps=count)
 
     try:
@@ -146,9 +137,52 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
         return 1
 
     # -------------------------------------------------------------------
-    # 2. Generate images
+    # 2. Delegate to shared inference loop
     # -------------------------------------------------------------------
+    return run_generate_with_pipeline(spec, emitter, pipe, cls_name)
+
+
+def run_generate_with_pipeline(
+    spec: dict,
+    emitter: EventEmitter,
+    pipeline: object,
+    cls_name: str,
+) -> int:
+    """Run image generation using an already-loaded pipeline.
+
+    This is the shared inference loop used by both one-shot mode
+    (``run_generate()``) and persistent-worker mode (``serve.py``).
+    The caller is responsible for loading / caching the pipeline and
+    handling LoRA reconciliation.
+
+    Args:
+        spec: Parsed GenerateJobSpec dict (prompt, model, params, output, etc.)
+        emitter: EventEmitter to write JSONL events (stdout or socket)
+        pipeline: A loaded diffusers pipeline object (already on CUDA)
+        cls_name: Pipeline class name (e.g. "FluxPipeline")
+
+    Returns:
+        Exit code (0 = success, 1 = all images failed)
+    """
     import torch
+
+    prompt = spec.get("prompt", "")
+    model_info = spec.get("model", {})
+    lora_info = spec.get("lora")
+    output_info = spec.get("output", {})
+    params = spec.get("params", {})
+
+    base_model_id = model_info.get("base_model_id", "flux-schnell")
+
+    width = params.get("width", 1024)
+    height = params.get("height", 1024)
+    steps = params.get("steps", 28)
+    guidance = params.get("guidance", 3.5)
+    seed = params.get("seed")
+    count = params.get("count", 1)
+
+    output_dir = output_info.get("output_dir", ".")
+    os.makedirs(output_dir, exist_ok=True)
 
     generator = torch.Generator(device="cuda")
     if seed is not None:
@@ -163,12 +197,13 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
         "generator": generator,
     }
 
-    # Guidance scale: Flux uses a different parameter name for some versions
+    # Guidance scale
     if cls_name == "FluxPipeline":
         gen_kwargs["guidance_scale"] = guidance
     else:
         gen_kwargs["guidance_scale"] = guidance
 
+    pipe = pipeline
     artifact_paths = []
 
     for i in range(count):

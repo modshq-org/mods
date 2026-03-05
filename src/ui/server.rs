@@ -548,6 +548,7 @@ async fn run_single_generate(sender: &broadcast::Sender<String>, req: GenerateRe
         req.num_images,
         false,
         None,
+        false, // no_worker: use persistent worker if available
         true,
     )
     .await;

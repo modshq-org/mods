@@ -25,6 +25,7 @@ mod train_status;
 mod uninstall;
 mod update;
 mod upgrade;
+pub(crate) mod worker;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -179,6 +180,22 @@ pub enum AuthProvider {
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum WorkerSubcommands {
+    /// Start the persistent worker daemon (keeps models in VRAM)
+    Start {
+        /// Idle timeout in seconds (worker shuts down after this long without requests)
+        #[arg(long, default_value = "600")]
+        timeout: u32,
+    },
+
+    /// Stop the persistent worker daemon
+    Stop,
+
+    /// Show worker status (loaded models, VRAM, uptime)
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -368,6 +385,9 @@ pub enum Commands {
         /// Cloud provider to use (modal, replicate, runpod)
         #[arg(long, value_enum)]
         provider: Option<CloudProvider>,
+        /// Force one-shot mode (skip persistent worker, cold start every time)
+        #[arg(long)]
+        no_worker: bool,
         /// Output result as JSON (suppresses progress output)
         #[arg(long)]
         json: bool,
@@ -475,6 +495,12 @@ pub enum Commands {
         /// Run in foreground (blocks terminal; default is background/daemon)
         #[arg(long)]
         foreground: bool,
+    },
+
+    /// Manage the persistent GPU worker (keeps models in VRAM)
+    Worker {
+        #[command(subcommand)]
+        command: WorkerSubcommands,
     },
 
     /// Manage embedded Python runtime
@@ -611,6 +637,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             count,
             cloud,
             provider,
+            no_worker,
             json,
         } => {
             generate::run(
@@ -625,6 +652,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 count,
                 cloud,
                 provider,
+                no_worker,
                 json,
             )
             .await
@@ -644,6 +672,11 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Config { key, value } => config::run(key.as_deref(), value.as_deref()).await,
         Commands::Auth { provider } => auth::run(provider).await,
         Commands::Outputs { command } => outputs::run(command).await,
+        Commands::Worker { command } => match command {
+            WorkerSubcommands::Start { timeout } => worker::start(timeout).await,
+            WorkerSubcommands::Stop => worker::stop().await,
+            WorkerSubcommands::Status => worker::status().await,
+        },
         Commands::Serve {
             port,
             no_open,

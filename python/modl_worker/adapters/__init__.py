@@ -1,5 +1,5 @@
 from .train_adapter import run_train
-from .gen_adapter import run_generate
+from .gen_adapter import run_generate, run_generate_with_pipeline
 from .caption_adapter import run_caption
 from .resize_adapter import run_resize
 from .tag_adapter import run_tag

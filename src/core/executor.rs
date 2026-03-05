@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use std::env;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -42,6 +42,8 @@ pub trait Executor {
 pub struct LocalExecutor {
     python_path: PathBuf,
     runtime_root: PathBuf,
+    /// Whether to try the persistent worker socket before spawning a one-shot process.
+    pub use_worker: bool,
     /// Map from job_id to (child, receiver)
     jobs: std::collections::HashMap<String, JobState>,
 }
@@ -58,6 +60,7 @@ impl LocalExecutor {
         Self {
             python_path,
             runtime_root,
+            use_worker: true,
             jobs: std::collections::HashMap::new(),
         }
     }
@@ -180,82 +183,20 @@ impl Executor for LocalExecutor {
     fn submit_generate(&mut self, spec: &GenerateJobSpec) -> Result<JobHandle> {
         let job_id = format!("gen-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
 
-        // Write spec YAML to jobs dir
-        let jobs_dir = self.runtime_root.join("jobs");
-        std::fs::create_dir_all(&jobs_dir)
-            .with_context(|| format!("Failed to create jobs dir: {}", jobs_dir.display()))?;
-
-        let spec_path = jobs_dir.join(format!("{}.yaml", job_id));
-        let yaml = serde_yaml::to_string(spec).context("Failed to serialize generate spec")?;
-        std::fs::write(&spec_path, &yaml)
-            .with_context(|| format!("Failed to write spec: {}", spec_path.display()))?;
-
-        // Set up Python worker command
-        let worker_root = resolve_worker_python_root()?;
-        let mut py_path = worker_root.to_string_lossy().to_string();
-        if let Ok(Some(aitk_dir)) = runtime::aitoolkit_path() {
-            py_path = format!("{}:{}", py_path, aitk_dir.display());
-        }
-        if let Ok(current) = env::var("PYTHONPATH")
-            && !current.trim().is_empty()
+        // -------------------------------------------------------------------
+        // Try persistent worker socket first (warm model, fast path)
+        // -------------------------------------------------------------------
+        if self.use_worker
+            && let Some(handle) = self.try_submit_via_socket(&job_id, spec)?
         {
-            py_path = format!("{}:{}", py_path, current);
+            return Ok(handle);
         }
+        // Socket not available — fall through to one-shot
 
-        let mut command = Command::new(&self.python_path);
-        command
-            .arg("-m")
-            .arg("modl_worker.main")
-            .arg("generate")
-            .arg("--config")
-            .arg(&spec_path)
-            .arg("--job-id")
-            .arg(&job_id)
-            .env("PYTHONPATH", py_path)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = command.spawn().with_context(|| {
-            format!(
-                "Failed to start generate worker using {}",
-                self.python_path.display()
-            )
-        })?;
-
-        let child_pid = child.id();
-
-        // Set up event channel
-        let (tx, rx) = mpsc::channel::<JobEvent>();
-        let job_id_clone = job_id.clone();
-
-        let stdout = child
-            .stdout
-            .take()
-            .context("Failed to capture worker stdout")?;
-
-        let stderr = child
-            .stderr
-            .take()
-            .context("Failed to capture worker stderr")?;
-
-        // Spawn reader threads for stdout and stderr
-        thread::spawn(move || {
-            read_worker_stdout(stdout, &job_id_clone, tx.clone());
-            read_worker_stderr(stderr, &job_id_clone, tx);
-        });
-
-        self.jobs.insert(
-            job_id.clone(),
-            JobState {
-                child: Some(child),
-                receiver: Some(rx),
-            },
-        );
-
-        Ok(JobHandle {
-            job_id,
-            child_pid: Some(child_pid),
-        })
+        // -------------------------------------------------------------------
+        // One-shot fallback: spawn a fresh Python process
+        // -------------------------------------------------------------------
+        self.submit_generate_oneshot(&job_id, spec)
     }
 
     fn events(&mut self, job_id: &str) -> Result<mpsc::Receiver<JobEvent>> {
@@ -287,6 +228,160 @@ impl Executor for LocalExecutor {
             return Ok(());
         }
         bail!("No running process found for job: {job_id}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Worker socket + one-shot helpers
+// ---------------------------------------------------------------------------
+
+impl LocalExecutor {
+    /// Try to submit a generation job via the persistent worker Unix socket.
+    ///
+    /// Returns `Ok(Some(handle))` if the worker accepted the job, `Ok(None)`
+    /// if the socket is not available (fall back to one-shot).
+    fn try_submit_via_socket(
+        &mut self,
+        job_id: &str,
+        spec: &GenerateJobSpec,
+    ) -> Result<Option<JobHandle>> {
+        use std::os::unix::net::UnixStream;
+
+        let sock_path = dirs::home_dir()
+            .expect("Could not determine home directory")
+            .join(".modl")
+            .join("worker.sock");
+
+        // Try to connect — if socket doesn't exist or daemon isn't running, return None
+        let mut stream = match UnixStream::connect(&sock_path) {
+            Ok(s) => s,
+            Err(_) => return Ok(None),
+        };
+
+        // Build the request envelope
+        let spec_json = serde_json::to_value(spec).context("Failed to serialize spec")?;
+        let request = serde_json::json!({
+            "action": "generate",
+            "job_id": job_id,
+            "spec": spec_json,
+        });
+
+        let request_line = format!("{}\n", serde_json::to_string(&request)?);
+
+        // Send request
+        stream
+            .write_all(request_line.as_bytes())
+            .context("Failed to write to worker socket")?;
+
+        // Shut down the write half so the worker knows the request is complete
+        stream
+            .shutdown(std::net::Shutdown::Write)
+            .context("Failed to shutdown socket write")?;
+
+        // Read JSONL events from the socket (same protocol as stdout)
+        let (tx, rx) = mpsc::channel::<JobEvent>();
+        let job_id_owned = job_id.to_string();
+
+        thread::spawn(move || {
+            read_worker_stdout(stream, &job_id_owned, tx);
+        });
+
+        self.jobs.insert(
+            job_id.to_string(),
+            JobState {
+                child: None, // No child process — worker is persistent
+                receiver: Some(rx),
+            },
+        );
+
+        Ok(Some(JobHandle {
+            job_id: job_id.to_string(),
+            child_pid: None,
+        }))
+    }
+
+    /// One-shot generation: spawn a fresh Python process (cold start).
+    fn submit_generate_oneshot(
+        &mut self,
+        job_id: &str,
+        spec: &GenerateJobSpec,
+    ) -> Result<JobHandle> {
+        // Write spec YAML to jobs dir
+        let jobs_dir = self.runtime_root.join("jobs");
+        std::fs::create_dir_all(&jobs_dir)
+            .with_context(|| format!("Failed to create jobs dir: {}", jobs_dir.display()))?;
+
+        let spec_path = jobs_dir.join(format!("{}.yaml", job_id));
+        let yaml = serde_yaml::to_string(spec).context("Failed to serialize generate spec")?;
+        std::fs::write(&spec_path, &yaml)
+            .with_context(|| format!("Failed to write spec: {}", spec_path.display()))?;
+
+        // Set up Python worker command
+        let worker_root = resolve_worker_python_root()?;
+        let mut py_path = worker_root.to_string_lossy().to_string();
+        if let Ok(Some(aitk_dir)) = runtime::aitoolkit_path() {
+            py_path = format!("{}:{}", py_path, aitk_dir.display());
+        }
+        if let Ok(current) = env::var("PYTHONPATH")
+            && !current.trim().is_empty()
+        {
+            py_path = format!("{}:{}", py_path, current);
+        }
+
+        let mut command = Command::new(&self.python_path);
+        command
+            .arg("-m")
+            .arg("modl_worker.main")
+            .arg("generate")
+            .arg("--config")
+            .arg(&spec_path)
+            .arg("--job-id")
+            .arg(job_id)
+            .env("PYTHONPATH", py_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "Failed to start generate worker using {}",
+                self.python_path.display()
+            )
+        })?;
+
+        let child_pid = child.id();
+
+        // Set up event channel
+        let (tx, rx) = mpsc::channel::<JobEvent>();
+        let job_id_owned = job_id.to_string();
+
+        let stdout = child
+            .stdout
+            .take()
+            .context("Failed to capture worker stdout")?;
+
+        let stderr = child
+            .stderr
+            .take()
+            .context("Failed to capture worker stderr")?;
+
+        // Spawn reader threads for stdout and stderr
+        thread::spawn(move || {
+            read_worker_stdout(stdout, &job_id_owned, tx.clone());
+            read_worker_stderr(stderr, &job_id_owned, tx);
+        });
+
+        self.jobs.insert(
+            job_id.to_string(),
+            JobState {
+                child: Some(child),
+                receiver: Some(rx),
+            },
+        );
+
+        Ok(JobHandle {
+            job_id: job_id.to_string(),
+            child_pid: Some(child_pid),
+        })
     }
 }
 

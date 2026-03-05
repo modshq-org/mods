@@ -122,6 +122,7 @@ pub async fn run(
     count: u32,
     cloud: bool,
     provider: Option<CloudProvider>,
+    no_worker: bool,
     json: bool,
 ) -> Result<()> {
     let db = Database::open()?;
@@ -225,13 +226,14 @@ pub async fn run(
     // -------------------------------------------------------------------
     // Execute
     // -------------------------------------------------------------------
-    execute_generate(spec, cloud, provider, json).await
+    execute_generate(spec, cloud, provider, no_worker, json).await
 }
 
 async fn execute_generate(
     spec: GenerateJobSpec,
     cloud: bool,
     provider: Option<CloudProvider>,
+    no_worker: bool,
     json: bool,
 ) -> Result<()> {
     let db = Database::open()?;
@@ -255,7 +257,11 @@ async fn execute_generate(
         if !json {
             println!("{} Preparing runtime...", style("→").cyan());
         }
-        Box::new(LocalExecutor::from_runtime_setup().await?)
+        let mut executor = LocalExecutor::from_runtime_setup().await?;
+        if no_worker {
+            executor.use_worker = false;
+        }
+        Box::new(executor)
     };
 
     // -------------------------------------------------------------------

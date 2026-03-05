@@ -65,6 +65,9 @@ chrono = { version = "0.4", features = ["serde"] }
 shellexpand = "3"
 urlencoding = "2"
 
+# Unix process management (worker daemon)
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 mockito = "1"
