@@ -5,15 +5,37 @@ export type GpuStatus = {
   training_active: boolean
 }
 
+export type DependencyRef = {
+  id: string
+  type: string
+  installed: boolean
+}
+
+export type FeatureDep = {
+  feature: string
+  description: string
+  model_type: string
+  installed: boolean
+  install_hint?: string
+}
+
 export type InstalledModel = {
   id: string
   name: string
-  model_type: 'checkpoint' | 'diffusion_model' | 'lora'
+  model_type: string
   variant?: string
   size_bytes: number
   trigger_word?: string
   base_model_id?: string
   sample_image_url?: string
+  depended_on_by?: string[]
+  depends_on?: DependencyRef[]
+}
+
+export type ModelsResponse = {
+  models: InstalledModel[]
+  total_size_bytes: number
+  feature_deps: FeatureDep[]
 }
 
 export type GeneratedImage = {
@@ -171,7 +193,11 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   gpu: () => fetchJson<GpuStatus>('/api/gpu'),
-  models: () => fetchJson<InstalledModel[]>('/api/models'),
+  models: () => fetchJson<ModelsResponse>('/api/models'),
+  deleteModel: (id: string) =>
+    fetchJson<{ deleted: string }>(`/api/models/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
   runs: () => fetchJson<string[]>('/api/runs'),
   run: (name: string) => fetchJson<TrainingRun>(`/api/runs/${encodeURIComponent(name)}`),
   status: () => fetchJson<TrainingStatusRun[]>('/api/status'),

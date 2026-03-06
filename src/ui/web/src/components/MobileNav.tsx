@@ -1,4 +1,4 @@
-import { Camera, Database, Images, Menu, Sparkles, X, Zap } from 'lucide-react'
+import { Camera, Database, HardDrive, Images, Menu, Sparkles, X, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import type { Tab } from '../App'
@@ -10,6 +10,7 @@ const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'outputs', label: 'Outputs', icon: Images },
   { id: 'datasets', label: 'Datasets', icon: Database },
   { id: 'train', label: 'Train', icon: Zap },
+  { id: 'models', label: 'Models', icon: HardDrive },
 ]
 
 type Props = {

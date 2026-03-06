@@ -1,4 +1,4 @@
-import { Camera, ChevronsLeft, ChevronsRight, Database, Images, Sparkles, Zap } from 'lucide-react'
+import { Camera, ChevronsLeft, ChevronsRight, Database, HardDrive, Images, Sparkles, Zap } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { api } from '../api'
@@ -10,6 +10,7 @@ const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'outputs', label: 'Outputs', icon: Images },
   { id: 'datasets', label: 'Datasets', icon: Database },
   { id: 'train', label: 'Train', icon: Zap },
+  { id: 'models', label: 'Models', icon: HardDrive },
 ]
 
 type Props = {

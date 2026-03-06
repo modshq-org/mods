@@ -3,6 +3,7 @@ import { useLocation, useSearch } from 'wouter'
 import { api, type GpuStatus } from './api'
 import { AppSidebar } from './components/AppSidebar'
 import { DatasetViewer } from './components/DatasetViewer'
+import { ModelsView } from './components/ModelsView'
 import { GenerateView } from './components/generate'
 import { createDefaultGenerateFormState, type GenerateFormState } from './components/generate'
 import { GpuBanner } from './components/GpuBanner'
@@ -13,7 +14,7 @@ import { StudioView } from './components/studio/StudioView'
 import { TrainingStatusBar } from './components/TrainingStatusBar'
 import { useLocalStorage } from './hooks/useLocalStorage'
 
-export type Tab = 'studio' | 'train' | 'generate' | 'outputs' | 'datasets'
+export type Tab = 'studio' | 'train' | 'generate' | 'outputs' | 'datasets' | 'models'
 
 const PAGE_TITLES: Record<Tab, string> = {
   studio: 'Studio',
@@ -21,12 +22,13 @@ const PAGE_TITLES: Record<Tab, string> = {
   generate: 'Generate',
   outputs: 'Outputs',
   datasets: 'Datasets',
+  models: 'Models',
 }
 
 function App() {
   const searchString = useSearch()
   const [, navigate] = useLocation()
-  const TABS = ['studio', 'generate', 'outputs', 'datasets', 'train'] as const
+  const TABS = ['studio', 'generate', 'outputs', 'datasets', 'train', 'models'] as const
   const params = new URLSearchParams(searchString)
   const tab: Tab = TABS.find((t) => t === params.get('tab')) ?? 'studio'
   const setTab = (next: Tab) => navigate(`/?tab=${next}`)
@@ -111,6 +113,11 @@ function App() {
           {/* Tab: Datasets */}
           <div className={tab === 'datasets' ? 'px-4 py-6 pb-24 md:px-6 md:pb-6 pt-16 md:pt-6' : 'hidden'}>
             <DatasetViewer />
+          </div>
+
+          {/* Tab: Models */}
+          <div className={tab === 'models' ? 'px-4 py-6 pb-24 md:px-6 md:pb-6 pt-16 md:pt-6' : 'hidden'}>
+            <ModelsView />
           </div>
         </main>
       </div>

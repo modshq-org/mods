@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -89,6 +89,7 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         // Models & GPU
         .route("/api/gpu", get(models::api_gpu_status))
         .route("/api/models", get(models::api_list_models))
+        .route("/api/models/{id}", delete(models::api_delete_model))
         // Generation
         .route("/api/generate", post(generate::api_generate))
         .route("/api/generate/stream", get(generate::api_generate_stream))

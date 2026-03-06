@@ -53,11 +53,12 @@ export function GenerateView({ setTab: _setTab }: Props) {
     staleTime: 4_000,
   })
 
-  const { data: models = [] } = useQuery({
+  const { data: modelsResponse } = useQuery({
     queryKey: ['models'],
     queryFn: api.models,
     staleTime: 5 * 60_000,
   })
+  const models = modelsResponse?.models ?? []
 
   // Auto-select first checkpoint if none selected
   useEffect(() => {
