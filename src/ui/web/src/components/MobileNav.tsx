@@ -1,4 +1,13 @@
 import { Camera, Database, HardDrive, Images, Menu, Sparkles, X, Zap } from 'lucide-react'
+
+function ModlLogo({ size = 24 }: { size?: number }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" width={size} height={size}>
+      <rect width="32" height="32" rx="6" fill="#7c3aed" />
+      <text x="16" y="23" textAnchor="middle" fontFamily="system-ui" fontWeight={800} fontSize="16" fill="white">m</text>
+    </svg>
+  )
+}
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import type { Tab } from '../App'
@@ -33,12 +42,7 @@ export function MobileNav({ activeTab, onTabChange }: Props) {
           {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </button>
         <div className="flex items-center gap-2">
-          <div
-            className="flex h-6 w-6 items-center justify-center rounded-md shrink-0"
-            style={{ background: 'linear-gradient(135deg, #7c3aed, #a855f7)' }}
-          >
-            <Zap className="h-3.5 w-3.5 text-white" strokeWidth={2.5} />
-          </div>
+          <ModlLogo size={24} />
           <span
             className="text-sm font-bold tracking-tight"
             style={{

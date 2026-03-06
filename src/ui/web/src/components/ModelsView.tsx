@@ -44,7 +44,8 @@ const TYPE_LABELS: Record<string, string> = {
   llm: 'LLMs',
 }
 
-function formatSize(bytes: number): string {
+function formatSize(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return '—'
   if (bytes >= 1024 * 1024 * 1024) {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
   }
@@ -79,8 +80,9 @@ export function ModelsView() {
     staleTime: 30_000,
   })
 
+  // Handle both old (InstalledModel[]) and new (ModelsResponse) API formats
   const models = response?.models ?? []
-  const totalSize = response?.total_size_bytes ?? 0
+  const totalSize = response?.total_size_bytes ?? models.reduce((s, m) => s + (m.size_bytes ?? 0), 0)
   const featureDeps = response?.feature_deps ?? []
 
   const groups: TypeGroup[] = useMemo(() => {

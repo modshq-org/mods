@@ -193,7 +193,14 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   gpu: () => fetchJson<GpuStatus>('/api/gpu'),
-  models: () => fetchJson<ModelsResponse>('/api/models'),
+  models: async (): Promise<ModelsResponse> => {
+    const raw = await fetchJson<ModelsResponse | InstalledModel[]>('/api/models')
+    // Handle old API format (plain array) gracefully
+    if (Array.isArray(raw)) {
+      return { models: raw, total_size_bytes: raw.reduce((s, m) => s + (m.size_bytes ?? 0), 0), feature_deps: [] }
+    }
+    return raw
+  },
   deleteModel: (id: string) =>
     fetchJson<{ deleted: string }>(`/api/models/${encodeURIComponent(id)}`, {
       method: 'DELETE',

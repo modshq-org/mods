@@ -1,4 +1,13 @@
 import { Camera, ChevronsLeft, ChevronsRight, Database, HardDrive, Images, Sparkles, Zap } from 'lucide-react'
+
+function ModlLogo({ size = 28 }: { size?: number }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" width={size} height={size}>
+      <rect width="32" height="32" rx="6" fill="#7c3aed" />
+      <text x="16" y="23" textAnchor="middle" fontFamily="system-ui" fontWeight={800} fontSize="16" fill="white">m</text>
+    </svg>
+  )
+}
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { api } from '../api'
@@ -48,21 +57,11 @@ export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse
       <div className="flex h-14 items-center border-b border-border px-3">
         {collapsed ? (
           <div className="flex w-full justify-center">
-            <div
-              className="flex h-7 w-7 items-center justify-center rounded-lg shrink-0"
-              style={{ background: 'linear-gradient(135deg, #7c3aed, #a855f7)' }}
-            >
-              <Zap className="h-4 w-4 text-white" strokeWidth={2.5} />
-            </div>
+            <ModlLogo size={28} />
           </div>
         ) : (
           <div className="flex items-center gap-2.5 px-2">
-            <div
-              className="flex h-7 w-7 items-center justify-center rounded-lg shrink-0"
-              style={{ background: 'linear-gradient(135deg, #7c3aed, #a855f7)' }}
-            >
-              <Zap className="h-4 w-4 text-white" strokeWidth={2.5} />
-            </div>
+            <ModlLogo size={28} />
             <div className="leading-none">
               <span
                 className="text-sm font-bold tracking-tight"
