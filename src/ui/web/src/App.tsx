@@ -4,7 +4,7 @@ import { api, type GpuStatus } from './api'
 import { AppSidebar } from './components/AppSidebar'
 import { DatasetViewer } from './components/DatasetViewer'
 import { GenerateView } from './components/generate'
-import { createDefaultGenerateFormState, type GenerateFormState } from './components/generate-form-state'
+import { createDefaultGenerateFormState, type GenerateFormState } from './components/generate'
 import { GpuBanner } from './components/GpuBanner'
 import { MobileNav } from './components/MobileNav'
 import { OutputsGallery } from './components/OutputsGallery'
@@ -39,7 +39,7 @@ function App() {
 
   // Form state — used by OutputsGallery "open as recipe" feature
   const [, setForm] = useLocalStorage<GenerateFormState>(
-    'modl:generate-form',
+    'modl:generate-form-v2',
     createDefaultGenerateFormState,
   )
 

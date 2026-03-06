@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { api, type GeneratedImage, type GeneratedOutput, type GenerateRequest, type GpuStatus, type InstalledModel } from '../../api'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
+import { useSSE } from '../../hooks/useSSE'
 import { CollapsibleSection } from '../ui/collapsible-section'
 import { BatchPanel } from './BatchPanel'
 import { GenerateActions } from './GenerateActions'
@@ -70,41 +71,11 @@ export function GenerateView({ setTab: _setTab }: Props) {
 
   const isGenerating = progressState.status === 'submitting' || progressState.status === 'streaming'
 
-  // Ref to hold the active EventSource so we can close it on unmount
-  const eventSourceRef = useRef<EventSource | null>(null)
+  // SSE connection — controlled by sseConnected state
+  const [sseConnected, setSseConnected] = useState(false)
 
-  // Clean up EventSource on unmount
-  useEffect(() => {
-    return () => {
-      eventSourceRef.current?.close()
-    }
-  }, [])
-
-  // ── Keyboard shortcut: Ctrl/Cmd + Enter ──────────────────────────────
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault()
-        if (form.prompt.trim() && form.base_model_id) {
-          handleGenerate()
-        }
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  })
-
-  // ── Open / ensure a persistent SSE connection ───────────────────────
-  const ensureSSE = useCallback(() => {
-    if (eventSourceRef.current) return // already open
-
-    const es = new EventSource('/api/generate/stream')
-    eventSourceRef.current = es
-
-    es.onmessage = (event) => {
-      const message: string = event.data
-      // Skip pings
-      if (message === 'idle' || message === 'keepalive') return
+  const handleSSEMessage = useCallback(
+    (message: string) => {
       // Skip initial running / running:queue:N pings
       if (message === 'running' || message.startsWith('running:queue:')) return
 
@@ -171,19 +142,37 @@ export function GenerateView({ setTab: _setTab }: Props) {
       } catch {
         // Not JSON — raw log line, already handled above
       }
-    }
+    },
+    [queryClient],
+  )
 
-    es.onerror = () => {
-      console.warn('[generate] SSE stream disconnected — will reconnect on next generate')
-      es.close()
-      eventSourceRef.current = null
-      setProgressState((prev) =>
-        prev.status === 'streaming' || prev.status === 'submitting'
-          ? { status: 'error', message: 'Progress stream disconnected.' }
-          : prev,
-      )
+  const handleSSEError = useCallback(() => {
+    console.warn('[generate] SSE stream disconnected — will reconnect on next generate')
+    setSseConnected(false)
+    setProgressState((prev) =>
+      prev.status === 'streaming' || prev.status === 'submitting'
+        ? { status: 'error', message: 'Progress stream disconnected.' }
+        : prev,
+    )
+  }, [])
+
+  useSSE(sseConnected ? '/api/generate/stream' : null, handleSSEMessage, {
+    onError: handleSSEError,
+  })
+
+  // ── Keyboard shortcut: Ctrl/Cmd + Enter ──────────────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault()
+        if (form.prompt.trim() && form.base_model_id) {
+          handleGenerate()
+        }
+      }
     }
-  }, [queryClient])
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  })
 
   // ── Submit generation (supports enqueue) ─────────────────────────────
   const handleGenerate = useCallback(async () => {
@@ -211,7 +200,7 @@ export function GenerateView({ setTab: _setTab }: Props) {
     }
 
     // Ensure SSE is connected
-    ensureSSE()
+    setSseConnected(true)
 
     console.log('[generate] submitting:', req.model_id, req.prompt.slice(0, 60))
 
@@ -245,7 +234,7 @@ export function GenerateView({ setTab: _setTab }: Props) {
         setProgressState({ status: 'error', message })
       }
     }
-  }, [form, isGenerating, ensureSSE])
+  }, [form, isGenerating])
 
   // ── Gallery click → load params ──────────────────────────────────────
   const handleGallerySelect = useCallback(

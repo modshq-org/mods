@@ -31,8 +31,6 @@ pub trait Executor {
     fn submit(&mut self, spec: &TrainJobSpec) -> Result<JobHandle>;
     fn submit_generate(&mut self, spec: &GenerateJobSpec) -> Result<JobHandle>;
     fn events(&mut self, job_id: &str) -> Result<mpsc::Receiver<JobEvent>>;
-    #[allow(dead_code)]
-    fn cancel(&self, job_id: &str) -> Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,25 +207,6 @@ impl Executor for LocalExecutor {
             .receiver
             .take()
             .with_context(|| format!("Event receiver already consumed for job: {job_id}"))
-    }
-
-    fn cancel(&self, job_id: &str) -> Result<()> {
-        if let Some(state) = self.jobs.get(job_id)
-            && let Some(ref child) = state.child
-        {
-            let pid = child.id();
-            // Use kill command to send SIGTERM
-            let status = Command::new("kill")
-                .arg("-TERM")
-                .arg(pid.to_string())
-                .status()
-                .context("Failed to send SIGTERM to worker process")?;
-            if !status.success() {
-                bail!("Failed to kill process {pid}");
-            }
-            return Ok(());
-        }
-        bail!("No running process found for job: {job_id}");
     }
 }
 

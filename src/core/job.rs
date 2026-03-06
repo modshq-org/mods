@@ -88,25 +88,6 @@ fn default_resize_method() -> String {
     "contain".to_string()
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrepareJobSpec {
-    pub source_dir: String,
-    pub dataset_name: String,
-    #[serde(default = "default_resize_resolution")]
-    pub resolution: u32,
-    #[serde(default = "default_tag_model")]
-    pub tag_model: String,
-    #[serde(default = "default_caption_model")]
-    pub caption_model: String,
-    #[serde(default)]
-    pub skip_resize: bool,
-    #[serde(default)]
-    pub skip_tag: bool,
-    #[serde(default)]
-    pub skip_caption: bool,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoraRef {
     pub name: String,
@@ -320,46 +301,6 @@ impl std::str::FromStr for Preset {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
-pub enum JobStatus {
-    Queued,
-    Accepted,
-    Running,
-    Completed,
-    Error,
-    Cancelled,
-}
-
-impl std::fmt::Display for JobStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Queued => write!(f, "queued"),
-            Self::Accepted => write!(f, "accepted"),
-            Self::Running => write!(f, "running"),
-            Self::Completed => write!(f, "completed"),
-            Self::Error => write!(f, "error"),
-            Self::Cancelled => write!(f, "cancelled"),
-        }
-    }
-}
-
-impl std::str::FromStr for JobStatus {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "queued" => Ok(Self::Queued),
-            "accepted" => Ok(Self::Accepted),
-            "running" => Ok(Self::Running),
-            "completed" => Ok(Self::Completed),
-            "error" => Ok(Self::Error),
-            "cancelled" => Ok(Self::Cancelled),
-            _ => anyhow::bail!("Unknown job status: {s}"),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Job events — the protocol envelope
 // ---------------------------------------------------------------------------
@@ -488,15 +429,6 @@ mod tests {
         assert_eq!("quick".parse::<Preset>().unwrap(), Preset::Quick);
         assert_eq!("Standard".parse::<Preset>().unwrap(), Preset::Standard);
         assert!("unknown".parse::<Preset>().is_err());
-    }
-
-    #[test]
-    fn test_job_status_display_roundtrip() {
-        for status in [JobStatus::Queued, JobStatus::Running, JobStatus::Completed] {
-            let s = status.to_string();
-            let back: JobStatus = s.parse().unwrap();
-            assert_eq!(back, status);
-        }
     }
 
     #[test]

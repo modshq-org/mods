@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Camera, Plus } from 'lucide-react'
 import { api, type AgentEvent, type StudioSession } from '../../api'
+import { useSSE } from '../../hooks/useSSE'
 import { AgentTimeline } from './AgentTimeline'
 import { IntentInput } from './IntentInput'
 import { ResultGallery } from './ResultGallery'
@@ -18,7 +19,47 @@ export function StudioView() {
   // Active session
   const [activeSession, setActiveSession] = useState<StudioSession | null>(null)
   const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([])
-  const eventSourceRef = useRef<EventSource | null>(null)
+  const [sseSessionId, setSseSessionId] = useState<string | null>(null)
+
+  // SSE connection — managed by useSSE hook
+  const handleStudioMessage = useCallback(
+    (data: string) => {
+      if (data === 'connected') return
+
+      try {
+        const event = JSON.parse(data) as AgentEvent
+        setLiveEvents((prev) => [...prev, event])
+
+        // Update session status based on events
+        if (event.type === 'output_ready') {
+          setActiveSession((prev) =>
+            prev
+              ? { ...prev, status: 'completed', output_images: event.images ?? [] }
+              : null,
+          )
+          setSseSessionId(null)
+          queryClient.invalidateQueries({ queryKey: ['studio-sessions'] })
+        } else if (event.type === 'error') {
+          setActiveSession((prev) =>
+            prev ? { ...prev, status: 'failed' } : null,
+          )
+        }
+      } catch {
+        // Non-JSON message — ignore
+      }
+    },
+    [queryClient],
+  )
+
+  const handleStudioError = useCallback(() => {
+    setSseSessionId(null)
+  }, [])
+
+  useSSE(
+    sseSessionId ? `/api/studio/sessions/${encodeURIComponent(sseSessionId)}/stream` : null,
+    handleStudioMessage,
+    { onError: handleStudioError },
+  )
 
   // Create session mutation
   const createSession = useMutation({
@@ -42,7 +83,7 @@ export function StudioView() {
       setIntent('')
 
       // Start SSE stream
-      connectSSE(sessionId)
+      setSseSessionId(sessionId)
 
       // Set active session with initial state
       setActiveSession({
@@ -60,75 +101,24 @@ export function StudioView() {
     },
   })
 
-  // Connect to SSE stream
-  const connectSSE = useCallback((sessionId: string) => {
-    // Close existing connection
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-    }
-
-    const es = new EventSource(
-      `/api/studio/sessions/${encodeURIComponent(sessionId)}/stream`,
-    )
-    eventSourceRef.current = es
-
-    es.onmessage = (e) => {
-      const data = e.data
-      if (data === 'connected' || data === 'keepalive') return
-
-      try {
-        const event = JSON.parse(data) as AgentEvent
-        setLiveEvents((prev) => [...prev, event])
-
-        // Update session status based on events
-        if (event.type === 'output_ready') {
-          setActiveSession((prev) =>
-            prev
-              ? { ...prev, status: 'completed', output_images: event.images ?? [] }
-              : null,
-          )
-          es.close()
-          queryClient.invalidateQueries({ queryKey: ['studio-sessions'] })
-        } else if (event.type === 'error') {
-          setActiveSession((prev) =>
-            prev ? { ...prev, status: 'failed' } : null,
-          )
-        }
-      } catch {
-        // Non-JSON message — ignore
-      }
-    }
-
-    es.onerror = () => {
-      es.close()
-    }
-  }, [queryClient])
-
-  // Cleanup SSE on unmount
-  useEffect(() => {
-    return () => {
-      eventSourceRef.current?.close()
-    }
-  }, [])
-
   // Load a past session
   const loadSession = useCallback(
     (session: StudioSession) => {
-      eventSourceRef.current?.close()
+      setSseSessionId(null)
       setActiveSession(session)
       setLiveEvents(session.events)
 
       // If running, reconnect SSE
       if (session.status === 'running') {
-        connectSSE(session.id)
+        setSseSessionId(session.id)
       }
     },
-    [connectSSE],
+    [],
   )
 
   // Reset to create new session
   const handleNewSession = useCallback(() => {
-    eventSourceRef.current?.close()
+    setSseSessionId(null)
     setActiveSession(null)
     setLiveEvents([])
     setFiles([])

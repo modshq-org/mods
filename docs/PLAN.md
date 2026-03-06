@@ -27,7 +27,7 @@ Both paths use the same Rust binary, same React UI, same agent. The only differe
 | Model link (ComfyUI/A1111) | Done — auto-detect layouts, cross-device fallback |
 | Config / Auth / GPU detect | Done — YAML config, HF/CivitAI tokens, NVML + nvidia-smi |
 | Dataset create/validate/caption | Done — Florence-2/BLIP auto-captioning, tag, resize |
-| Training (presets + executor) | Done — SDXL LoRA confirmed, Flux config ready |
+| Training (presets + executor) | Done — SDXL LoRA tested & working, z-image-turbo setup ready to test, Flux config ready |
 | Generation (CLI + UI) | Done — Flux/SDXL/SD1.5, LoRA stacking, `--json` output |
 | Output management | Done — list/show/open/search, gallery with metadata lightbox |
 | Runtime bootstrap | Done — Python venv + ai-toolkit install |
@@ -224,7 +224,7 @@ Private docs (modl-org/docs/plans/):
 |-----|--------|
 | cloud-plan.md | Valuable — business model, pricing, Modal architecture, unit economics |
 | multi-arch-training-plan.md | Active — per-model training gap analysis |
-| ui-architecture.md | Partially stale — product vision still relevant, tech stack outdated (was vanilla JS, now React) |
+| ui-architecture.md | Partially stale — product vision still relevant, tech stack section wrong (says vanilla JS, actually React/Vite/TSX from the start) |
 | capability-model.md | Future — cloud auth/quota gating, not yet implemented |
 | runtime-architecture.md | Historical — aspirational ComfyUI sidecar vision, path not taken |
 | runtime-profiles.md | Over-engineered — simpler approach implemented |

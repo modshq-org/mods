@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { GeneratedImage } from '../api'
-import { randomSeed, type GenerateFormState } from './generate-form-state'
+import { randomSeed, type GenerateFormState } from './generate/generate-state'
 
 type AppTab = 'train' | 'generate' | 'outputs' | 'datasets'
 
@@ -61,7 +61,7 @@ function openAsRecipe(
     ...prev,
     prompt: image.prompt ?? '',
     base_model_id: image.base_model_id ?? prev.base_model_id,
-    loras: image.lora_name ? [{ id: image.lora_name, strength: image.lora_strength ?? 1.0 }] : [],
+    loras: image.lora_name ? [{ id: image.lora_name, name: image.lora_name, strength: image.lora_strength ?? 1.0 }] : [],
     seed: image.seed ?? randomSeed(),
     steps: image.steps ?? 20,
     guidance: image.guidance ?? 3.5,

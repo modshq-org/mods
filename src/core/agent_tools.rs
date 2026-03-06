@@ -261,27 +261,16 @@ async fn tool_train_lora(
         .parse()
         .unwrap_or(crate::core::job::LoraType::Character);
 
-    // Emit progress events during training
+    // Emit progress events
     let event = AgentEvent::ToolProgress {
         tool: "train_lora".to_string(),
         progress: 0.0,
-        detail: "Starting training...".to_string(),
+        detail: "Preparing training configuration...".to_string(),
     };
     let _ = event_tx.send(event.to_json());
 
-    let result = crate::cli::generate::run(
-        // We can't directly invoke the train pipeline from here without
-        // restructuring. Instead, delegate to the existing CLI handler.
-        // For now, report what would be done.
-        "", None, None, 1.0, None, "1:1", None, None, 0, false, None, false, false,
-    )
-    .await;
-
-    // For the initial implementation, report the training configuration
-    // The actual training execution will be wired up when the executor
-    // is integrated into the agent loop.
-    let _ = result; // Ignore the dummy call above
-
+    // TODO: Wire up real executor integration when the agent framework
+    // moves beyond stub phase. For now, report the training configuration.
     let event = AgentEvent::ToolProgress {
         tool: "train_lora".to_string(),
         progress: 1.0,
@@ -374,57 +363,19 @@ async fn tool_generate_images(
     };
     let _ = event_tx.send(event.to_json());
 
-    // Use the existing generation pipeline
-    let result = crate::cli::generate::run(
-        prompt,
-        Some(base_model),
-        Some(lora_name),
-        1.0,   // lora_strength
-        None,  // seed
-        "1:1", // size
-        None,  // steps (use model default)
-        None,  // guidance (use model default)
-        num_images,
-        false, // cloud
-        None,  // provider
-        false, // no_worker
-        true,  // json output
-    )
-    .await;
-
+    // TODO: Wire up real generation via core executor when the agent
+    // framework moves beyond stub phase.
     let event = AgentEvent::ToolProgress {
         tool: "generate_images".to_string(),
         progress: 1.0,
-        detail: "Generation complete".to_string(),
+        detail: "Generation configuration prepared".to_string(),
     };
     let _ = event_tx.send(event.to_json());
 
-    match result {
-        Ok(()) => {
-            // Scan recent outputs to find the generated images
-            let outputs = crate::core::outputs::list_outputs();
-            let recent_images: Vec<String> = outputs
-                .iter()
-                .take(1)
-                .flat_map(|group| {
-                    group
-                        .images
-                        .iter()
-                        .take(num_images as usize)
-                        .map(|img| img.path.clone())
-                })
-                .collect();
-
-            if recent_images.is_empty() {
-                Ok("Generation completed but no output images found.".to_string())
-            } else {
-                Ok(serde_json::to_string(&recent_images)?)
-            }
-        }
-        Err(e) => {
-            bail!("Generation failed: {e}");
-        }
-    }
+    Ok(format!(
+        "Generation request prepared: {num_images} image(s) with prompt '{prompt}' \
+         using model '{base_model}' and LoRA '{lora_name}'."
+    ))
 }
 
 // ---------------------------------------------------------------------------

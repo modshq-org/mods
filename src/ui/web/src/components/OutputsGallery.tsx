@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { api, type GeneratedImage, type GeneratedOutput } from '../api'
-import type { GenerateFormState } from './generate-form-state'
+import type { GenerateFormState } from './generate'
 import { ImageDetail } from './ImageDetail'
 import { LazyImage } from './LazyImage'
 

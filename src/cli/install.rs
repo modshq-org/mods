@@ -308,16 +308,16 @@ pub async fn run(id: &str, variant: Option<&str>, dry_run: bool, force: bool) ->
         let actual_size = std::fs::metadata(&store_path)
             .map(|m| m.len())
             .unwrap_or(size);
-        db.insert_installed(
-            &item.manifest.id,
-            &item.manifest.name,
-            &item.manifest.asset_type.to_string(),
-            selected_variant.as_deref(),
-            &sha256,
-            actual_size,
-            &file_name,
-            &store_path.to_string_lossy(),
-        )?;
+        db.insert_installed(&crate::core::db::InstalledModelRecord {
+            id: &item.manifest.id,
+            name: &item.manifest.name,
+            asset_type: &item.manifest.asset_type.to_string(),
+            variant: selected_variant.as_deref(),
+            sha256: &sha256,
+            size: actual_size,
+            file_name: &file_name,
+            store_path: &store_path.to_string_lossy(),
+        })?;
 
         println!(
             "  {} {}",
@@ -516,16 +516,16 @@ async fn run_hf_pull(
     }
 
     // Record in database
-    db.insert_installed(
-        &local_id,
-        &display_name,
-        &asset_type.to_string(),
-        None,
-        &sha256,
-        actual_size,
-        &resolved.filename,
-        &final_path.to_string_lossy(),
-    )?;
+    db.insert_installed(&crate::core::db::InstalledModelRecord {
+        id: &local_id,
+        name: &display_name,
+        asset_type: &asset_type.to_string(),
+        variant: None,
+        sha256: &sha256,
+        size: actual_size,
+        file_name: &resolved.filename,
+        store_path: &final_path.to_string_lossy(),
+    })?;
 
     println!();
     println!(

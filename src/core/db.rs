@@ -128,23 +128,21 @@ impl Database {
     }
 
     /// Record a model as installed
-    #[allow(clippy::too_many_arguments)]
-    pub fn insert_installed(
-        &self,
-        id: &str,
-        name: &str,
-        asset_type: &str,
-        variant: Option<&str>,
-        sha256: &str,
-        size: u64,
-        file_name: &str,
-        store_path: &str,
-    ) -> Result<()> {
+    pub fn insert_installed(&self, record: &InstalledModelRecord) -> Result<()> {
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO installed (id, name, asset_type, variant, sha256, size, file_name, store_path)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![id, name, asset_type, variant, sha256, size as i64, file_name, store_path],
+                params![
+                    record.id,
+                    record.name,
+                    record.asset_type,
+                    record.variant,
+                    record.sha256,
+                    record.size as i64,
+                    record.file_name,
+                    record.store_path
+                ],
             )
             .context("Failed to insert installed model")?;
         Ok(())
@@ -493,7 +491,6 @@ impl Database {
     }
 
     /// List artifacts, optionally filtered by job_id
-    #[allow(dead_code)]
     pub fn list_artifacts(&self, job_id: Option<&str>) -> Result<Vec<ArtifactRecord>> {
         let sql = if job_id.is_some() {
             "SELECT artifact_id, job_id, kind, path, sha256, size_bytes, metadata, created_at FROM artifacts WHERE job_id = ?1 ORDER BY created_at DESC"
@@ -813,7 +810,6 @@ impl JobRecord {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct ArtifactRecord {
     pub artifact_id: String,
     pub job_id: Option<String>,
@@ -841,7 +837,6 @@ impl ArtifactRecord {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct StudioSessionRecord {
     pub id: String,
     pub intent: String,
@@ -871,6 +866,18 @@ pub struct SessionEventRecord {
     pub timestamp: String,
 }
 
+/// Input record for inserting an installed model
+pub struct InstalledModelRecord<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub asset_type: &'a str,
+    pub variant: Option<&'a str>,
+    pub sha256: &'a str,
+    pub size: u64,
+    pub file_name: &'a str,
+    pub store_path: &'a str,
+}
+
 #[derive(Debug)]
 pub struct InstalledModel {
     pub id: String,
@@ -892,16 +899,16 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let db = Database::open_at(tmp.path()).unwrap();
 
-        db.insert_installed(
-            "test-model",
-            "Test Model",
-            "checkpoint",
-            Some("fp16"),
-            "abcdef1234567890",
-            1024,
-            "test.safetensors",
-            "/store/checkpoints/abcdef/test.safetensors",
-        )
+        db.insert_installed(&InstalledModelRecord {
+            id: "test-model",
+            name: "Test Model",
+            asset_type: "checkpoint",
+            variant: Some("fp16"),
+            sha256: "abcdef1234567890",
+            size: 1024,
+            file_name: "test.safetensors",
+            store_path: "/store/checkpoints/abcdef/test.safetensors",
+        })
         .unwrap();
 
         assert!(db.is_installed("test-model").unwrap());
