@@ -1,10 +1,8 @@
 """Generate adapter — runs diffusers inference and emits events.
 
 Translates a GenerateJobSpec (parsed from YAML) into a diffusers pipeline call.
-Pipeline class is selected based on base model ID:
-  - flux-*   → FluxPipeline
-  - sdxl-*   → StableDiffusionXLPipeline
-  - sd-*     → StableDiffusionPipeline  (fallback)
+Pipeline class and default params are resolved via arch_config — the single
+source of truth for all model-specific settings.
 
 Outputs are saved as PNG and emitted as artifact events.
 """
@@ -16,26 +14,22 @@ import time
 from pathlib import Path
 
 from modl_worker.protocol import EventEmitter
+from modl_worker.adapters.arch_config import (
+    resolve_model_path,
+    resolve_pipeline_class,
+    resolve_gen_defaults,
+    resolve_gen_components,
+)
 
 
 # ---------------------------------------------------------------------------
-# Model → Pipeline mapping
+# Pipeline resolution (delegates to arch_config)
 # ---------------------------------------------------------------------------
-
-_MODEL_PIPELINE_MAP = {
-    "flux": "FluxPipeline",
-    "sdxl": "StableDiffusionXLPipeline",
-    "sd": "StableDiffusionPipeline",
-}
 
 
 def _resolve_pipeline_class(base_model_id: str) -> str:
     """Determine diffusers pipeline class from base model id."""
-    model_lower = base_model_id.lower()
-    for prefix, cls_name in _MODEL_PIPELINE_MAP.items():
-        if model_lower.startswith(prefix):
-            return cls_name
-    return "FluxPipeline"  # default for modern models
+    return resolve_pipeline_class(base_model_id)
 
 
 def _get_pipeline(cls_name: str):
@@ -43,6 +37,7 @@ def _get_pipeline(cls_name: str):
     import diffusers
 
     return getattr(diffusers, cls_name)
+
 
 
 # ---------------------------------------------------------------------------
@@ -105,15 +100,31 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
         PipelineClass = _get_pipeline(cls_name)
 
         # Determine model source: store path or HuggingFace ID
-        model_source = base_model_path or _hf_id_for_model(base_model_id)
+        model_source = base_model_path or resolve_model_path(base_model_id)
 
-        pipe = PipelineClass.from_single_file(
-            model_source,
-            torch_dtype=torch.bfloat16,
-        ) if model_source.endswith(".safetensors") else PipelineClass.from_pretrained(
-            model_source,
-            torch_dtype=torch.bfloat16,
-        )
+        # Models with separate components (e.g. z-image-turbo with Qwen3 text
+        # encoder) need from_pretrained with the full HF repo — from_single_file
+        # can't discover configs for non-standard text encoders.
+        components = resolve_gen_components(base_model_id)
+
+        if components and model_source.endswith(".safetensors"):
+            # Fall back to HF repo which has model_index.json + configs
+            hf_repo = resolve_model_path(base_model_id)
+            emitter.info(f"Loading from HF repo {hf_repo} (model has separate components)")
+            pipe = PipelineClass.from_pretrained(
+                hf_repo,
+                torch_dtype=torch.bfloat16,
+            )
+        elif model_source.endswith(".safetensors"):
+            pipe = PipelineClass.from_single_file(
+                model_source,
+                torch_dtype=torch.bfloat16,
+            )
+        else:
+            pipe = PipelineClass.from_pretrained(
+                model_source,
+                torch_dtype=torch.bfloat16,
+            )
 
         pipe = pipe.to("cuda")
 
@@ -174,10 +185,12 @@ def run_generate_with_pipeline(
 
     base_model_id = model_info.get("base_model_id", "flux-schnell")
 
+    # Use arch-aware defaults from ARCH_CONFIGS when user didn't specify
+    gen_defaults = resolve_gen_defaults(base_model_id)
     width = params.get("width", 1024)
     height = params.get("height", 1024)
-    steps = params.get("steps", 28)
-    guidance = params.get("guidance", 3.5)
+    steps = params.get("steps", gen_defaults["steps"])
+    guidance = params.get("guidance", gen_defaults["guidance"])
     seed = params.get("seed")
     count = params.get("count", 1)
 
@@ -303,18 +316,9 @@ def run_generate_with_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# HuggingFace model ID mapping (for models not installed locally)
+# Backwards-compat alias (used by serve.py imports)
 # ---------------------------------------------------------------------------
-
-_HF_MODEL_IDS = {
-    "flux-dev": "black-forest-labs/FLUX.1-dev",
-    "flux-schnell": "black-forest-labs/FLUX.1-schnell",
-    "sdxl": "stabilityai/stable-diffusion-xl-base-1.0",
-    "sdxl-base-1.0": "stabilityai/stable-diffusion-xl-base-1.0",
-    "sd-1.5": "stable-diffusion-v1-5/stable-diffusion-v1-5",
-}
-
 
 def _hf_id_for_model(base_model_id: str) -> str:
     """Map a modl model ID to a HuggingFace repo ID."""
-    return _HF_MODEL_IDS.get(base_model_id, base_model_id)
+    return resolve_model_path(base_model_id)

@@ -6,7 +6,7 @@ import {
   Maximize2Icon,
   Minimize2Icon,
 } from 'lucide-react'
-import { api, type GeneratedImage, type GenerateRequest, type GpuStatus, type InstalledModel } from '../../api'
+import { api, type GeneratedImage, type GeneratedOutput, type GenerateRequest, type GpuStatus, type InstalledModel } from '../../api'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { CollapsibleSection } from '../ui/collapsible-section'
 import { BatchPanel } from './BatchPanel'
@@ -61,7 +61,7 @@ export function GenerateView({ setTab: _setTab }: Props) {
   // Auto-select first checkpoint if none selected
   useEffect(() => {
     if (!form.base_model_id && models.length > 0) {
-      const firstCheckpoint = models.find((m: InstalledModel) => m.model_type === 'checkpoint')
+      const firstCheckpoint = models.find((m: InstalledModel) => m.model_type === 'checkpoint' || m.model_type === 'diffusion_model')
       if (firstCheckpoint) {
         setForm((prev) => ({ ...prev, base_model_id: firstCheckpoint.id }))
       }
@@ -136,16 +136,15 @@ export function GenerateView({ setTab: _setTab }: Props) {
 
         // Refresh outputs to find the new images
         void queryClient.invalidateQueries({ queryKey: ['outputs'] }).then(() => {
-          api.outputs().then((outputs) => {
-            const allImages: PreviewImage[] = []
-            for (const group of outputs) {
-              for (const img of group.images) {
-                allImages.push({ url: `/files/${img.path}`, seed: img.seed })
-              }
+          const outputs = queryClient.getQueryData<GeneratedOutput[]>(['outputs']) ?? []
+          const allImages: Array<{ url: string; seed?: number; modified: number }> = []
+          for (const group of outputs) {
+            for (const img of group.images) {
+              allImages.push({ url: `/files/${img.path}`, seed: img.seed, modified: img.modified })
             }
-            allImages.sort((a, b) => b.url.localeCompare(a.url))
-            setPreviewImages(allImages.slice(0, count))
-          }).catch(() => { /* images display on next refresh */ })
+          }
+          allImages.sort((a, b) => b.modified - a.modified)
+          setPreviewImages(allImages.slice(0, count))
         })
 
         toast.success(`Generated ${count} image${count !== 1 ? 's' : ''}`)
@@ -269,7 +268,7 @@ export function GenerateView({ setTab: _setTab }: Props) {
 
   // Count of checkpoints for warnings
   const checkpointCount = useMemo(
-    () => models.filter((m: InstalledModel) => m.model_type === 'checkpoint').length,
+    () => models.filter((m: InstalledModel) => m.model_type === 'checkpoint' || m.model_type === 'diffusion_model').length,
     [models],
   )
 

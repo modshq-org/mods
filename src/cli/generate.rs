@@ -75,8 +75,12 @@ fn resolve_lora(name: &str, weight: f32, db: &Database) -> Result<Option<LoraRef
 /// Default inference steps based on model type.
 fn default_steps(base_model: &str) -> u32 {
     let lower = base_model.to_lowercase();
-    if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
+    if lower.contains("z-image-turbo") || lower.contains("z_image_turbo") {
+        8
+    } else if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
         4
+    } else if lower.contains("chroma") {
+        25
     } else if lower.contains("sdxl") {
         30
     } else {
@@ -87,8 +91,12 @@ fn default_steps(base_model: &str) -> u32 {
 /// Default guidance scale based on model type.
 fn default_guidance(base_model: &str) -> f32 {
     let lower = base_model.to_lowercase();
-    if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
+    if lower.contains("z-image-turbo") || lower.contains("z_image_turbo") {
+        1.0
+    } else if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
         0.0
+    } else if lower.contains("chroma") {
+        4.0
     } else if lower.contains("sdxl") {
         7.5
     } else {
@@ -434,6 +442,10 @@ async fn execute_generate(
             "{}",
             serde_json::json!({"status": final_status, "images": artifact_paths})
         );
+    }
+
+    if final_status == "error" {
+        anyhow::bail!("Generation failed");
     }
 
     Ok(())

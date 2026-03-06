@@ -17,7 +17,7 @@ type Props = {
 }
 
 export function ModelPanel({ models, form, setForm, autoDefaults = true }: Props) {
-  const checkpoints = models.filter((m) => m.model_type === 'checkpoint')
+  const checkpoints = models.filter((m) => m.model_type === 'checkpoint' || m.model_type === 'diffusion_model')
 
   const handleChange = (modelId: string) => {
     const model = checkpoints.find((m) => m.id === modelId)

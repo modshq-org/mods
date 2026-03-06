@@ -8,7 +8,7 @@ export type GpuStatus = {
 export type InstalledModel = {
   id: string
   name: string
-  model_type: 'checkpoint' | 'lora'
+  model_type: 'checkpoint' | 'diffusion_model' | 'lora'
   variant?: string
   size_bytes: number
   trigger_word?: string
@@ -134,6 +134,32 @@ export type EnhanceResponse = {
   backend: string
 }
 
+// ---------------------------------------------------------------------------
+// Studio types
+// ---------------------------------------------------------------------------
+
+export type StudioSession = {
+  id: string
+  intent: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  input_images: string[]
+  output_images: string[]
+  events: AgentEvent[]
+  created_at: string
+  completed_at?: string
+}
+
+export type AgentEvent = {
+  type: 'thinking' | 'tool_start' | 'tool_progress' | 'tool_complete' | 'output_ready' | 'error'
+  message?: string
+  tool?: string
+  description?: string
+  progress?: number
+  detail?: string
+  result?: string
+  images?: string[]
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   if (!res.ok) {
@@ -184,4 +210,35 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     }),
+
+  // Studio
+  studioSessions: () => fetchJson<StudioSession[]>('/api/studio/sessions'),
+  studioSession: (id: string) =>
+    fetchJson<StudioSession>(`/api/studio/sessions/${encodeURIComponent(id)}`),
+  studioCreateSession: (intent: string) =>
+    fetchJson<{ id: string; status: string }>('/api/studio/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intent }),
+    }),
+  studioUploadImages: (sessionId: string, files: File[]) => {
+    const formData = new FormData()
+    for (const file of files) {
+      formData.append('images', file, file.name)
+    }
+    return fetchJson<{ uploaded: number; images: string[] }>(
+      `/api/studio/sessions/${encodeURIComponent(sessionId)}/images`,
+      { method: 'POST', body: formData },
+    )
+  },
+  studioStart: (sessionId: string) =>
+    fetchJson<{ status: string; session_id: string }>(
+      `/api/studio/sessions/${encodeURIComponent(sessionId)}/start`,
+      { method: 'POST' },
+    ),
+  studioDelete: (sessionId: string) =>
+    fetchJson<{ deleted: boolean }>(
+      `/api/studio/sessions/${encodeURIComponent(sessionId)}`,
+      { method: 'DELETE' },
+    ),
 }

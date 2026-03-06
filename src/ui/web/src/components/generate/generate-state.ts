@@ -86,6 +86,9 @@ export function detectSizePreset(w: number, h: number): SizePreset {
 /** Smart defaults based on model type identifiers */
 export function modelDefaults(modelName: string): { steps: number; guidance: number } {
   const lower = modelName.toLowerCase()
+  if (lower.includes('z-image') || lower.includes('z_image')) {
+    return { steps: 8, guidance: 1.0 }
+  }
   if (lower.includes('schnell') || lower.includes('turbo') || lower.includes('lightning')) {
     return { steps: 4, guidance: 0.0 }
   }

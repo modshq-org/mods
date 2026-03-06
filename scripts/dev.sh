@@ -5,7 +5,7 @@
 #   3. Start the backend API server (modl serve on :3333)
 #   4. Start the Vite dev server (hot-reload on :5173)
 #
-# Open http://localhost:5173 to work on the UI.
+# Binds to 0.0.0.0 so it works over Tailscale / SSH port forwarding.
 # Ctrl+C stops everything.
 #
 # Usage: ./scripts/dev.sh [--no-worker]
@@ -46,6 +46,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Detect Tailscale IP for remote access
+TS_IP=$(tailscale ip -4 2>/dev/null || true)
+
 # ── 1. Build CLI ──────────────────────────────────────────────
 echo "→ Building CLI..."
 cargo build --quiet 2>&1
@@ -68,14 +71,20 @@ pkill -f "node.*vite" 2>/dev/null || true
 sleep 0.3
 
 cd src/ui/web
-npm run dev &
+npm run dev -- --host 0.0.0.0 &
 PIDS+=($!)
 cd "$PROJECT_DIR"
 
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  UI:      http://localhost:5173"
-echo "  Backend: http://localhost:3333"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [[ -n "$TS_IP" ]]; then
+    echo "  UI (Tailscale): http://${TS_IP}:5173"
+    echo "  UI (local):     http://localhost:5173"
+    echo "  Backend:        http://${TS_IP}:3333"
+else
+    echo "  UI:      http://localhost:5173"
+    echo "  Backend: http://localhost:3333"
+fi
 echo "  Worker:  modl worker status"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Ctrl+C to stop everything"

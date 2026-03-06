@@ -1,10 +1,11 @@
-import { Database, Images, Menu, Sparkles, X, Zap } from 'lucide-react'
+import { Camera, Database, Images, Menu, Sparkles, X, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import type { Tab } from '../App'
 import { AppSidebar } from './AppSidebar'
 
 const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
+  { id: 'studio', label: 'Studio', icon: Camera },
   { id: 'generate', label: 'Generate', icon: Sparkles },
   { id: 'outputs', label: 'Outputs', icon: Images },
   { id: 'datasets', label: 'Datasets', icon: Database },

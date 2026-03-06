@@ -13,6 +13,7 @@ mod init;
 mod install;
 mod link;
 mod list;
+mod llm;
 mod outputs;
 mod popular;
 mod runtime;
@@ -196,6 +197,33 @@ pub enum WorkerSubcommands {
 
     /// Show worker status (loaded models, VRAM, uptime)
     Status,
+}
+
+#[derive(Subcommand)]
+pub enum LlmSubcommands {
+    /// Download an LLM model (GGUF) to the local store
+    Pull {
+        /// Model ID (e.g., qwen3.5-4b-instruct-q4, qwen3-vl-8b-instruct-q4)
+        model: String,
+    },
+
+    /// Run text completion or vision-language inference
+    Chat {
+        /// Text prompt
+        prompt: String,
+        /// Path to an image for vision-language inference
+        #[arg(long)]
+        image: Option<String>,
+        /// Force cloud backend
+        #[arg(long)]
+        cloud: bool,
+        /// Use a specific model
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// List installed LLM models
+    Ls,
 }
 
 #[derive(Subcommand)]
@@ -503,6 +531,12 @@ pub enum Commands {
         command: WorkerSubcommands,
     },
 
+    /// Manage LLM models and run inference
+    Llm {
+        #[command(subcommand)]
+        command: LlmSubcommands,
+    },
+
     /// Manage embedded Python runtime
     #[command(hide = true)]
     Runtime {
@@ -676,6 +710,16 @@ pub async fn run(cli: Cli) -> Result<()> {
             WorkerSubcommands::Start { timeout } => worker::start(timeout).await,
             WorkerSubcommands::Stop => worker::stop().await,
             WorkerSubcommands::Status => worker::status().await,
+        },
+        Commands::Llm { command } => match command {
+            LlmSubcommands::Pull { model } => llm::pull(&model).await,
+            LlmSubcommands::Chat {
+                prompt,
+                image,
+                cloud,
+                model,
+            } => llm::chat(&prompt, image.as_deref(), cloud, model.as_deref()).await,
+            LlmSubcommands::Ls => llm::list().await,
         },
         Commands::Serve {
             port,

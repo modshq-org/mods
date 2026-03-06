@@ -440,18 +440,18 @@ anywhere" story is the one to ship first and validate.
 
 | Doc | What it covers | Status |
 |-----|---------------|--------|
-| [multi-arch-training-plan.md](multi-arch-training-plan.md) | ai-toolkit arch configs, per-model gaps | Active — Phase 3 guide |
+| multi-arch-training-plan.md | ai-toolkit arch configs, per-model gaps | Active — Phase 3 guide (moved to modl-org/docs/plans/) |
 | [specs/aitoolkit-mapping.md](specs/aitoolkit-mapping.md) | TrainJobSpec → ai-toolkit YAML field mapping | Implemented, canonical |
 | [specs/jobs-schema-v1.md](specs/jobs-schema-v1.md) | Job/event/artifact JSON schemas | Implemented, canonical |
 | [specs/worker-protocol.md](specs/worker-protocol.md) | JSONL protocol between Rust and Python | Implemented, canonical |
 | [specs/execution-target.md](specs/execution-target.md) | Executor trait contract | Implemented (local), stubbed (cloud) |
 | [specs/gpu-resource-management.md](specs/gpu-resource-management.md) | Cross-process GPU lock, VRAM budget, enhance fallback | Phase 4 spec |
 | [specs/persistent-worker.md](specs/persistent-worker.md) | Daemon architecture for fast generation | Phase 5 spec |
-| [archive/ui-architecture.md](archive/ui-architecture.md) | Web UI product spec | Phase 6 reference |
-| [archive/cloud-plan.md](archive/cloud-plan.md) | Cloud platform architecture + pricing | Phase 7 reference |
-| [archive/runtime-architecture.md](archive/runtime-architecture.md) | ComfyUI sidecar / YAML workflow vision | Aspirational, not planned |
-| [archive/capability-model.md](archive/capability-model.md) | Cloud auth/quota gating | Phase 7 detail |
-| [archive/runtime-profiles.md](archive/runtime-profiles.md) | Reproducible runtime manifests | Over-engineered, current venv works |
+| ui-architecture.md | Web UI product spec | Phase 6 reference (moved to modl-org/docs/plans/) |
+| cloud-plan.md | Cloud platform architecture + pricing | Phase 7 reference (moved to modl-org/docs/plans/) |
+| runtime-architecture.md | ComfyUI sidecar / YAML workflow vision | Aspirational (moved to modl-org/docs/plans/) |
+| capability-model.md | Cloud auth/quota gating | Phase 7 detail (moved to modl-org/docs/plans/) |
+| runtime-profiles.md | Reproducible runtime manifests | Over-engineered (moved to modl-org/docs/plans/) |
 
 ---
 

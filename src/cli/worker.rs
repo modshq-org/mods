@@ -99,6 +99,15 @@ pub async fn start(timeout: u32) -> Result<()> {
         py_path = format!("{}:{}", py_path, current);
     }
 
+    // Redirect worker stderr to a log file so diffusers/torch can write
+    // freely without hitting a broken pipe when the parent process exits.
+    let modl_dir = dirs::home_dir()
+        .expect("Could not determine home directory")
+        .join(".modl");
+    let log_path = modl_dir.join("worker.log");
+    let log_file = std::fs::File::create(&log_path)
+        .with_context(|| format!("Failed to create worker log: {}", log_path.display()))?;
+
     // Spawn worker as a background process
     let mut command = Command::new(&setup.python_path);
     command
@@ -109,7 +118,7 @@ pub async fn start(timeout: u32) -> Result<()> {
         .arg(timeout.to_string())
         .env("PYTHONPATH", py_path)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped());
+        .stderr(log_file);
 
     // Detach from parent process group so it survives terminal close
     #[cfg(unix)]

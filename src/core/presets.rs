@@ -147,6 +147,11 @@ pub fn resolve_params(
             let rank = if img_count < 20 { 16 } else { 32 };
             (steps, rank, 1e-4)
         }
+        (Preset::Advanced, _) if is_zimage => {
+            let steps = compute_steps(img_count, 200, 2000, 4000);
+            let rank = if img_count < 20 { 16 } else { 32 };
+            (steps, rank, 1e-4)
+        }
         (Preset::Quick, _) => {
             let steps = compute_steps(img_count, 150, 1000, 1500);
             (steps, 8, 1e-4)

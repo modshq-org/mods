@@ -115,6 +115,7 @@ class ModelCache:
             _get_pipeline,
             _hf_id_for_model,
         )
+        from modl_worker.adapters.arch_config import resolve_gen_components
 
         model_info = spec.get("model", {})
         base_model_id = model_info.get("base_model_id", "flux-schnell")
@@ -141,7 +142,19 @@ class ModelCache:
 
             model_source = base_model_path or _hf_id_for_model(base_model_id)
 
-            if model_source.endswith(".safetensors"):
+            # Models with separate components (e.g. z-image-turbo with Qwen3
+            # text encoder) need from_pretrained with the full HF repo —
+            # from_single_file can't discover configs for non-standard text encoders.
+            components = resolve_gen_components(base_model_id)
+
+            if components and model_source.endswith(".safetensors"):
+                hf_repo = _hf_id_for_model(base_model_id)
+                emitter.info(f"Loading from HF repo {hf_repo} (model has separate components)")
+                pipe = PipelineClass.from_pretrained(
+                    hf_repo,
+                    torch_dtype=torch.bfloat16,
+                )
+            elif model_source.endswith(".safetensors"):
                 pipe = PipelineClass.from_single_file(
                     model_source,
                     torch_dtype=torch.bfloat16,
@@ -305,6 +318,11 @@ class WorkerDaemon:
 
     def run(self) -> None:
         """Start the worker daemon — blocks until shutdown."""
+        # Redirect stderr to a log file so that writes from diffusers/torch
+        # (tqdm progress bars, warnings, etc.) never hit a broken pipe when
+        # the parent process has exited and closed its end of the stderr pipe.
+        self._redirect_stderr()
+
         self._setup_signals()
         self._write_pid()
         self._cleanup_socket()
@@ -461,6 +479,22 @@ class WorkerDaemon:
             conn.sendall(line.encode())
         except (BrokenPipeError, OSError):
             pass
+
+    def _redirect_stderr(self) -> None:
+        """Redirect stderr to a log file.
+
+        When the worker daemon is spawned as a background process, the parent
+        may close its end of the stderr pipe after startup.  Any subsequent
+        write to stderr (tqdm, torch warnings, diffusers logging) would then
+        raise BrokenPipeError and kill the generation job.  Redirecting to a
+        file avoids this entirely and preserves the output for debugging.
+        """
+        log_path = Path.home() / ".modl" / "worker.log"
+        try:
+            log_file = open(log_path, "a")  # noqa: SIM115
+            sys.stderr = log_file
+        except OSError:
+            pass  # If we can't redirect, continue anyway
 
     def _setup_signals(self) -> None:
         """Handle SIGTERM/SIGINT for graceful shutdown."""

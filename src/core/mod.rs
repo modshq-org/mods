@@ -1,3 +1,5 @@
+pub mod agent;
+pub mod agent_tools;
 pub mod artifacts;
 pub mod cloud;
 pub mod config;
@@ -9,6 +11,7 @@ pub mod executor;
 pub mod gpu;
 pub mod huggingface;
 pub mod job;
+pub mod llm;
 pub mod manifest;
 pub mod outputs;
 pub mod preflight;
