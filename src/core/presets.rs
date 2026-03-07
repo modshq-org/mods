@@ -104,20 +104,23 @@ pub fn resolve_params(
     // ---------------------------------------------------------------
     //
     // Z-Image Turbo (6B params, distilled 8-step model):
-    //   - Uses a "de-distillation training adapter" (DD adapter) that
-    //     merges in during training and merges out at inference, so the
-    //     LoRA doesn't break the turbo distillation.
+    //   - Uses a DD (de-distillation) training adapter that merges in
+    //     during training and merges out at inference, preserving turbo.
     //   - LR MUST be ≤ 1e-4. Ostris: "2e-4 exploded the model."
     //   - Quantize only if VRAM < 20GB. Without quantize on 24GB:
-    //     ~17GB VRAM used, ~1.3s/iter. With quantize: ~4s/iter.
-    //   - Style: 3000-5000 steps typical. "3000 is the default, that's
-    //     usually where I want to stop." Extreme style changes (e.g.
-    //     children's art) benefit from timestep_type="favor_high_noise"
-    //     partway through (~2000 steps) to rebuild composition.
-    //   - Character: trains faster, keep timestep balanced.
+    //     ~17GB VRAM used, ~2 it/s on 4090. With quantize: ~4s/iter.
     //   - cache_text_embeddings=true saves VRAM (unloads text encoder).
-    //   - Adapter slows distillation breakdown, but very long runs
-    //     (20k+ steps) will eventually break it.
+    //   - Adapter works for ~5k-10k steps; beyond ~20k distillation degrades.
+    //   Style LoRAs (config_builder applies automatically):
+    //     - 3000-3500 steps typical (Ostris stops at 3000).
+    //     - linear_timesteps2=true (high-noise bias): rebuilds composition
+    //       in early denoising steps. Essential for extreme style changes.
+    //     - differential_guidance (scale=3): overshoots target to converge.
+    //     - Literal captions (describe content, not style). No trigger word
+    //       needed — the LoRA IS the style.
+    //   Character LoRAs:
+    //     - Trains faster, balanced timesteps (no high-noise bias).
+    //     - Trigger word required.
     //
     // Style LoRA step budget (SDXL/Flux):
     //   ~100-150 steps/img for tight/consistent datasets

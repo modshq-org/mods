@@ -83,6 +83,7 @@ ARCH_CONFIGS: dict[str, dict] = {
         "default_resolution": 1024,
         "extra_train": {
             "timestep_type": "weighted",
+            # linear_timesteps2 (high-noise bias) set per lora_type in config_builder
             "cache_text_embeddings": True,
         },
         "sample": {"sampler": "flowmatch", "steps": 8, "guidance": 1.0, "neg": ""},

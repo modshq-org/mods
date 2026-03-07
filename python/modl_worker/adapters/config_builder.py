@@ -82,12 +82,14 @@ def build_sample_prompts(trigger_word: str, lora_type: str, arch_key: str) -> li
     the style is learned as the default output mode via literal captioning.
     For all other cases, the trigger word is embedded in the prompts.
     """
-    is_qwen_style = arch_key == "qwen_image" and lora_type == "style"
+    # For style LoRAs on models that learn style implicitly (Qwen, Z-Image Turbo),
+    # use literal prompts without trigger word — the LoRA IS the style.
+    # Per Ostris: "I'm not mentioning it's child drawing... I'm just acting like
+    # this is the new normal."
+    no_trigger_style = arch_key in ("qwen_image", "zimage_turbo") and lora_type == "style"
 
     if lora_type == "style":
-        if is_qwen_style:
-            # Qwen style: literal descriptive prompts, no trigger word.
-            # The model learns style through literal captions, not trigger words.
+        if no_trigger_style:
             return [
                 "a portrait of a woman",
                 "a cat sitting on a windowsill",
@@ -178,6 +180,17 @@ def build_train_block(arch_key: str, params: dict, lora_type: str, resume_step: 
     # Merge any extra train keys from the arch config
     extra = arch.get("extra_train", {})
     train.update(extra)
+
+    # Z-Image Turbo style-specific settings (per Ostris):
+    # - High-noise timestep bias: rebuilds composition in early denoising steps.
+    #   Critical for extreme style changes (e.g. children's art from photorealistic base).
+    #   "Switching to high noise really helps rebuild the composition of the image."
+    # - Differential guidance (scale=3): overshoots training target to converge faster.
+    # Character/object LoRAs should keep balanced timesteps (no high-noise bias).
+    if is_zimage and is_style:
+        train["linear_timesteps2"] = True
+        train["do_differential_guidance"] = True
+        train["differential_guidance_scale"] = 3.0
 
     # Resume: tell ai-toolkit to start counting from the checkpoint step
     if resume_step is not None:
@@ -341,7 +354,7 @@ def spec_to_aitoolkit_config(spec: dict) -> dict:
                             "caption_ext": "txt",
                             "caption_dropout_rate": caption_dropout,
                             "shuffle_tokens": False,
-                            "cache_text_embeddings": arch_key == "qwen_image",
+                            "cache_text_embeddings": arch_key in ("qwen_image", "zimage_turbo"),
                             "resolution": dataset_resolution,
                             "cache_latents_to_disk": True,
                             "default_caption": (

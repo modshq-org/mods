@@ -55,19 +55,23 @@ const TRAIN_HELP_EXTRA: &str = "\
     Character: --rank 8   --lr 1e-4   --steps 1500    --batch-size 1
 
   Z-Image-Turbo (z-image-turbo):
-    Style:     --rank 16  --lr 1e-4   --steps 3000-5000  --batch-size 1
+    Style:     --rank 16  --lr 1e-4   --steps 3000-3500  --batch-size 1
     Character: --rank 16  --lr 1e-4   --steps 1500       --batch-size 1
-    ⚡ Only 6B params — trains very fast (~1.3s/step on 5090, ~4s on 4090).
+    ⚡ Only 6B params — trains very fast (~2 it/s on 4090, ~1.3s on 5090).
     ⚡ No quantization needed on 24GB+ cards (~17GB VRAM without quantize).
     ⚠  Do NOT exceed --lr 1e-4 — higher LR breaks turbo distillation.
-    ⚠  Uses a training adapter (DD adapter) automatically. The adapter
-       prevents breaking the 8-step distillation during training. It works
-       for ~5000-10000 steps; beyond ~20000 steps distillation degrades.
-    For style: caption images literally (describe content, not the art
-       style). E.g. \"a bear, a pig, a balloon\" not \"a child's drawing of\".
-       The model learns the style implicitly. Trigger words optional.
-    For extreme style changes: consider switching timestep to high-noise
-       bias after ~2000 steps to rebuild composition (via Advanced preset).
+    ⚠  Uses a DD (de-distillation) training adapter automatically.
+       The adapter prevents breaking the 8-step turbo during training.
+       Works for ~5k-10k steps; beyond ~20k distillation degrades.
+    Style presets auto-apply these settings (per Ostris / ai-toolkit):
+      • High-noise timestep bias: rebuilds composition in early denoising.
+        Essential for extreme style changes (e.g. children's art).
+      • Differential guidance (scale=3): overshoots target to converge.
+      • Literal captions: describe content, not style. E.g. \"a bear\"
+        not \"a child's drawing of a bear\". Style is learned implicitly.
+      • Trigger word optional (modl still asks for one as a fallback).
+      • cache_text_embeddings=true: unloads text encoder after caching.
+    Character LoRAs use balanced timesteps (no high-noise bias).
     Inference: 8 steps, guidance 1.0 (no CFG). Adapter removed automatically.
 
   Qwen-Image (qwen-image):
