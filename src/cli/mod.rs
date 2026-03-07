@@ -57,10 +57,18 @@ const TRAIN_HELP_EXTRA: &str = "\
   Z-Image-Turbo (z-image-turbo):
     Style:     --rank 16  --lr 1e-4   --steps 3000-5000  --batch-size 1
     Character: --rank 16  --lr 1e-4   --steps 1500       --batch-size 1
-    ⚡ Trains very fast (~1.3s/step). Uses training adapter automatically.
-    ⚠  Do not exceed --lr 1e-4 — higher LR breaks distillation.
-    For style: caption images literally (what's depicted, not the style).
-    Inference: 8 steps, CFG 1.0, euler. Remove training adapter for inference.
+    ⚡ Only 6B params — trains very fast (~1.3s/step on 5090, ~4s on 4090).
+    ⚡ No quantization needed on 24GB+ cards (~17GB VRAM without quantize).
+    ⚠  Do NOT exceed --lr 1e-4 — higher LR breaks turbo distillation.
+    ⚠  Uses a training adapter (DD adapter) automatically. The adapter
+       prevents breaking the 8-step distillation during training. It works
+       for ~5000-10000 steps; beyond ~20000 steps distillation degrades.
+    For style: caption images literally (describe content, not the art
+       style). E.g. \"a bear, a pig, a balloon\" not \"a child's drawing of\".
+       The model learns the style implicitly. Trigger words optional.
+    For extreme style changes: consider switching timestep to high-noise
+       bias after ~2000 steps to rebuild composition (via Advanced preset).
+    Inference: 8 steps, guidance 1.0 (no CFG). Adapter removed automatically.
 
   Qwen-Image (qwen-image):
     Style:     --rank 16  --lr 2e-4   --steps 3000    --batch-size 1

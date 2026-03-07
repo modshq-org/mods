@@ -71,9 +71,9 @@ ARCH_CONFIGS: dict[str, dict] = {
         },
         "model_flags": {
             "arch": "zimage",
-            "quantize": True,
-            "quantize_te": True,
-            "low_vram": True,
+            # quantize/low_vram set dynamically by config_builder based on VRAM
+            # Ostris: "if you have 24 gigs or more, set this to none" — no quantize
+            # Without quantize: ~17GB VRAM, much faster iteration
             "assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors",
         },
         "noise_scheduler": "flowmatch",
@@ -81,7 +81,10 @@ ARCH_CONFIGS: dict[str, dict] = {
         "train_text_encoder": False,
         "resolutions": [512, 768, 1024],
         "default_resolution": 1024,
-        "extra_train": {"timestep_type": "weighted"},
+        "extra_train": {
+            "timestep_type": "weighted",
+            "cache_text_embeddings": True,
+        },
         "sample": {"sampler": "flowmatch", "steps": 8, "guidance": 1.0, "neg": ""},
     },
     "zimage": {

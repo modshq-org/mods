@@ -3,13 +3,13 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { api } from '../api'
 
-function num(value?: number): string {
-  if (value === undefined || Number.isNaN(value)) return '—'
+function num(value?: number | null): string {
+  if (value == null || Number.isNaN(value)) return '—'
   return value.toLocaleString()
 }
 
-function fixed(value?: number, digits = 2): string {
-  if (value === undefined || Number.isNaN(value)) return '—'
+function fixed(value?: number | null, digits = 2): string {
+  if (value == null || Number.isNaN(value)) return '—'
   return value.toFixed(digits)
 }
 

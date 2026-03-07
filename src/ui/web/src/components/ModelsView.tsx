@@ -9,7 +9,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { api, type InstalledModel, type FeatureDep } from '../api'
+import { Download, Loader2, Search, X } from 'lucide-react'
+import { api, type InstalledModel, type FeatureDep, type SearchResult } from '../api'
 
 type TypeGroup = {
   type: string
@@ -73,6 +74,10 @@ export function ModelsView() {
   const queryClient = useQueryClient()
   const [deleteTarget, setDeleteTarget] = useState<InstalledModel | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchActive, setSearchActive] = useState(false)
+  const [installing, setInstalling] = useState<string | null>(null)
+  const [installError, setInstallError] = useState<string | null>(null)
 
   const { data: response, isLoading } = useQuery({
     queryKey: ['models'],
@@ -80,7 +85,13 @@ export function ModelsView() {
     staleTime: 30_000,
   })
 
-  // Handle both old (InstalledModel[]) and new (ModelsResponse) API formats
+  const { data: searchResults = [], isFetching: searching } = useQuery({
+    queryKey: ['registry-search', searchQuery],
+    queryFn: () => api.searchRegistry(searchQuery),
+    enabled: searchQuery.length >= 2,
+    staleTime: 60_000,
+  })
+
   const models = response?.models ?? []
   const totalSize = response?.total_size_bytes ?? models.reduce((s, m) => s + (m.size_bytes ?? 0), 0)
   const featureDeps = response?.feature_deps ?? []
@@ -117,12 +128,125 @@ export function ModelsView() {
     }
   }
 
+  const handleInstall = async (result: SearchResult, variant?: string) => {
+    setInstalling(result.id)
+    setInstallError(null)
+    try {
+      await api.installModel(result.id, variant)
+      await queryClient.invalidateQueries({ queryKey: ['models'] })
+      // Refresh search to update installed status
+      await queryClient.invalidateQueries({ queryKey: ['registry-search'] })
+    } catch (err) {
+      setInstallError(err instanceof Error ? err.message : 'Install failed')
+    } finally {
+      setInstalling(null)
+    }
+  }
+
   const hasDependents = (m: InstalledModel) =>
     m.depended_on_by && m.depended_on_by.length > 0
 
   return (
     <>
       <div className="space-y-6">
+        {/* Search bar */}
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search registry to install models..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value)
+                if (e.target.value.length >= 2) setSearchActive(true)
+              }}
+              onFocus={() => { if (searchQuery.length >= 2) setSearchActive(true) }}
+              className="h-9 w-full rounded-md border border-border bg-secondary/30 pl-9 pr-8 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => { setSearchQuery(''); setSearchActive(false); setInstallError(null) }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Search results */}
+        {searchActive && searchQuery.length >= 2 && (
+          <div className="rounded-lg border border-border/60">
+            <div className="border-b border-border/40 px-4 py-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                {searching ? 'Searching...' : `${searchResults.length} results from registry`}
+              </p>
+            </div>
+            {installError && (
+              <div className="border-b border-red-500/20 bg-red-500/5 px-4 py-2 text-xs text-red-400">
+                {installError}
+              </div>
+            )}
+            <div className="max-h-80 overflow-y-auto divide-y divide-border/30">
+              {searchResults.map((r: SearchResult) => (
+                <div
+                  key={r.id}
+                  className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-secondary/20"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium text-foreground">{r.name}</span>
+                      <Badge variant="outline" className="shrink-0 text-[10px]">{r.model_type}</Badge>
+                      {r.requires_auth && (
+                        <Badge variant="outline" className="shrink-0 text-[10px] border-amber-500/40 text-amber-400">
+                          Auth required
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
+                      {r.author && <span>{r.author}</span>}
+                      <span className="font-mono">{formatSize(r.size_bytes)}</span>
+                      {r.variants.length > 1 && (
+                        <span>{r.variants.length} variants</span>
+                      )}
+                    </div>
+                    {r.description && (
+                      <p className="mt-1 line-clamp-1 text-xs text-muted-foreground/70">{r.description}</p>
+                    )}
+                  </div>
+                  {r.installed ? (
+                    <Badge variant="outline" className="shrink-0 text-[10px] border-emerald-500/40 text-emerald-400">
+                      Installed
+                    </Badge>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0 gap-1.5 text-xs"
+                      disabled={installing === r.id}
+                      onClick={() => void handleInstall(r)}
+                    >
+                      {installing === r.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Download className="h-3 w-3" />
+                      )}
+                      {installing === r.id ? 'Installing...' : 'Install'}
+                    </Button>
+                  )}
+                </div>
+              ))}
+              {!searching && searchResults.length === 0 && (
+                <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+                  No models found. Try a different search term.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Summary bar */}
         <div className="flex flex-wrap items-center gap-4">
           <div>

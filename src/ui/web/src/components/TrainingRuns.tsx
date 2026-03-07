@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useRef, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { api, type TrainingRun } from '../api'
+import { Play } from 'lucide-react'
+import { api, type TrainingRun, type LossPoint } from '../api'
 import { LazyImage } from './LazyImage'
 
 type ProcessConfig = {
@@ -110,11 +111,17 @@ function displayModelName(model?: string): string {
   return model.split('/').pop() ?? model
 }
 
-function deriveRunStatus(run?: TrainingRun): { label: string; className: string } | null {
+function deriveRunStatus(run?: TrainingRun, isLiveRunning?: boolean): { label: string; className: string } | null {
+  // Live process status takes priority over DB lineage
+  if (isLiveRunning) {
+    return { label: 'Running', className: 'border-emerald-500/50 text-emerald-300' }
+  }
+
   const statuses = run?.lineage?.jobs?.map((job) => job.status.toLowerCase()) ?? []
 
+  // If lineage says "running" but live status says not, it's interrupted
   if (statuses.includes('running')) {
-    return { label: 'Running', className: 'border-emerald-500/50 text-emerald-300' }
+    return { label: 'Interrupted', className: 'border-amber-500/50 text-amber-300' }
   }
   if (statuses.includes('interrupted')) {
     return { label: 'Interrupted', className: 'border-amber-500/50 text-amber-300' }
@@ -137,11 +144,126 @@ type SampleLightboxImage = {
   runName: string
 }
 
+function emaSmooth(points: LossPoint[], alpha = 0.05): LossPoint[] {
+  if (points.length === 0) return []
+  const result: LossPoint[] = [points[0]]
+  let ema = points[0].loss
+  for (let i = 1; i < points.length; i++) {
+    ema = alpha * points[i].loss + (1 - alpha) * ema
+    result.push({ step: points[i].step, loss: ema })
+  }
+  return result
+}
+
+function LossChart({ points }: { points: LossPoint[] }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const smoothed = useMemo(() => emaSmooth(points), [points])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || smoothed.length < 2) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const dpr = window.devicePixelRatio || 1
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width * dpr
+    canvas.height = rect.height * dpr
+    ctx.scale(dpr, dpr)
+    const w = rect.width
+    const h = rect.height
+
+    const pad = { top: 12, right: 12, bottom: 24, left: 48 }
+    const plotW = w - pad.left - pad.right
+    const plotH = h - pad.top - pad.bottom
+
+    const minStep = smoothed[0].step
+    const maxStep = smoothed[smoothed.length - 1].step
+    const stepRange = maxStep - minStep || 1
+    const smoothLosses = smoothed.map((p) => p.loss)
+    const minLoss = Math.min(...smoothLosses) * 0.95
+    const maxLoss = Math.max(...smoothLosses) * 1.05
+    const lossRange = maxLoss - minLoss || 1
+
+    const toX = (step: number) => pad.left + ((step - minStep) / stepRange) * plotW
+    const toY = (loss: number) => pad.top + (1 - (loss - minLoss) / lossRange) * plotH
+
+    ctx.clearRect(0, 0, w, h)
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
+    ctx.lineWidth = 1
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.top + (plotH / 4) * i
+      ctx.beginPath()
+      ctx.moveTo(pad.left, y)
+      ctx.lineTo(w - pad.right, y)
+      ctx.stroke()
+    }
+
+    // Raw loss (faint)
+    ctx.strokeStyle = 'rgba(167, 139, 250, 0.15)'
+    ctx.lineWidth = 1
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    for (let i = 0; i < points.length; i++) {
+      const x = toX(points[i].step)
+      const y = toY(Math.max(minLoss, Math.min(maxLoss, points[i].loss)))
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    }
+    ctx.stroke()
+
+    // Smoothed loss (bold)
+    ctx.strokeStyle = '#a78bfa'
+    ctx.lineWidth = 2
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    for (let i = 0; i < smoothed.length; i++) {
+      const x = toX(smoothed[i].step)
+      const y = toY(smoothed[i].loss)
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    }
+    ctx.stroke()
+
+    // Axis labels
+    ctx.fillStyle = 'rgba(255,255,255,0.4)'
+    ctx.font = '10px system-ui'
+    ctx.textAlign = 'right'
+    ctx.fillText(maxLoss.toFixed(3), pad.left - 4, pad.top + 10)
+    ctx.fillText(minLoss.toFixed(3), pad.left - 4, h - pad.bottom)
+    ctx.textAlign = 'center'
+    ctx.fillText(`Step ${minStep}`, pad.left, h - 6)
+    ctx.fillText(`Step ${maxStep}`, w - pad.right, h - 6)
+
+    // Final loss label
+    const lastSmooth = smoothed[smoothed.length - 1]
+    ctx.fillStyle = '#a78bfa'
+    ctx.textAlign = 'left'
+    ctx.font = 'bold 11px system-ui'
+    ctx.fillText(lastSmooth.loss.toFixed(4), toX(lastSmooth.step) + 4, toY(lastSmooth.loss) + 4)
+  }, [points, smoothed])
+
+  if (points.length < 2) {
+    return <p className="text-xs text-muted-foreground">Not enough data for loss chart.</p>
+  }
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="h-36 w-full"
+      style={{ display: 'block' }}
+    />
+  )
+}
+
 export function TrainingRuns() {
   const [selectedRun, setSelectedRun] = useState<string | null>(null)
   const [detailsOpenByRun, setDetailsOpenByRun] = useState<Record<string, boolean>>({})
   const [copiedRun, setCopiedRun] = useState<string | null>(null)
   const [lightboxImage, setLightboxImage] = useState<SampleLightboxImage | null>(null)
+  const [resuming, setResuming] = useState(false)
 
   const {
     data: runs = [],
@@ -177,6 +299,14 @@ export function TrainingRuns() {
     staleTime: 5 * 60_000,
   })
 
+  const { data: lossPoints = [] } = useQuery({
+    queryKey: ['loss', currentRun],
+    queryFn: () => api.lossHistory(currentRun as string),
+    enabled: Boolean(currentRun),
+    staleTime: 10_000,
+    refetchInterval: runningNames.has(currentRun ?? '') ? 5000 : false,
+  })
+
   const detailsOpen = runDetail ? (detailsOpenByRun[runDetail.name] ?? false) : false
   const processCfg = useMemo(() => extractProcessConfig(runDetail?.config), [runDetail?.config])
   const samplePrompts = useMemo(() => extractSamplePrompts(runDetail?.config), [runDetail?.config])
@@ -184,7 +314,12 @@ export function TrainingRuns() {
   const baseModelRaw = runDetail?.lineage?.base_model ?? processCfg?.model?.name_or_path
   const baseModelName = displayModelName(baseModelRaw)
   const triggerWord = processCfg?.trigger_word
-  const runStatus = deriveRunStatus(runDetail)
+  const isRunning = runningNames.has(currentRun ?? '')
+  const gpuBusy = runningNames.size > 0
+  const runStatus = deriveRunStatus(runDetail, isRunning)
+  const currentStatus = statusRuns.find((r) => r.name === currentRun)
+  const latestCheckpoint = currentStatus?.latest_checkpoint
+  const canResume = !isRunning && latestCheckpoint && runStatus?.label === 'Interrupted'
 
   const promptCount = useMemo(() => {
     if (!runDetail) return 0
@@ -334,6 +469,29 @@ export function TrainingRuns() {
                     {runStatus.label}
                   </Badge>
                 ) : null}
+                {canResume && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2 text-xs"
+                    disabled={resuming || gpuBusy}
+                    title={gpuBusy ? 'GPU is busy with another training run' : 'Resume training from last checkpoint'}
+                    onClick={async () => {
+                      setResuming(true)
+                      try {
+                        await api.resumeTraining(runDetail.name, latestCheckpoint!)
+                      } catch (err) {
+                        console.error('Resume failed:', err)
+                      } finally {
+                        setResuming(false)
+                      }
+                    }}
+                  >
+                    <Play className="h-3 w-3" />
+                    {resuming ? 'Resuming...' : gpuBusy ? 'GPU busy' : 'Resume'}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   size="sm"
@@ -391,19 +549,31 @@ export function TrainingRuns() {
             </div>
 
             {/* Expandable details */}
-            {detailsOpen && detailFields.length > 0 ? (
-              <div className="border-b border-border px-4 py-3">
-                <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                  Training config
-                </p>
-                <dl className="grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-3 lg:grid-cols-4">
-                  {detailFields.map((field) => (
-                    <div key={field.label}>
-                      <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">{field.label}</dt>
-                      <dd className="mt-0.5 text-sm text-foreground">{field.value}</dd>
-                    </div>
-                  ))}
-                </dl>
+            {detailsOpen ? (
+              <div className="border-b border-border px-4 py-3 space-y-4">
+                {detailFields.length > 0 && (
+                  <div>
+                    <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                      Training config
+                    </p>
+                    <dl className="grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-3 lg:grid-cols-4">
+                      {detailFields.map((field) => (
+                        <div key={field.label}>
+                          <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">{field.label}</dt>
+                          <dd className="mt-0.5 text-sm text-foreground">{field.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                )}
+                {lossPoints.length > 1 && (
+                  <div>
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                      Training Loss
+                    </p>
+                    <LossChart points={lossPoints} />
+                  </div>
+                )}
               </div>
             ) : null}
 

@@ -105,6 +105,7 @@ export type TrainingStatusRun = {
   lr?: string
   arch?: string
   trigger_word?: string
+  latest_checkpoint?: string
 }
 
 export type DatasetImage = {
@@ -119,6 +120,23 @@ export type DatasetOverview = {
   captioned_count: number
   coverage: number
   images: DatasetImage[]
+}
+
+export type SearchResult = {
+  id: string
+  name: string
+  model_type: string
+  author?: string
+  description?: string
+  size_bytes: number
+  variants: { id: string; size_bytes: number; precision?: string }[]
+  installed: boolean
+  requires_auth: boolean
+}
+
+export type LossPoint = {
+  step: number
+  loss: number
 }
 
 export type DeleteOutputRequest = {
@@ -242,6 +260,31 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
+    }),
+
+  // Registry search & install
+  searchRegistry: (q: string, type?: string) => {
+    const params = new URLSearchParams({ q })
+    if (type) params.set('type', type)
+    return fetchJson<SearchResult[]>(`/api/registry/search?${params}`)
+  },
+  installModel: (id: string, variant?: string) =>
+    fetchJson<{ installed: string[] }>('/api/models/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, variant }),
+    }),
+
+  // Loss history
+  lossHistory: (name: string) =>
+    fetchJson<LossPoint[]>(`/api/runs/${encodeURIComponent(name)}/loss`),
+
+  // Resume training
+  resumeTraining: (name: string, checkpoint: string) =>
+    fetchJson<{ started: string }>('/api/runs/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, checkpoint }),
     }),
 
   // Studio

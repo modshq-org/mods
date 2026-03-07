@@ -90,6 +90,8 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         .route("/api/gpu", get(models::api_gpu_status))
         .route("/api/models", get(models::api_list_models))
         .route("/api/models/{id}", delete(models::api_delete_model))
+        .route("/api/registry/search", get(models::api_search_registry))
+        .route("/api/models/install", post(models::api_install_model))
         // Generation
         .route("/api/generate", post(generate::api_generate))
         .route("/api/generate/stream", get(generate::api_generate_stream))
@@ -101,6 +103,8 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         // Training
         .route("/api/runs", get(training::api_list_runs))
         .route("/api/runs/{name}", get(training::api_get_run))
+        .route("/api/runs/{name}/loss", get(training::api_loss_history))
+        .route("/api/runs/resume", post(training::api_resume_training))
         .route("/api/status", get(training::api_training_status))
         .route(
             "/api/status/{name}",

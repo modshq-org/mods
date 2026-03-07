@@ -1,5 +1,5 @@
 use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::core::db::Database;
@@ -289,6 +289,169 @@ pub async fn api_training_status_single(Path(name): Path<String>) -> impl IntoRe
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Task failed: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loss history (parsed from log file)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct LossPoint {
+    step: u64,
+    loss: f64,
+}
+
+pub async fn api_loss_history(Path(name): Path<String>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let log_path = modl_root()
+            .join("training_output")
+            .join(format!("{name}.log"));
+        if !log_path.exists() {
+            return Vec::new();
+        }
+
+        let content = match std::fs::read_to_string(&log_path) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+
+        // Parse step/loss pairs from tqdm lines
+        // Format: <step>/<total> [..., loss: <value>]
+        let mut points: Vec<LossPoint> = Vec::new();
+        let mut seen_steps: std::collections::HashSet<u64> = std::collections::HashSet::new();
+
+        for segment in content.split(['\r', '\n']) {
+            let line = segment.trim();
+            if line.is_empty() || !line.contains("loss:") {
+                continue;
+            }
+
+            // Extract step
+            let step = extract_step(line);
+            let loss = extract_loss(line);
+
+            if let (Some(step), Some(loss)) = (step, loss) {
+                if seen_steps.insert(step) {
+                    points.push(LossPoint { step, loss });
+                } else {
+                    // Update to latest loss for this step
+                    if let Some(p) = points.iter_mut().rev().find(|p| p.step == step) {
+                        p.loss = loss;
+                    }
+                }
+            }
+        }
+
+        // Downsample to ~200 points max for performance
+        if points.len() > 200 {
+            let step_size = points.len() / 200;
+            points = points
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| i % step_size == 0)
+                .map(|(_, p)| p)
+                .collect();
+        }
+
+        points
+    })
+    .await
+    .unwrap_or_default();
+
+    Json(result)
+}
+
+fn extract_step(line: &str) -> Option<u64> {
+    // Find <digits>/<digits> pattern
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut best: Option<u64> = None;
+
+    while i < len {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < len && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i < len && bytes[i] == b'/' {
+                let step_str = &line[start..i];
+                i += 1;
+                let total_start = i;
+                while i < len && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i > total_start {
+                    let total_str = &line[total_start..i];
+                    if let (Ok(step), Ok(total)) =
+                        (step_str.parse::<u64>(), total_str.parse::<u64>())
+                        && total > 10
+                    {
+                        best = Some(step);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    best
+}
+
+fn extract_loss(line: &str) -> Option<f64> {
+    let idx = line.find("loss:")?;
+    let rest = &line[idx + 5..];
+    rest.split_whitespace()
+        .next()
+        .map(|s| s.trim_end_matches(']').trim_end_matches(','))
+        .and_then(|s| s.parse::<f64>().ok())
+}
+
+// ---------------------------------------------------------------------------
+// Resume training
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ResumeRequest {
+    name: String,
+    checkpoint: String,
+}
+
+pub async fn api_resume_training(Json(req): Json<ResumeRequest>) -> impl IntoResponse {
+    // Find the modl binary path
+    let modl_bin = std::env::current_exe().unwrap_or_else(|_| "modl".into());
+
+    let result = tokio::task::spawn_blocking(move || {
+        // Spawn `modl train --resume <checkpoint> --name <name>` as a detached process
+        let child = std::process::Command::new(&modl_bin)
+            .args(["train", "--resume", &req.checkpoint, "--name", &req.name])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        match child {
+            Ok(_) => Ok(req.name),
+            Err(e) => Err(format!("Failed to start training: {e}")),
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok(name)) => {
+            (StatusCode::OK, Json(serde_json::json!({ "started": name }))).into_response()
+        }
+        Ok(Err(msg)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }

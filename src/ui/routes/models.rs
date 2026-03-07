@@ -1,10 +1,14 @@
-use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
-use serde::Serialize;
+use axum::{Json, extract::Path, extract::Query, http::StatusCode, response::IntoResponse};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
+use crate::auth::AuthStore;
 use crate::core::config::Config;
 use crate::core::db::Database;
+use crate::core::install;
 use crate::core::manifest::AssetType;
 use crate::core::registry::RegistryIndex;
+use crate::core::store::Store;
 use crate::core::training_status;
 
 use super::super::server::modl_root;
@@ -269,6 +273,169 @@ pub async fn api_list_models() -> impl IntoResponse {
     });
     Json(result)
 }
+
+// ---------------------------------------------------------------------------
+// Registry search
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    q: String,
+    #[serde(rename = "type")]
+    type_filter: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SearchResult {
+    id: String,
+    name: String,
+    model_type: String,
+    author: Option<String>,
+    description: Option<String>,
+    size_bytes: u64,
+    variants: Vec<SearchVariant>,
+    installed: bool,
+    requires_auth: bool,
+}
+
+#[derive(Serialize)]
+struct SearchVariant {
+    id: String,
+    size_bytes: u64,
+    precision: Option<String>,
+}
+
+pub async fn api_search_registry(Query(params): Query<SearchQuery>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let index = match RegistryIndex::load() {
+            Ok(idx) => idx,
+            Err(_) => return Vec::new(),
+        };
+        let db = Database::open().ok();
+        let installed_ids: HashSet<String> = db
+            .as_ref()
+            .and_then(|d| d.list_installed(None).ok())
+            .map(|models| models.iter().map(|m| m.id.clone()).collect())
+            .unwrap_or_default();
+
+        let mut results: Vec<&crate::core::manifest::Manifest> = index.search(&params.q);
+
+        // Filter by type if specified
+        if let Some(ref type_filter) = params.type_filter {
+            results.retain(|m| m.asset_type.to_string() == *type_filter);
+        }
+
+        results
+            .into_iter()
+            .take(30)
+            .map(|m| {
+                let size = if !m.variants.is_empty() {
+                    m.variants[0].size
+                } else {
+                    m.file.as_ref().map(|f| f.size).unwrap_or(0)
+                };
+                SearchResult {
+                    id: m.id.clone(),
+                    name: m.name.clone(),
+                    model_type: m.asset_type.to_string(),
+                    author: m.author.clone(),
+                    description: m.description.clone(),
+                    size_bytes: size,
+                    variants: m
+                        .variants
+                        .iter()
+                        .map(|v| SearchVariant {
+                            id: v.id.clone(),
+                            size_bytes: v.size,
+                            precision: v.precision.clone(),
+                        })
+                        .collect(),
+                    installed: installed_ids.contains(&m.id),
+                    requires_auth: m.auth.as_ref().is_some_and(|a| a.gated),
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+
+    Json(result)
+}
+
+// ---------------------------------------------------------------------------
+// Install model
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct InstallRequest {
+    id: String,
+    variant: Option<String>,
+}
+
+pub async fn api_install_model(Json(req): Json<InstallRequest>) -> impl IntoResponse {
+    // Database (rusqlite) is not Send, so we run the entire install inside
+    // spawn_blocking and block_on the async download from there.
+    let handle = tokio::runtime::Handle::current();
+    let result = tokio::task::spawn_blocking(move || {
+        let index = RegistryIndex::load().map_err(|e| format!("Registry not loaded: {e}"))?;
+        let db = Database::open().map_err(|e| format!("DB error: {e}"))?;
+        let config = Config::load().map_err(|e| format!("Config error: {e}"))?;
+        let auth_store = AuthStore::load().unwrap_or_default();
+        let store = Store::new(config.store_root());
+
+        let (plan, vram) = install::resolve_plan(&req.id, req.variant.as_deref(), &index, &db)
+            .map_err(|e| format!("Resolve error: {e}"))?;
+
+        let mut installed = Vec::new();
+        for item in &plan.items {
+            if item.already_installed {
+                continue;
+            }
+            let effective_variant = if item.manifest.id == req.id {
+                item.variant_id.as_deref().or(req.variant.as_deref())
+            } else {
+                item.variant_id.as_deref()
+            };
+            match handle.block_on(install::install_item(
+                &item.manifest,
+                effective_variant,
+                vram,
+                &config,
+                &store,
+                &auth_store,
+                &db,
+                false,
+            )) {
+                Ok(result) => installed.push(result.name),
+                Err(e) => {
+                    return Err(format!("Failed to install {}: {e}", item.manifest.name));
+                }
+            }
+        }
+
+        Ok::<Vec<String>, String>(installed)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(names)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "installed": names })),
+        ),
+        Ok(Err(msg)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Internal error: {e}") })),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Delete model
+// ---------------------------------------------------------------------------
 
 /// Delete an installed model by ID.
 pub async fn api_delete_model(Path(id): Path<String>) -> impl IntoResponse {

@@ -249,6 +249,23 @@ def spec_to_aitoolkit_config(spec: dict) -> dict:
     model_config = {"name_or_path": model_path}
     model_config.update(arch["model_flags"])
 
+    # Z-Image quantization: only quantize on <24GB VRAM (per Ostris)
+    # "if you have 24 gigs or more, set this to none. It'll be way faster."
+    # Without quantize: ~17GB VRAM, ~1.3s/iter vs ~4s/iter quantized
+    is_zimage = arch_key.startswith("zimage")
+    if is_zimage:
+        quantize = params.get("quantize", True)
+        if not quantize:
+            model_config.pop("quantize", None)
+            model_config.pop("quantize_te", None)
+            model_config.pop("low_vram", None)
+        else:
+            # quantize flag from Rust: True means "auto" (VRAM < 40GB in presets.rs)
+            # On 24GB+, skip quantization for speed
+            model_config["quantize"] = True
+            model_config["quantize_te"] = True
+            model_config["low_vram"] = True
+
     if arch_key == "qwen_image":
         _apply_qwen_model_config(model_config, lora_type)
 
