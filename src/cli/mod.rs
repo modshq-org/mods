@@ -64,14 +64,15 @@ const TRAIN_HELP_EXTRA: &str = "\
        The adapter prevents breaking the 8-step turbo during training.
        Works for ~5k-10k steps; beyond ~20k distillation degrades.
     Style presets auto-apply these settings (per Ostris / ai-toolkit):
-      • High-noise timestep bias: rebuilds composition in early denoising.
-        Essential for extreme style changes (e.g. children's art).
       • Differential guidance (scale=3): overshoots target to converge.
       • Literal captions: describe content, not style. E.g. \"a bear\"
         not \"a child's drawing of a bear\". Style is learned implicitly.
       • Trigger word optional (modl still asks for one as a fallback).
       • cache_text_embeddings=true: unloads text encoder after caching.
-    Character LoRAs use balanced timesteps (no high-noise bias).
+    For extreme style (e.g. children's art), Ostris recommends resuming
+      from ~2000 steps with high-noise timestep bias to rebuild composition.
+      This is a two-phase approach: balanced first, then high-noise.
+    Character LoRAs use balanced timesteps, trigger word required.
     Inference: 8 steps, guidance 1.0 (no CFG). Adapter removed automatically.
 
   Qwen-Image (qwen-image):

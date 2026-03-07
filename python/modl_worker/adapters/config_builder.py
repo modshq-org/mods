@@ -182,13 +182,13 @@ def build_train_block(arch_key: str, params: dict, lora_type: str, resume_step: 
     train.update(extra)
 
     # Z-Image Turbo style-specific settings (per Ostris):
-    # - High-noise timestep bias: rebuilds composition in early denoising steps.
-    #   Critical for extreme style changes (e.g. children's art from photorealistic base).
-    #   "Switching to high noise really helps rebuild the composition of the image."
     # - Differential guidance (scale=3): overshoots training target to converge faster.
-    # Character/object LoRAs should keep balanced timesteps (no high-noise bias).
+    # - High-noise timestep bias (linear_timesteps2) should NOT be enabled from step 0.
+    #   Ostris uses a two-phase approach: balanced first (~2000 steps) to learn the
+    #   concept, then switches to high-noise bias to rebuild composition. Starting
+    #   with high noise from step 0 prevents learning entirely.
+    #   TODO: support mid-training timestep scheduling or a "resume with high-noise" flag.
     if is_zimage and is_style:
-        train["linear_timesteps2"] = True
         train["do_differential_guidance"] = True
         train["differential_guidance_scale"] = 3.0
 

@@ -113,13 +113,14 @@ pub fn resolve_params(
     //   - Adapter works for ~5k-10k steps; beyond ~20k distillation degrades.
     //   Style LoRAs (config_builder applies automatically):
     //     - 3000-3500 steps typical (Ostris stops at 3000).
-    //     - linear_timesteps2=true (high-noise bias): rebuilds composition
-    //       in early denoising steps. Essential for extreme style changes.
     //     - differential_guidance (scale=3): overshoots target to converge.
     //     - Literal captions (describe content, not style). No trigger word
     //       needed — the LoRA IS the style.
+    //     - High-noise bias (linear_timesteps2) is a TWO-PHASE technique:
+    //       balanced first (~2000 steps), then resume with high-noise to
+    //       rebuild composition. Do NOT enable from step 0 — prevents learning.
     //   Character LoRAs:
-    //     - Trains faster, balanced timesteps (no high-noise bias).
+    //     - Trains faster, balanced timesteps.
     //     - Trigger word required.
     //
     // Style LoRA step budget (SDXL/Flux):
