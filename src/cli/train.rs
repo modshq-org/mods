@@ -563,7 +563,7 @@ async fn execute_training(
                 final_status = "cancelled";
                 break;
             }
-            EventPayload::Heartbeat => {}
+            EventPayload::Heartbeat | EventPayload::Result { .. } => {}
         }
 
         // Persist event to DB

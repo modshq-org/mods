@@ -580,6 +580,17 @@ pub(crate) fn parse_worker_event(raw: &serde_json::Value, job_id: &str) -> Optio
                 .unwrap_or(false),
             details: event_val.get("details").cloned(),
         },
+        "result" => EventPayload::Result {
+            result_type: event_val
+                .get("result_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            data: event_val
+                .get("data")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        },
         "cancelled" => EventPayload::Cancelled,
         "heartbeat" => EventPayload::Heartbeat,
         _ => {

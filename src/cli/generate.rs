@@ -358,7 +358,7 @@ async fn execute_generate(
                 final_status = "cancelled";
                 break;
             }
-            EventPayload::Heartbeat => {}
+            EventPayload::Heartbeat | EventPayload::Result { .. } => {}
         }
 
         // Persist event

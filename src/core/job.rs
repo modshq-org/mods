@@ -89,6 +89,107 @@ fn default_resize_method() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoreJobSpec {
+    pub image_paths: Vec<String>,
+    #[serde(default = "default_score_model")]
+    pub model: String,
+    #[serde(default)]
+    pub clip_model_path: Option<String>,
+    #[serde(default)]
+    pub predictor_path: Option<String>,
+}
+
+fn default_score_model() -> String {
+    "laion-aesthetic-v2".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectJobSpec {
+    pub image_paths: Vec<String>,
+    #[serde(default = "default_detect_type")]
+    pub detect_type: String,
+    #[serde(default = "default_detect_model")]
+    pub model: String,
+    #[serde(default)]
+    pub model_path: Option<String>,
+    #[serde(default)]
+    pub return_embeddings: bool,
+}
+
+fn default_detect_type() -> String {
+    "face".to_string()
+}
+
+fn default_detect_model() -> String {
+    "insightface-buffalo-l".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompareJobSpec {
+    pub image_paths: Vec<String>,
+    #[serde(default)]
+    pub reference_path: Option<String>,
+    #[serde(default = "default_compare_model")]
+    pub model: String,
+    #[serde(default)]
+    pub clip_model_path: Option<String>,
+}
+
+fn default_compare_model() -> String {
+    "clip-vit-large-patch14".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SegmentJobSpec {
+    pub image_path: String,
+    pub output_mask_path: String,
+    #[serde(default = "default_segment_method")]
+    pub method: String,
+    #[serde(default)]
+    pub bbox: Option<[f32; 4]>,
+    #[serde(default)]
+    pub point: Option<[f32; 2]>,
+    #[serde(default = "default_segment_model")]
+    pub model: String,
+    #[serde(default)]
+    pub model_path: Option<String>,
+    #[serde(default = "default_expand_px")]
+    pub expand_px: u32,
+}
+
+fn default_segment_method() -> String {
+    "bbox".to_string()
+}
+
+fn default_segment_model() -> String {
+    "sam-vit-base".to_string()
+}
+
+fn default_expand_px() -> u32 {
+    10
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaceRestoreJobSpec {
+    pub image_paths: Vec<String>,
+    pub output_dir: String,
+    #[serde(default = "default_face_restore_model")]
+    pub model: String,
+    #[serde(default)]
+    pub model_path: Option<String>,
+    #[serde(default = "default_fidelity")]
+    pub fidelity: f32,
+}
+
+fn default_face_restore_model() -> String {
+    "codeformer".to_string()
+}
+
+fn default_fidelity() -> f32 {
+    0.7
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoraRef {
     pub name: String,
     pub path: String,
@@ -366,6 +467,11 @@ pub enum EventPayload {
     },
     Cancelled,
     Heartbeat,
+    /// Structured result data from analysis commands (score, detect, compare).
+    Result {
+        result_type: String,
+        data: serde_json::Value,
+    },
 }
 
 // ---------------------------------------------------------------------------

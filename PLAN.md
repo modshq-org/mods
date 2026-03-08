@@ -215,17 +215,50 @@ Regenerate a specific region of an image guided by a mask and prompt.
 ```
 modl inpaint photo.jpg --mask mask.png --prompt "blue eyes"
 modl inpaint photo.jpg --mask mask.png --prompt "wooden floor" --strength 0.9
-modl inpaint photo.jpg --mask mask.png --prompt "sharp detailed face" --base flux-dev --padding 32
+modl inpaint photo.jpg --mask mask.png --prompt "sharp detailed face" --base flux-fill-dev --padding 32
 ```
 
-- **Implementation:** Uses the same diffusion pipeline with mask conditioning.
-  For Flux: `FluxInpaintPipeline`. For SDXL: `StableDiffusionXLInpaintPipeline`.
-  The mask defines the regeneration region; `--padding` adds context around it.
+**Architecture: Inpainting is generation, not analysis.**
+
+Inpainting uses the same large diffusion models (flux-fill-dev, flux-kontext,
+SDXL inpaint) and the same VRAM budget as `modl generate`. It must:
+- Go through the **same executor/persistent worker** as generate (not a
+  throwaway analysis subprocess)
+- Use models from **modl's content-addressed store** (pulled via `modl pull`,
+  not downloaded to `~/.cache/huggingface/`)
+- Share the worker's **model cache** — if flux-dev is already loaded, loading
+  flux-fill-dev should be a swap, not a cold start
+
+This means `modl inpaint` is architecturally a sibling of `modl generate`,
+not a sibling of `modl score`. Both produce images via diffusion pipelines.
+The CLI can be a separate subcommand for UX clarity, but the underlying
+executor path should be shared.
+
+**Inpaint-capable models (community-preferred, 2025-2026):**
+
+| Model | Arch | Quality | Notes |
+|-------|------|---------|-------|
+| Flux Fill Dev | Flux | Best | Native inpainting model, 23.8GB fp16 |
+| Flux Kontext | Flux | Excellent | Image editing via text instruction, very flexible |
+| SDXL Inpaint | SDXL | Good | Widely used, works with SDXL LoRAs |
+| SD 1.5 Inpaint | SD1.5 | Decent | Legacy, very fast |
+
+Flux Kontext is particularly interesting — it does text-guided image editing
+without needing an explicit mask. "Change the hair color to red" just works.
+This is closer to img2img with instructions than traditional inpainting.
+
+- **Models:** Pulled via `modl pull flux-fill-dev`, `modl pull flux-kontext`, etc.
+  Same registry manifests as any diffusion model. NOT auto-downloaded to HF cache.
 - **Strength:** 0.0 = keep original, 1.0 = fully regenerate masked area.
 - **Output:** Full image with masked region replaced. Same dimensions as input.
 - **Agent pattern:** `segment → inpaint` is the core edit loop. The agent
   segments a face, dilates the mask, inpaints with "sharp detailed face".
   This is what FaceDetailer / ADetailer does — but composable.
+
+**Implementation status:** A prototype exists as an analysis worker adapter
+(`python/modl_worker/adapters/inpaint_adapter.py`) but it needs to be
+re-implemented through the generate executor path. The current prototype
+downloads models to HF cache and spawns a throwaway process — this is wrong.
 
 #### `modl generate --controlnet` — Structural Guidance
 
@@ -579,20 +612,25 @@ Agent thinks:
 
 ### Implementation Priority
 
-**Phase 1 — Core edit loop** (highest value, enables face-fix and inpainting):
-1. `segment` (SAM2 + GroundingDINO)
-2. `inpaint` (FluxInpaintPipeline / SDXL inpaint)
-3. `detect --type face` (InsightFace)
-4. `score --metric aesthetic` (LAION aesthetic)
+**Phase 1 — Perception** (eyes for the agent, lightweight utility models):
+1. ✅ `score` (LAION aesthetic via CLIP) — **done**
+2. ✅ `detect --type face` (InsightFace buffalo_l) — **done**
+3. ✅ `compare` (CLIP cosine similarity) — **done**
+4. ✅ `segment` (bbox + BiRefNet background removal) — **done**
+5. ✅ `face-restore` (CodeFormer) — **done**
 
-**Phase 2 — Transform & evaluate** (quality-of-life, post-processing):
-5. `upscale` (Real-ESRGAN)
-6. `face-restore` (CodeFormer)
-7. `remove-bg` (RMBG 2.0)
-8. `compare` (CLIP + face similarity)
+**Phase 2 — Inpainting as generation** (same executor as `modl generate`):
+6. `inpaint` via generate executor (Flux Fill Dev, Flux Kontext, SDXL inpaint)
+   - Must use modl store models, NOT HF cache downloads
+   - Must go through persistent worker, NOT throwaway analysis subprocess
+   - A prototype analysis adapter exists but is architecturally wrong
+
+**Phase 3 — Transform & evaluate** (quality-of-life, post-processing):
+7. `upscale` (Real-ESRGAN)
+8. `remove-bg` (RMBG 2.0 / BiRefNet)
 9. `train eval` + `train promote`
 
-**Phase 3 — Structural control** (advanced generation):
+**Phase 4 — Structural control** (advanced generation):
 10. `extract` (depth, pose, edge)
 11. `generate --controlnet`
 12. `generate --reference` (IP-Adapter)

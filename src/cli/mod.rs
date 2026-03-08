@@ -1,9 +1,13 @@
+mod analysis;
 mod auth;
+mod compare;
 mod config;
 mod datasets;
+mod detect;
 mod doctor;
 mod enhance;
 mod export;
+mod face_restore;
 mod fmt;
 mod gc;
 pub(crate) mod generate;
@@ -17,7 +21,9 @@ mod llm;
 mod outputs;
 mod popular;
 mod runtime;
+mod score;
 mod search;
+mod segment;
 mod serve;
 mod space;
 mod train;
@@ -459,6 +465,86 @@ pub enum Commands {
         json: bool,
     },
 
+    /// Score image aesthetic quality (1-10 scale)
+    Score {
+        /// Image file(s) or directory to score
+        #[arg(required = true)]
+        paths: Vec<String>,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Detect faces in images
+    Detect {
+        /// Image file(s) or directory to analyze
+        #[arg(required = true)]
+        paths: Vec<String>,
+        /// Detection type (currently: face)
+        #[arg(long, default_value = "face")]
+        r#type: String,
+        /// Include face embeddings for identity matching
+        #[arg(long)]
+        embeddings: bool,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Compare images using CLIP similarity
+    Compare {
+        /// Image file(s) or directory to compare
+        #[arg(required = true)]
+        paths: Vec<String>,
+        /// Reference image (compare all others against this)
+        #[arg(long)]
+        reference: Option<String>,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Generate a segmentation mask for targeted inpainting
+    Segment {
+        /// Input image
+        image: String,
+        /// Output mask path (default: <image>_mask.png)
+        #[arg(long, short = 'o')]
+        output: Option<String>,
+        /// Segmentation method: bbox, background, sam
+        #[arg(long, default_value = "bbox")]
+        method: String,
+        /// Bounding box: x1,y1,x2,y2 (for bbox/sam methods)
+        #[arg(long)]
+        bbox: Option<String>,
+        /// Point prompt: x,y (for sam method)
+        #[arg(long)]
+        point: Option<String>,
+        /// Expand mask by N pixels (feathering)
+        #[arg(long, default_value = "10")]
+        expand: u32,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Restore faces in images using CodeFormer
+    #[command(name = "face-restore")]
+    FaceRestore {
+        /// Image file(s) or directory
+        #[arg(required = true)]
+        paths: Vec<String>,
+        /// Output directory (default: ~/.modl/outputs/<date>/)
+        #[arg(long, short = 'o')]
+        output: Option<String>,
+        /// Fidelity: 0.0 (max quality) to 1.0 (max faithfulness to input)
+        #[arg(long, default_value = "0.7")]
+        fidelity: f32,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Manage datasets for training
     #[command(after_help = DATASET_EXAMPLES)]
     Dataset {
@@ -737,6 +823,44 @@ pub async fn run(cli: Cli) -> Result<()> {
             intensity,
             json,
         } => enhance::run(&prompt, model.as_deref(), &intensity, json).await,
+        Commands::Score { paths, json } => score::run(&paths, json).await,
+        Commands::Detect {
+            paths,
+            r#type,
+            embeddings,
+            json,
+        } => detect::run(&paths, &r#type, embeddings, json).await,
+        Commands::Compare {
+            paths,
+            reference,
+            json,
+        } => compare::run(&paths, reference.as_deref(), json).await,
+        Commands::Segment {
+            image,
+            output,
+            method,
+            bbox,
+            point,
+            expand,
+            json,
+        } => {
+            segment::run(
+                &image,
+                output.as_deref(),
+                &method,
+                bbox.as_deref(),
+                point.as_deref(),
+                expand,
+                json,
+            )
+            .await
+        }
+        Commands::FaceRestore {
+            paths,
+            output,
+            fidelity,
+            json,
+        } => face_restore::run(&paths, output.as_deref(), fidelity, json).await,
         Commands::Dataset { command } => datasets::run(command).await,
         Commands::Runtime { command } => runtime::run(command).await,
         Commands::Doctor {
