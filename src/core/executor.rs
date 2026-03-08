@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use std::env;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -219,11 +219,13 @@ impl LocalExecutor {
     ///
     /// Returns `Ok(Some(handle))` if the worker accepted the job, `Ok(None)`
     /// if the socket is not available (fall back to one-shot).
+    #[cfg(unix)]
     fn try_submit_via_socket(
         &mut self,
         job_id: &str,
         spec: &GenerateJobSpec,
     ) -> Result<Option<JobHandle>> {
+        use std::io::Write;
         use std::os::unix::net::UnixStream;
 
         let sock_path = dirs::home_dir()
@@ -277,6 +279,15 @@ impl LocalExecutor {
             job_id: job_id.to_string(),
             child_pid: None,
         }))
+    }
+
+    #[cfg(not(unix))]
+    fn try_submit_via_socket(
+        &mut self,
+        _job_id: &str,
+        _spec: &GenerateJobSpec,
+    ) -> Result<Option<JobHandle>> {
+        Ok(None)
     }
 
     /// One-shot generation: spawn a fresh Python process (cold start).
