@@ -8,8 +8,30 @@ use anyhow::Result;
 use clap::Parser;
 use cli::Cli;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() {
+    // Windows default stack is 1 MB which is too small for our large CLI enum
+    // and async state machines. Spawn the real entry point with 8 MB stack.
+    let result = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .name("modl-main".into())
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime")
+                .block_on(async_main())
+        })
+        .expect("failed to spawn main thread")
+        .join()
+        .expect("main thread panicked");
+
+    if let Err(e) = result {
+        eprintln!("Error: {e:?}");
+        std::process::exit(1);
+    }
+}
+
+async fn async_main() -> Result<()> {
     let cli = Cli::parse();
 
     // Spawn a non-blocking background update check (at most once per 24h).
