@@ -20,6 +20,7 @@ mod list;
 mod llm;
 mod outputs;
 mod popular;
+mod remove_bg;
 mod runtime;
 mod score;
 mod search;
@@ -555,6 +556,20 @@ pub enum Commands {
         json: bool,
     },
 
+    /// Remove image background (outputs transparent PNG)
+    #[command(name = "remove-bg")]
+    RemoveBg {
+        /// Image file(s) or directory
+        #[arg(required = true)]
+        paths: Vec<String>,
+        /// Output directory (default: ~/.modl/outputs/<date>/)
+        #[arg(long, short = 'o')]
+        output: Option<String>,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Upscale images using Real-ESRGAN
     Upscale {
         /// Image file(s) or directory to upscale
@@ -896,6 +911,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             fidelity,
             json,
         } => face_restore::run(&paths, output.as_deref(), fidelity, json).await,
+        Commands::RemoveBg {
+            paths,
+            output,
+            json,
+        } => remove_bg::run(&paths, output.as_deref(), json).await,
         Commands::Upscale {
             paths,
             scale,

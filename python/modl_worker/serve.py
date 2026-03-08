@@ -431,7 +431,7 @@ class WorkerDaemon:
                 emitter = SocketEventEmitter(conn, job_id="control")
                 self.cache.evict_all(emitter)  # TODO: evict specific model
             self._send_ok(conn, "evicted")
-        elif action in ("score", "detect", "compare", "segment", "face-restore", "upscale"):
+        elif action in ("score", "detect", "compare", "segment", "face-restore", "upscale", "remove-bg"):
             self._handle_analysis(conn, request, action)
         elif action == "ping":
             self._send_ok(conn, "pong")
@@ -483,7 +483,7 @@ class WorkerDaemon:
 
             # Dispatch to the right adapter
             from modl_worker.adapters import (
-                run_score, run_detect, run_compare, run_segment, run_face_restore, run_upscale
+                run_score, run_detect, run_compare, run_segment, run_face_restore, run_upscale, run_remove_bg
             )
 
             adapter_map = {
@@ -493,6 +493,7 @@ class WorkerDaemon:
                 "segment": run_segment,
                 "face-restore": run_face_restore,
                 "upscale": run_upscale,
+                "remove-bg": run_remove_bg,
             }
 
             adapter_fn = adapter_map[action]

@@ -204,6 +204,14 @@ fn default_upscale_scale() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoveBgJobSpec {
+    pub image_paths: Vec<String>,
+    pub output_dir: String,
+    #[serde(default)]
+    pub model_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoraRef {
     pub name: String,
     pub path: String,
