@@ -90,6 +90,8 @@ export type TrainingRun = {
   lora_path?: string
   lora_size?: number
   lineage?: TrainingLineage
+  total_steps?: number
+  sample_every?: number
 }
 
 export type TrainingStatusRun = {
@@ -285,6 +287,22 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, checkpoint }),
+    }),
+
+  // Cancel training
+  cancelTraining: (name: string) =>
+    fetchJson<{ cancelled: boolean; pids_killed: number }>('/api/runs/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
+
+  // Delete training run
+  deleteRun: (name: string) =>
+    fetchJson<{ deleted: boolean }>('/api/runs/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
     }),
 
   // Studio

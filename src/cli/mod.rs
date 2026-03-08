@@ -256,6 +256,15 @@ pub enum TrainSubcommands {
         #[arg(long, short = 'w')]
         watch: bool,
     },
+
+    /// Delete a training run (output, logs, LoRA, and DB records)
+    Rm {
+        /// Training run name to delete
+        name: String,
+    },
+
+    /// List training runs
+    Ls,
 }
 
 #[derive(Subcommand)]
@@ -636,6 +645,24 @@ pub async fn run(cli: Cli) -> Result<()> {
             Some(TrainSubcommands::Setup { reinstall }) => train_setup::run(reinstall).await,
             Some(TrainSubcommands::Status { name, watch }) => {
                 train_status::run(name.as_deref(), watch)?;
+                Ok(())
+            }
+            Some(TrainSubcommands::Rm { name }) => {
+                use console::style;
+                crate::core::training::delete_training_run(&name)?;
+                println!("{} Deleted training run '{}'", style("✓").green(), name);
+                Ok(())
+            }
+            Some(TrainSubcommands::Ls) => {
+                let runs = crate::core::training::list_training_runs()?;
+                if runs.is_empty() {
+                    println!("No training runs found.");
+                } else {
+                    for name in &runs {
+                        println!("  {name}");
+                    }
+                    println!("\n{} training run(s)", runs.len());
+                }
                 Ok(())
             }
             None if base.is_none() || lora_type.is_none() => {

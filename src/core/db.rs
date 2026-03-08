@@ -367,6 +367,25 @@ impl Database {
             .context("Failed to collect job results")
     }
 
+    /// Update status for all jobs matching a lora name where current status matches.
+    pub fn update_job_status_by_lora_name(
+        &self,
+        lora_name: &str,
+        from_status: &str,
+        to_status: &str,
+    ) -> Result<usize> {
+        let pattern = format!("job-{lora_name}-%");
+        let now = chrono::Utc::now().to_rfc3339();
+        let updated = self
+            .conn
+            .execute(
+                "UPDATE jobs SET status = ?1, completed_at = ?2 WHERE job_id LIKE ?3 AND status = ?4",
+                params![to_status, now, pattern, from_status],
+            )
+            .context("Failed to update job status by lora name")?;
+        Ok(updated)
+    }
+
     /// Delete all jobs and their events for a given LoRA name
     pub fn delete_jobs_by_lora_name(&self, lora_name: &str) -> Result<()> {
         let pattern = format!("job-{lora_name}-%");

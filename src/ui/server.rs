@@ -105,6 +105,8 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         .route("/api/runs/{name}", get(training::api_get_run))
         .route("/api/runs/{name}/loss", get(training::api_loss_history))
         .route("/api/runs/resume", post(training::api_resume_training))
+        .route("/api/runs/cancel", post(training::api_cancel_training))
+        .route("/api/runs/delete", post(training::api_delete_run))
         .route("/api/status", get(training::api_training_status))
         .route(
             "/api/status/{name}",

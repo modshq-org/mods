@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useRef, useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Play } from 'lucide-react'
+import { Play, Pause, Trash2 } from 'lucide-react'
 import { api, type TrainingRun, type LossPoint } from '../api'
 import { LazyImage } from './LazyImage'
 
@@ -21,6 +21,7 @@ type ProcessConfig = {
   trigger_word?: string
   train?: {
     steps?: number
+    start_step?: number
     lr?: number
     batch_size?: number
     optimizer?: string
@@ -259,11 +260,16 @@ function LossChart({ points }: { points: LossPoint[] }) {
 }
 
 export function TrainingRuns() {
+  const queryClient = useQueryClient()
   const [selectedRun, setSelectedRun] = useState<string | null>(null)
   const [detailsOpenByRun, setDetailsOpenByRun] = useState<Record<string, boolean>>({})
   const [copiedRun, setCopiedRun] = useState<string | null>(null)
   const [lightboxImage, setLightboxImage] = useState<SampleLightboxImage | null>(null)
   const [resuming, setResuming] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const autoSelectedRef = useRef(false)
 
   const {
     data: runs = [],
@@ -278,7 +284,7 @@ export function TrainingRuns() {
   const { data: statusRuns = [] } = useQuery({
     queryKey: ['status'],
     queryFn: api.status,
-    refetchInterval: 3000,
+    refetchInterval: 5000,
   })
 
   const runningNames = useMemo(
@@ -286,17 +292,37 @@ export function TrainingRuns() {
     [statusRuns],
   )
 
+  // Auto-select the running training run on first load
+  useEffect(() => {
+    if (autoSelectedRef.current || runningNames.size === 0 || runs.length === 0) return
+    const runningRun = runs.find((name) => runningNames.has(name))
+    if (runningRun) {
+      setSelectedRun(runningRun)
+      autoSelectedRef.current = true
+    }
+  }, [runningNames, runs])
+
   const currentRun = selectedRun && runs.includes(selectedRun) ? selectedRun : (runs.at(-1) ?? null)
+
+  const isCurrentRunning = runningNames.has(currentRun ?? '')
+
+  // Use the current step from status to trigger run detail refetch when
+  // new samples are likely available (avoids stale grid during training).
+  const currentStatus = statusRuns.find((r) => r.name === currentRun)
+  const statusStep = currentStatus?.current_step ?? 0
 
   const {
     data: runDetail,
     error: detailError,
     isLoading: detailLoading,
   } = useQuery({
-    queryKey: ['run', currentRun],
+    // Include statusStep so the query refetches when progress advances,
+    // even during phase transitions when isCurrentRunning briefly flips.
+    queryKey: ['run', currentRun, isCurrentRunning ? Math.floor(statusStep / 50) : 'idle'],
     queryFn: () => api.run(currentRun as string),
     enabled: Boolean(currentRun),
-    staleTime: 5 * 60_000,
+    staleTime: isCurrentRunning ? 10_000 : 5 * 60_000,
+    refetchInterval: isCurrentRunning ? 15_000 : false,
   })
 
   const { data: lossPoints = [] } = useQuery({
@@ -304,7 +330,7 @@ export function TrainingRuns() {
     queryFn: () => api.lossHistory(currentRun as string),
     enabled: Boolean(currentRun),
     staleTime: 10_000,
-    refetchInterval: runningNames.has(currentRun ?? '') ? 5000 : false,
+    refetchInterval: isCurrentRunning ? 5000 : false,
   })
 
   const detailsOpen = runDetail ? (detailsOpenByRun[runDetail.name] ?? false) : false
@@ -314,10 +340,9 @@ export function TrainingRuns() {
   const baseModelRaw = runDetail?.lineage?.base_model ?? processCfg?.model?.name_or_path
   const baseModelName = displayModelName(baseModelRaw)
   const triggerWord = processCfg?.trigger_word
-  const isRunning = runningNames.has(currentRun ?? '')
+  const isRunning = isCurrentRunning
   const gpuBusy = runningNames.size > 0
   const runStatus = deriveRunStatus(runDetail, isRunning)
-  const currentStatus = statusRuns.find((r) => r.name === currentRun)
   const latestCheckpoint = currentStatus?.latest_checkpoint
   const canResume = !isRunning && latestCheckpoint && runStatus?.label === 'Interrupted'
 
@@ -326,14 +351,28 @@ export function TrainingRuns() {
     return Math.max(samplePrompts.length, inferPromptCount(runDetail.samples))
   }, [runDetail, samplePrompts])
 
-  // Calculate expected total sample columns from config (steps / sample_every)
+  // Calculate expected total sample columns. Both total_steps and sample_every
+  // come from stable sources (DB + actual samples on disk) so they don't flicker
+  // when the config.yaml gets rewritten between training phases.
   const expectedColumns = useMemo(() => {
     if (!runDetail) return 0
-    const totalSteps = processCfg?.train?.steps
-    const sampleEvery = processCfg?.sample?.sample_every
+
+    // Prefer stable values from the backend (DB + samples on disk)
+    const sampleEvery = runDetail.sample_every ?? processCfg?.sample?.sample_every
+    const totalSteps = runDetail.total_steps
+
     if (totalSteps && sampleEvery && sampleEvery > 0) {
       return Math.ceil(totalSteps / sampleEvery)
     }
+
+    // Fallback: derive from current phase config
+    if (sampleEvery && sampleEvery > 0) {
+      const phaseSteps = processCfg?.train?.steps
+      if (phaseSteps && phaseSteps > 0) {
+        return Math.ceil(phaseSteps / sampleEvery)
+      }
+    }
+
     return runDetail.samples.length
   }, [runDetail, processCfg])
 
@@ -469,6 +508,31 @@ export function TrainingRuns() {
                     {runStatus.label}
                   </Badge>
                 ) : null}
+                {isRunning && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2 text-xs border-red-500/50 text-red-400 hover:bg-red-500/10"
+                    disabled={cancelling}
+                    title="Pause training — you can resume later"
+                    onClick={async () => {
+                      setCancelling(true)
+                      try {
+                        await api.cancelTraining(runDetail.name)
+                        void queryClient.invalidateQueries({ queryKey: ['status'] })
+                        void queryClient.invalidateQueries({ queryKey: ['run', currentRun] })
+                      } catch (err) {
+                        console.error('Pause failed:', err)
+                      } finally {
+                        setCancelling(false)
+                      }
+                    }}
+                  >
+                    <Pause className="h-3 w-3" />
+                    {cancelling ? 'Pausing...' : 'Pause'}
+                  </Button>
+                )}
                 {canResume && (
                   <Button
                     type="button"
@@ -491,6 +555,55 @@ export function TrainingRuns() {
                     <Play className="h-3 w-3" />
                     {resuming ? 'Resuming...' : gpuBusy ? 'GPU busy' : 'Resume'}
                   </Button>
+                )}
+                {!isRunning && (
+                  confirmDelete === runDetail.name ? (
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs border-red-500/50 text-red-400 hover:bg-red-500/10"
+                        disabled={deleting}
+                        onClick={async () => {
+                          setDeleting(true)
+                          try {
+                            await api.deleteRun(runDetail.name)
+                            setConfirmDelete(null)
+                            setSelectedRun(null)
+                            void queryClient.invalidateQueries({ queryKey: ['runs'] })
+                          } catch (err) {
+                            console.error('Delete failed:', err)
+                            alert(`Delete failed: ${err instanceof Error ? err.message : err}`)
+                          } finally {
+                            setDeleting(false)
+                          }
+                        }}
+                      >
+                        {deleting ? 'Deleting...' : 'Confirm'}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => setConfirmDelete(null)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-red-400"
+                      title="Delete training run"
+                      onClick={() => setConfirmDelete(runDetail.name)}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  )
                 )}
                 <Button
                   type="button"

@@ -15,6 +15,10 @@ pub struct TrainingRun {
     lora_path: Option<String>,
     lora_size: Option<u64>,
     lineage: Option<TrainingLineage>,
+    /// Original total steps from the job spec (covers all phases).
+    total_steps: Option<u64>,
+    /// Sample interval derived from actual samples on disk (stable across phases).
+    sample_every: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -148,6 +152,22 @@ fn scan_training_run(name: &str) -> anyhow::Result<TrainingRun> {
 
     let lineage = build_lineage(name);
 
+    // total_steps from the job spec covers all phases (the config.yaml on
+    // disk only reflects the current phase).
+    let total_steps = lineage
+        .as_ref()
+        .and_then(|l| l.jobs.first())
+        .and_then(|j| j.steps);
+
+    // Derive sample_every from actual samples on disk — stable across phase
+    // transitions (unlike config.yaml which gets overwritten per phase).
+    // The first non-zero step is always the sample interval.
+    let sample_every = {
+        let mut steps: Vec<u64> = samples.iter().map(|s| s.step).collect();
+        steps.sort();
+        steps.into_iter().find(|&s| s > 0)
+    };
+
     Ok(TrainingRun {
         name: name.to_string(),
         config,
@@ -155,6 +175,8 @@ fn scan_training_run(name: &str) -> anyhow::Result<TrainingRun> {
         lora_path: lora_p,
         lora_size: lora_s,
         lineage,
+        total_steps,
+        sample_every,
     })
 }
 
@@ -225,21 +247,7 @@ fn build_lineage(lora_name: &str) -> Option<TrainingLineage> {
 
 pub async fn api_list_runs() -> impl IntoResponse {
     let runs = tokio::task::spawn_blocking(|| {
-        let output_dir = modl_root().join("training_output");
-        let mut runs = Vec::new();
-
-        if output_dir.exists()
-            && let Ok(entries) = std::fs::read_dir(&output_dir)
-        {
-            for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    runs.push(name);
-                }
-            }
-        }
-        runs.sort();
-        runs
+        crate::core::training::list_training_runs().unwrap_or_default()
     })
     .await
     .unwrap_or_default();
@@ -408,6 +416,147 @@ fn extract_loss(line: &str) -> Option<f64> {
         .next()
         .map(|s| s.trim_end_matches(']').trim_end_matches(','))
         .and_then(|s| s.parse::<f64>().ok())
+}
+
+// ---------------------------------------------------------------------------
+// Cancel training
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct CancelRequest {
+    name: String,
+}
+
+pub async fn api_cancel_training(Json(req): Json<CancelRequest>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || cancel_training_process(&req.name)).await;
+
+    match result {
+        Ok(Ok(killed)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "cancelled": true, "pids_killed": killed })),
+        )
+            .into_response(),
+        Ok(Err(msg)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// Find and kill the training process for a given run name.
+fn cancel_training_process(name: &str) -> Result<usize, String> {
+    let output = std::process::Command::new("ps")
+        .args(["ax", "-o", "pid=,args="])
+        .output()
+        .map_err(|e| format!("Failed to run ps: {e}"))?;
+
+    if !output.status.success() {
+        return Err("ps command failed".to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut killed = 0usize;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.contains("run.py") {
+            continue;
+        }
+
+        // Extract PID (first field) and config path (last .yaml arg)
+        let mut parts = trimmed.splitn(2, char::is_whitespace);
+        let pid_str = match parts.next() {
+            Some(p) => p.trim(),
+            None => continue,
+        };
+        let args = match parts.next() {
+            Some(a) => a.trim(),
+            None => continue,
+        };
+
+        let config_path = args
+            .split_whitespace()
+            .last()
+            .filter(|a| a.ends_with(".yaml") || a.ends_with(".yml"));
+
+        if let Some(path) = config_path
+            && let Ok(contents) = std::fs::read_to_string(path)
+        {
+            let matches = contents.lines().any(|l| {
+                let t = l.trim();
+                t.strip_prefix("name:")
+                    .map(|n| n.trim().trim_matches('"').trim_matches('\'') == name)
+                    .unwrap_or(false)
+                    || t.strip_prefix("training_folder:")
+                        .and_then(|f| {
+                            f.trim()
+                                .trim_matches('"')
+                                .trim_matches('\'')
+                                .rsplit('/')
+                                .next()
+                        })
+                        .is_some_and(|n| n == name)
+            });
+
+            if matches && let Ok(pid) = pid_str.parse::<u32>() {
+                // Kill the process group to ensure child processes are also terminated
+                let _ = std::process::Command::new("kill")
+                    .args(["-TERM", &format!("{pid}")])
+                    .status();
+                killed += 1;
+            }
+        }
+    }
+
+    if killed == 0 {
+        return Err(format!("No running training process found for '{name}'"));
+    }
+
+    // Update DB status to interrupted
+    if let Ok(db) = Database::open() {
+        let _ = db.update_job_status_by_lora_name(name, "running", "interrupted");
+    }
+
+    Ok(killed)
+}
+
+// ---------------------------------------------------------------------------
+// Delete training run
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct DeleteRunRequest {
+    name: String,
+}
+
+pub async fn api_delete_run(Json(req): Json<DeleteRunRequest>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || delete_training_run(&req.name)).await;
+
+    match result {
+        Ok(Ok(())) => {
+            (StatusCode::OK, Json(serde_json::json!({ "deleted": true }))).into_response()
+        }
+        Ok(Err(msg)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+fn delete_training_run(name: &str) -> Result<(), String> {
+    crate::core::training::delete_training_run(name).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------

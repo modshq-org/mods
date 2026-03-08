@@ -183,11 +183,8 @@ def build_train_block(arch_key: str, params: dict, lora_type: str, resume_step: 
 
     # Z-Image Turbo style-specific settings (per Ostris):
     # - Differential guidance (scale=3): overshoots training target to converge faster.
-    # - High-noise timestep bias (linear_timesteps2) should NOT be enabled from step 0.
-    #   Ostris uses a two-phase approach: balanced first (~2000 steps) to learn the
-    #   concept, then switches to high-noise bias to rebuild composition. Starting
-    #   with high noise from step 0 prevents learning entirely.
-    #   TODO: support mid-training timestep scheduling or a "resume with high-noise" flag.
+    # - linear_timesteps2 (high-noise bias) is a two-phase technique — NOT from step 0.
+    #   TODO: support mid-training phase switching for advanced users.
     if is_zimage and is_style:
         train["do_differential_guidance"] = True
         train["differential_guidance_scale"] = 3.0
@@ -215,9 +212,15 @@ def build_sample_block(
     sample_cfg = arch["sample"]
     steps = params.get("steps", 2000)
 
+    # Z-Image Turbo style: sample 5 times during training
+    if arch_key == "zimage_turbo" and lora_type == "style":
+        default_every = max(steps // 5, 50)
+    else:
+        default_every = max(steps // 10, 50)
+
     return {
         "sampler": sample_cfg["sampler"],
-        "sample_every": sample_every_override or max(steps // 5, 50),
+        "sample_every": sample_every_override or default_every,
         "width": resolution,
         "height": resolution,
         "prompts": build_sample_prompts(
@@ -235,11 +238,15 @@ def build_sample_block(
 # Main spec → ai-toolkit config translator
 # ---------------------------------------------------------------------------
 
-def spec_to_aitoolkit_config(spec: dict) -> dict:
+def spec_to_aitoolkit_config(spec: dict, train_overrides: dict | None = None) -> dict:
     """Translate a TrainJobSpec (parsed from YAML) into ai-toolkit's config format.
 
     This is the single place to maintain the mapping between modl spec fields
     and ai-toolkit's expected YAML configuration.
+
+    ``train_overrides`` are merged into the ``train`` block after all other
+    settings — used by the multi-phase orchestrator to inject phase-specific
+    config (e.g. ``linear_timesteps2: true`` for high-noise phase).
     """
     params = spec.get("params", {})
     dataset = spec.get("dataset", {})
@@ -289,10 +296,13 @@ def spec_to_aitoolkit_config(spec: dict) -> dict:
     # Network config
     rank = params.get("rank", 16)
     is_style = lora_type == "style"
+    # alpha = rank for z-image-turbo style (single-phase high denoise needs
+    # stronger signal); alpha = 1 (ai-toolkit default) for everything else.
+    alpha = rank if (arch_key == "zimage_turbo" and is_style) else 1
     network_config = {
         "type": "lora",
         "linear": rank,
-        "linear_alpha": rank,
+        "linear_alpha": alpha,
     }
 
     # Resume from checkpoint
@@ -342,11 +352,11 @@ def spec_to_aitoolkit_config(spec: dict) -> dict:
                     "save": {
                         "dtype": "float16",
                         "save_every": original_save_every or (
-                            max(params.get("steps", 2000) // 5, 500)
+                            max(params.get("steps", 2000) // 10, 500)
                             if is_style
                             else params.get("steps", 2000)
                         ),
-                        "max_step_saves_to_keep": 5 if is_style else 1,
+                        "max_step_saves_to_keep": 10 if is_style else 1,
                     },
                     "datasets": [
                         {
@@ -373,6 +383,10 @@ def spec_to_aitoolkit_config(spec: dict) -> dict:
 
     if params.get("seed") is not None:
         config["config"]["process"][0]["train"]["seed"] = params["seed"]
+
+    # Phase-specific overrides (from training strategy)
+    if train_overrides:
+        config["config"]["process"][0]["train"].update(train_overrides)
 
     return config
 

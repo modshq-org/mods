@@ -74,7 +74,7 @@ ARCH_CONFIGS: dict[str, dict] = {
             # quantize/low_vram set dynamically by config_builder based on VRAM
             # Ostris: "if you have 24 gigs or more, set this to none" — no quantize
             # Without quantize: ~17GB VRAM, much faster iteration
-            "assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors",
+            "assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v1.safetensors",
         },
         "noise_scheduler": "flowmatch",
         "dtype": "bf16",
