@@ -219,9 +219,30 @@ ARCH_CONFIGS: dict[str, dict] = {
         "sample": {"sampler": "flowmatch", "steps": 30, "guidance": 4.0, "neg": ""},
     },
     "chroma": {
-        "pipeline_class": "FluxPipeline",
+        "pipeline_class": "ChromaPipeline",
         "gen_components": {
-            "text_encoder": "z-image-text-encoder",
+            "transformer": {
+                "model_class": "ChromaTransformer2DModel",
+                "config_dir": "chroma-transformer",
+            },
+            "text_encoder": {
+                "model_id": ["t5-xxl-fp8", "t5-xxl-fp16"],
+                "model_class": "T5EncoderModel",
+                "config_dir": "t5-xxl",
+            },
+            "tokenizer": {
+                "model_class": "T5TokenizerFast",
+                "config_dir": "t5-tokenizer",
+            },
+            "vae": {
+                "model_id": "flux-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "chroma-scheduler",
+            },
         },
         "model_flags": {"arch": "chroma", "quantize": True},
         "noise_scheduler": "flowmatch",
@@ -232,7 +253,31 @@ ARCH_CONFIGS: dict[str, dict] = {
         "sample": {"sampler": "flowmatch", "steps": 25, "guidance": 4.0, "neg": ""},
     },
     "qwen_image": {
-        "pipeline_class": "FluxPipeline",
+        "pipeline_class": "QwenImagePipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "QwenImageTransformer2DModel",
+                "config_dir": "qwen-image-transformer",
+            },
+            "text_encoder": {
+                "model_id": "qwen-image-clip",
+                "model_class": "Qwen2_5_VLForConditionalGeneration",
+                "config_dir": "qwen-image-text-encoder",
+            },
+            "tokenizer": {
+                "model_class": "Qwen2Tokenizer",
+                "config_dir": "qwen-image-tokenizer",
+            },
+            "vae": {
+                "model_id": "qwen-image-vae",
+                "model_class": "AutoencoderKLQwenImage",
+                "config_dir": "qwen-image-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "qwen-image-scheduler",
+            },
+        },
         "model_flags": {
             "arch": "qwen_image",
             "quantize": True,

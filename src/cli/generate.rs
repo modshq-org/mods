@@ -446,6 +446,7 @@ async fn execute_generate(
                 "generated_with": "modl.run",
                 "prompt": spec.prompt,
                 "base_model_id": spec.model.base_model_id,
+                "base_model_path": spec.model.base_model_path,
                 "lora_name": spec.lora.as_ref().map(|l| l.name.clone()),
                 "lora_strength": spec.lora.as_ref().map(|l| l.weight),
                 "width": spec.params.width,

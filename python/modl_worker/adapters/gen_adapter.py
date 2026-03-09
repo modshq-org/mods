@@ -150,6 +150,46 @@ def _materialize_meta_tensors(model):
 
 
 
+def _detect_weight_dtype(filepath: str) -> str:
+    """Detect the dominant weight dtype from a safetensors file header.
+
+    Returns a human-readable string like "fp8_e4m3fn", "bf16", "fp16", "fp32".
+    """
+    import struct
+
+    try:
+        with open(filepath, "rb") as f:
+            header_size = struct.unpack("<Q", f.read(8))[0]
+            header_bytes = f.read(min(header_size, 4 * 1024 * 1024))
+            header = json.loads(header_bytes)
+
+        dtype_counts: dict[str, int] = {}
+        for key, info in header.items():
+            if key == "__metadata__":
+                continue
+            dt = info.get("dtype", "")
+            dtype_counts[dt] = dtype_counts.get(dt, 0) + 1
+
+        if not dtype_counts:
+            return "unknown"
+
+        dominant = max(dtype_counts, key=dtype_counts.get)
+        # Map safetensors dtype names to readable names
+        dtype_map = {
+            "F8_E4M3": "fp8_e4m3fn",
+            "BF16": "bf16",
+            "F16": "fp16",
+            "F32": "fp32",
+            "F64": "fp64",
+            "I8": "int8",
+            "I16": "int16",
+            "I32": "int32",
+        }
+        return dtype_map.get(dominant, dominant.lower())
+    except Exception:
+        return "unknown"
+
+
 def assemble_pipeline(
     base_model_id: str,
     base_model_path: str,
@@ -178,6 +218,8 @@ def assemble_pipeline(
 
     PipelineClass = _get_pipeline(cls_name)
     components = {}
+    # Track loaded model files for metadata/visibility
+    loaded_files: dict[str, dict] = {}
 
     for param_name, spec in assembly.items():
         model_class_name = spec["model_class"]
@@ -188,8 +230,19 @@ def assemble_pipeline(
         if param_name == "transformer":
             # Transformer weights come from base_model_path.
             # from_single_file handles ComfyUI→diffusers key conversion.
-            is_fp8 = "fp8" in Path(base_model_path).name.lower()
-            emitter.info(f"Loading transformer from {base_model_path}")
+            weight_dtype = _detect_weight_dtype(base_model_path)
+            is_fp8 = weight_dtype.startswith("fp8")
+            filename = Path(base_model_path).name
+            emitter.info(
+                f"Loading transformer: {filename} (weights={weight_dtype})"
+            )
+            loaded_files["transformer"] = {
+                "file": filename,
+                "path": base_model_path,
+                "weight_dtype": weight_dtype,
+                "class": model_class_name,
+            }
+
             # Always load in bf16 first. For fp8 files, from_single_file
             # upcasts to bf16 during key conversion.
             model = ModelClass.from_single_file(
@@ -204,18 +257,29 @@ def assemble_pipeline(
                     storage_dtype=torch.float8_e4m3fn,
                     compute_dtype=torch.bfloat16,
                 )
+                emitter.info(
+                    f"  → fp8 layerwise casting enabled (storage=fp8, compute=bf16)"
+                )
             components["transformer"] = model
 
         elif param_name in ("scheduler",):
-            emitter.info(f"Loading {param_name} from config")
             components[param_name] = ModelClass.from_pretrained(str(config_dir))
 
         elif param_name.startswith("tokenizer"):
-            emitter.info(f"Loading {param_name} from config")
             components[param_name] = ModelClass.from_pretrained(str(config_dir))
 
         elif resolved_path:
-            emitter.info(f"Loading {param_name} from {resolved_path}")
+            weight_dtype = _detect_weight_dtype(resolved_path)
+            filename = Path(resolved_path).name
+            emitter.info(
+                f"Loading {param_name}: {filename} (weights={weight_dtype})"
+            )
+            loaded_files[param_name] = {
+                "file": filename,
+                "path": resolved_path,
+                "weight_dtype": weight_dtype,
+                "class": model_class_name,
+            }
 
             if hasattr(ModelClass, "from_single_file"):
                 # Diffusers models (VAE) — from_single_file handles memory
@@ -243,6 +307,8 @@ def assemble_pipeline(
     emitter.info(f"Assembling {cls_name} from {len(components)} components")
     pipe = PipelineClass(**components)
     pipe.enable_model_cpu_offload()
+    # Attach loaded file info for downstream metadata embedding
+    pipe._modl_loaded_files = loaded_files
     return pipe
 
 
@@ -282,11 +348,18 @@ def load_pipeline(
             model_source,
             torch_dtype=torch.bfloat16,
         )
+        emitter.info(f"Loaded from directory: {model_source}")
     elif fmt == "full_checkpoint":
+        weight_dtype = _detect_weight_dtype(model_source)
+        filename = Path(model_source).name
+        emitter.info(f"Loading checkpoint: {filename} (weights={weight_dtype})")
         pipe = PipelineClass.from_single_file(
             model_source,
             torch_dtype=torch.bfloat16,
         )
+        pipe._modl_loaded_files = {
+            "checkpoint": {"file": filename, "path": model_source, "weight_dtype": weight_dtype},
+        }
     elif fmt == "transformer_only":
         # Assemble pipeline from locally installed components
         assembly = resolve_gen_assembly(base_model_id)
@@ -548,6 +621,15 @@ def run_generate_with_pipeline(
             try:
                 from PIL.PngImagePlugin import PngInfo
 
+                # Collect model file info if available (from assemble_pipeline)
+                model_files = {}
+                if hasattr(pipe, "_modl_loaded_files"):
+                    for comp, info in pipe._modl_loaded_files.items():
+                        model_files[comp] = {
+                            "file": info["file"],
+                            "dtype": info["weight_dtype"],
+                        }
+
                 embedded_meta = {
                     "generated_with": "modl.run",
                     "prompt": prompt,
@@ -562,6 +644,7 @@ def run_generate_with_pipeline(
                     "image_index": i,
                     "count": count,
                     "timestamp": timestamp,
+                    "model_files": model_files or None,
                 }
                 pnginfo = PngInfo()
                 pnginfo.add_text("Software", "modl.run")
