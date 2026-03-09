@@ -77,11 +77,15 @@ fn default_steps(base_model: &str) -> u32 {
     let lower = base_model.to_lowercase();
     if lower.contains("z-image-turbo") || lower.contains("z_image_turbo") {
         8
-    } else if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
+    } else if lower.contains("klein") || lower.contains("schnell") || lower.contains("lightning") {
         4
-    } else if lower.contains("chroma") {
+    } else if lower.contains("flux2") || lower.contains("flux.2") || lower.contains("flux-2") {
+        28
+    } else if lower.contains("chroma") || lower.contains("qwen") {
         25
-    } else if lower.contains("sdxl") {
+    } else if lower.contains("turbo") {
+        4
+    } else if lower.contains("sdxl") || lower.contains("sd-1.5") || lower.contains("sd15") {
         30
     } else {
         28
@@ -91,14 +95,24 @@ fn default_steps(base_model: &str) -> u32 {
 /// Default guidance scale based on model type.
 fn default_guidance(base_model: &str) -> f32 {
     let lower = base_model.to_lowercase();
-    if lower.contains("z-image-turbo") || lower.contains("z_image_turbo") {
+    if lower.contains("z-image-turbo")
+        || lower.contains("z_image_turbo")
+        || lower.contains("klein")
+        || lower.contains("schnell")
+        || lower.contains("turbo")
+        || lower.contains("lightning")
+    {
         1.0
-    } else if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
-        0.0
-    } else if lower.contains("chroma") {
+    } else if lower.contains("flux2")
+        || lower.contains("flux.2")
+        || lower.contains("flux-2")
+        || lower.contains("chroma")
+    {
         4.0
     } else if lower.contains("sdxl") {
         7.5
+    } else if lower.contains("qwen") {
+        3.0
     } else {
         3.5
     }
@@ -446,6 +460,7 @@ async fn execute_generate(
                 "generated_with": "modl.run",
                 "prompt": spec.prompt,
                 "base_model_id": spec.model.base_model_id,
+                "base_model_path": spec.model.base_model_path,
                 "lora_name": spec.lora.as_ref().map(|l| l.name.clone()),
                 "lora_strength": spec.lora.as_ref().map(|l| l.weight),
                 "width": spec.params.width,

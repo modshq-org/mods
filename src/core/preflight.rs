@@ -56,7 +56,7 @@ pub fn check_base_model(base_model_id: &str) -> Result<()> {
 /// download time since not all Civitai models require auth.
 pub fn check_auth_if_gated(base_model_id: &str) -> Result<()> {
     // Models known to be gated on HuggingFace
-    const GATED_MODELS: &[&str] = &["flux-dev", "sd-3.5-large", "sd-3.5-medium"];
+    const GATED_MODELS: &[&str] = &["flux-dev", "flux2-dev", "sd-3.5-large", "sd-3.5-medium"];
 
     if !GATED_MODELS.contains(&base_model_id) {
         return Ok(());
@@ -104,7 +104,14 @@ pub fn check_dependencies(base_model_id: &str) -> Result<()> {
     let mut missing = Vec::new();
 
     for dep in &manifest.requires {
-        if !db.is_installed(&dep.id)? {
+        let installed = db.is_installed(&dep.id)?
+            || dep
+                .optional_variant
+                .as_deref()
+                .map(|v| db.is_installed(v))
+                .transpose()?
+                .unwrap_or(false);
+        if !installed {
             let reason = dep.reason.as_deref().unwrap_or("");
             missing.push(format!("  - {} ({}): {}", dep.id, dep.dep_type, reason));
         }

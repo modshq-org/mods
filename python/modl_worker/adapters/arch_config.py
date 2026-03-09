@@ -43,6 +43,39 @@ ARCH_CONFIGS: dict[str, dict] = {
         "pipeline_class": "FluxPipeline",
         "img2img_class": "FluxImg2ImgPipeline",
         "inpaint_class": "FluxInpaintPipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "FluxTransformer2DModel",
+                "config_dir": "flux-dev-transformer",
+            },
+            "text_encoder": {
+                "model_id": "clip-l",
+                "model_class": "CLIPTextModel",
+                "config_dir": "clip-l",
+            },
+            "tokenizer": {
+                "model_class": "CLIPTokenizer",
+                "config_dir": "clip-tokenizer",
+            },
+            "text_encoder_2": {
+                "model_id": ["t5-xxl-fp8", "t5-xxl-fp16"],
+                "model_class": "T5EncoderModel",
+                "config_dir": "t5-xxl",
+            },
+            "tokenizer_2": {
+                "model_class": "T5TokenizerFast",
+                "config_dir": "t5-tokenizer",
+            },
+            "vae": {
+                "model_id": "flux-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "flux-dev-scheduler",
+            },
+        },
         "model_flags": {"is_flux": True, "quantize": True},
         "noise_scheduler": "flowmatch",
         "dtype": "bf16",
@@ -55,6 +88,39 @@ ARCH_CONFIGS: dict[str, dict] = {
         "pipeline_class": "FluxPipeline",
         "img2img_class": "FluxImg2ImgPipeline",
         "inpaint_class": "FluxInpaintPipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "FluxTransformer2DModel",
+                "config_dir": "flux-schnell-transformer",
+            },
+            "text_encoder": {
+                "model_id": "clip-l",
+                "model_class": "CLIPTextModel",
+                "config_dir": "clip-l",
+            },
+            "tokenizer": {
+                "model_class": "CLIPTokenizer",
+                "config_dir": "clip-tokenizer",
+            },
+            "text_encoder_2": {
+                "model_id": ["t5-xxl-fp8", "t5-xxl-fp16"],
+                "model_class": "T5EncoderModel",
+                "config_dir": "t5-xxl",
+            },
+            "tokenizer_2": {
+                "model_class": "T5TokenizerFast",
+                "config_dir": "t5-tokenizer",
+            },
+            "vae": {
+                "model_id": "flux-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "flux-schnell-scheduler",
+            },
+        },
         "model_flags": {
             "is_flux": True,
             "quantize": True,
@@ -67,11 +133,137 @@ ARCH_CONFIGS: dict[str, dict] = {
         "default_resolution": 1024,
         "sample": {"sampler": "flowmatch", "steps": 4, "guidance": 1.0, "neg": ""},
     },
+    "flux2": {
+        "pipeline_class": "Flux2Pipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "Flux2Transformer2DModel",
+                "config_dir": "flux2-dev-transformer",
+            },
+            "text_encoder": {
+                "model_id": "flux2-mistral-text-encoder",
+                "model_class": "Mistral3ForConditionalGeneration",
+                "config_dir": "flux2-text-encoder",
+                "quantize_nf4": True,
+                "hf_dir": True,
+            },
+            "tokenizer": {
+                "model_class": "AutoProcessor",
+                "config_dir": "flux2-processor",
+            },
+            "vae": {
+                "model_id": "flux2-vae",
+                "model_class": "AutoencoderKLFlux2",
+                "config_dir": "flux2-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "flux2-dev-scheduler",
+            },
+        },
+        "model_flags": {"is_flux": True, "quantize": True},
+        "noise_scheduler": "flowmatch",
+        "dtype": "bf16",
+        "train_text_encoder": False,
+        "resolutions": [512, 768, 1024],
+        "default_resolution": 1024,
+        "sample": {"sampler": "flowmatch", "steps": 28, "guidance": 4.0, "neg": ""},
+    },
+    "flux2_klein": {
+        "pipeline_class": "Flux2KleinPipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "Flux2Transformer2DModel",
+                "config_dir": "flux2-klein-4b-transformer",
+            },
+            "text_encoder": {
+                "model_id": "flux2-qwen3-4b-text-encoder",
+                "model_class": "Qwen3ForCausalLM",
+                "config_dir": "qwen3-4b",
+            },
+            "tokenizer": {
+                "model_class": "AutoTokenizer",
+                "config_dir": "qwen3-tokenizer",
+            },
+            "vae": {
+                "model_id": "flux2-vae",
+                "model_class": "AutoencoderKLFlux2",
+                "config_dir": "flux2-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "flux2-klein-scheduler",
+            },
+        },
+        "pipeline_kwargs": {"is_distilled": True},
+        "model_flags": {"is_flux": True},
+        "noise_scheduler": "flowmatch",
+        "dtype": "bf16",
+        "train_text_encoder": False,
+        "resolutions": [512, 768, 1024],
+        "default_resolution": 1024,
+        "sample": {"sampler": "flowmatch", "steps": 4, "guidance": 1.0, "neg": ""},
+    },
+    "flux2_klein_9b": {
+        "pipeline_class": "Flux2KleinPipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "Flux2Transformer2DModel",
+                "config_dir": "flux2-klein-9b-transformer",
+            },
+            "text_encoder": {
+                "model_id": "flux2-qwen3-8b-text-encoder",
+                "model_class": "Qwen3ForCausalLM",
+                "config_dir": "qwen3-8b",
+            },
+            "tokenizer": {
+                "model_class": "AutoTokenizer",
+                "config_dir": "qwen3-tokenizer",
+            },
+            "vae": {
+                "model_id": "flux2-vae",
+                "model_class": "AutoencoderKLFlux2",
+                "config_dir": "flux2-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "flux2-klein-scheduler",
+            },
+        },
+        "pipeline_kwargs": {"is_distilled": True},
+        "model_flags": {"is_flux": True},
+        "noise_scheduler": "flowmatch",
+        "dtype": "bf16",
+        "train_text_encoder": False,
+        "resolutions": [512, 768, 1024],
+        "default_resolution": 1024,
+        "sample": {"sampler": "flowmatch", "steps": 4, "guidance": 1.0, "neg": ""},
+    },
     "zimage_turbo": {
         "pipeline_class": "ZImagePipeline",
         "gen_components": {
-            "text_encoder": "z-image-text-encoder",
-            "vae": "z-image-vae",
+            "transformer": {
+                "model_class": "ZImageTransformer2DModel",
+                "config_dir": "zimage-turbo-transformer",
+            },
+            "text_encoder": {
+                "model_id": "z-image-text-encoder",
+                "model_class": "Qwen3ForCausalLM",
+                "config_dir": "qwen3-4b",
+            },
+            "tokenizer": {
+                "model_class": "AutoTokenizer",
+                "config_dir": "qwen3-tokenizer",
+            },
+            "vae": {
+                "model_id": "z-image-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "zimage-scheduler",
+            },
         },
         "model_flags": {
             "arch": "zimage",
@@ -95,8 +287,28 @@ ARCH_CONFIGS: dict[str, dict] = {
     "zimage": {
         "pipeline_class": "ZImagePipeline",
         "gen_components": {
-            "text_encoder": "z-image-text-encoder",
-            "vae": "z-image-vae",
+            "transformer": {
+                "model_class": "ZImageTransformer2DModel",
+                "config_dir": "zimage-transformer",
+            },
+            "text_encoder": {
+                "model_id": "z-image-text-encoder",
+                "model_class": "Qwen3ForCausalLM",
+                "config_dir": "qwen3-4b",
+            },
+            "tokenizer": {
+                "model_class": "AutoTokenizer",
+                "config_dir": "qwen3-tokenizer",
+            },
+            "vae": {
+                "model_id": "z-image-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "zimage-scheduler",
+            },
         },
         "model_flags": {
             "arch": "zimage",
@@ -113,9 +325,30 @@ ARCH_CONFIGS: dict[str, dict] = {
         "sample": {"sampler": "flowmatch", "steps": 30, "guidance": 4.0, "neg": ""},
     },
     "chroma": {
-        "pipeline_class": "FluxPipeline",
+        "pipeline_class": "ChromaPipeline",
         "gen_components": {
-            "text_encoder": "z-image-text-encoder",
+            "transformer": {
+                "model_class": "ChromaTransformer2DModel",
+                "config_dir": "chroma-transformer",
+            },
+            "text_encoder": {
+                "model_id": ["t5-xxl-fp8", "t5-xxl-fp16"],
+                "model_class": "T5EncoderModel",
+                "config_dir": "t5-xxl",
+            },
+            "tokenizer": {
+                "model_class": "T5TokenizerFast",
+                "config_dir": "t5-tokenizer",
+            },
+            "vae": {
+                "model_id": "flux-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "chroma-scheduler",
+            },
         },
         "model_flags": {"arch": "chroma", "quantize": True},
         "noise_scheduler": "flowmatch",
@@ -126,7 +359,31 @@ ARCH_CONFIGS: dict[str, dict] = {
         "sample": {"sampler": "flowmatch", "steps": 25, "guidance": 4.0, "neg": ""},
     },
     "qwen_image": {
-        "pipeline_class": "FluxPipeline",
+        "pipeline_class": "QwenImagePipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "QwenImageTransformer2DModel",
+                "config_dir": "qwen-image-transformer",
+            },
+            "text_encoder": {
+                "model_id": "qwen-image-clip",
+                "model_class": "Qwen2_5_VLForConditionalGeneration",
+                "config_dir": "qwen-image-text-encoder",
+            },
+            "tokenizer": {
+                "model_class": "AutoTokenizer",
+                "config_dir": "qwen-image-tokenizer",
+            },
+            "vae": {
+                "model_id": "qwen-image-vae",
+                "model_class": "AutoencoderKLQwenImage",
+                "config_dir": "qwen-image-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "qwen-image-scheduler",
+            },
+        },
         "model_flags": {
             "arch": "qwen_image",
             "quantize": True,
@@ -178,6 +435,9 @@ ARCH_CONFIGS: dict[str, dict] = {
 # -----------------------------------------------------------------------
 
 MODEL_REGISTRY: dict[str, tuple[str, str]] = {
+    "flux2-dev":      ("flux2",         "black-forest-labs/FLUX.2-dev"),
+    "flux2-klein-4b": ("flux2_klein",   "black-forest-labs/FLUX.2-klein-4b-fp8"),
+    "flux2-klein-9b": ("flux2_klein_9b", "black-forest-labs/FLUX.2-klein-9b-fp8"),
     "flux-dev":       ("flux",          "black-forest-labs/FLUX.1-dev"),
     "flux-schnell":   ("flux_schnell",  "black-forest-labs/FLUX.1-schnell"),
     "z-image-turbo":  ("zimage_turbo",  "Tongyi-MAI/Z-Image-Turbo"),
@@ -216,6 +476,12 @@ def detect_arch(base_model_id: str) -> str:
         return "chroma"
     if "flux" in bid and "schnell" in bid:
         return "flux_schnell"
+    if "klein" in bid and ("flux2" in bid or "flux.2" in bid or "flux-2" in bid):
+        if "9b" in bid:
+            return "flux2_klein_9b"
+        return "flux2_klein"
+    if "flux" in bid and ("2" in bid or "flux.2" in bid or "flux2" in bid):
+        return "flux2"
     if "flux" in bid:
         return "flux"
     if "sdxl" in bid or "xl" in bid:
@@ -293,8 +559,11 @@ def resolve_gen_components(base_model_id: str) -> dict[str, str]:
     """Resolve component paths (text_encoder, vae) for generation.
 
     Returns a dict like {"text_encoder": "/path/to/qwen3.safetensors", "vae": ...}
-    for models that require separate component loading (z-image, chroma, etc.).
+    for models that require separate component loading.
     Returns empty dict if no components needed or not found.
+
+    Handles both old simple format ({"text_encoder": "clip-l"}) and
+    new richer format ({"text_encoder": {"model_id": "clip-l", ...}}).
     """
     arch = detect_arch(base_model_id)
     config = ARCH_CONFIGS.get(arch, {})
@@ -303,11 +572,57 @@ def resolve_gen_components(base_model_id: str) -> dict[str, str]:
         return {}
 
     resolved = {}
-    for component_type, model_id in gen_components.items():
-        path = _get_installed_path(model_id)
-        if path:
-            resolved[component_type] = path
+    for component_type, spec in gen_components.items():
+        # New richer format: spec is a dict with model_id, model_class, config_dir
+        if isinstance(spec, dict):
+            model_ids = spec.get("model_id")
+            if model_ids is None:
+                continue  # transformer or config-only component
+            if isinstance(model_ids, str):
+                model_ids = [model_ids]
+        else:
+            # Old simple format: spec is a string or list of strings
+            model_ids = [spec] if isinstance(spec, str) else spec
+
+        for model_id in model_ids:
+            path = _get_installed_path(model_id)
+            if path:
+                resolved[component_type] = path
+                break
     return resolved
+
+
+def resolve_gen_assembly(base_model_id: str) -> dict[str, dict] | None:
+    """Return the full assembly spec for a model, or None if not available.
+
+    Returns the gen_components dict with model_class, config_dir, and resolved
+    model paths for each component. Used by assemble_pipeline() in gen_adapter.
+    """
+    arch = detect_arch(base_model_id)
+    config = ARCH_CONFIGS.get(arch, {})
+    gen_components = config.get("gen_components", {})
+    if not gen_components:
+        return None
+
+    # Only works with the new richer format (dicts with model_class)
+    first_val = next(iter(gen_components.values()))
+    if not isinstance(first_val, dict):
+        return None
+
+    assembly = {}
+    for component_type, spec in gen_components.items():
+        entry = dict(spec)  # copy
+        model_ids = spec.get("model_id")
+        if model_ids is not None:
+            if isinstance(model_ids, str):
+                model_ids = [model_ids]
+            for mid in model_ids:
+                path = _get_installed_path(mid)
+                if path:
+                    entry["resolved_path"] = path
+                    break
+        assembly[component_type] = entry
+    return assembly
 
 
 def resolve_qwen_qtype(lora_type: str) -> str:

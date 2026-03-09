@@ -70,33 +70,62 @@ pub async fn download_file(
 
         let response = request.send().await.context("Failed to send request")?;
 
-        // Handle HuggingFace-style redirects: the initial response is a 302 to a
-        // pre-signed CDN URL. The CDN URL already contains auth in query params,
-        // so we follow it without the Authorization header.
-        let response = if response.status().is_redirection() {
-            let redirect_url = response
-                .headers()
-                .get("location")
-                .context("Redirect response missing Location header")?
-                .to_str()
-                .context("Invalid Location header")?
-                .to_string();
+        // Handle redirects manually. We disabled automatic redirects so we can
+        // strip the Authorization header on cross-origin hops (HuggingFace CDN
+        // URLs contain auth in query params and reject extra Bearer tokens).
+        //
+        // HuggingFace may return multiple redirect hops:
+        //   1. Repo rename redirect (307, relative URL like /NewOrg/new-repo/...)
+        //   2. CDN redirect (302, absolute pre-signed URL)
+        //
+        // We follow up to 5 hops, resolving relative URLs against the origin.
+        let response = {
+            let mut resp = response;
+            let mut hops = 0;
+            while resp.status().is_redirection() && hops < 5 {
+                let location = resp
+                    .headers()
+                    .get("location")
+                    .context("Redirect response missing Location header")?
+                    .to_str()
+                    .context("Invalid Location header")?
+                    .to_string();
 
-            let mut redirect_req = client.get(&redirect_url);
+                // Resolve relative URLs (starting with /) against the original origin.
+                let resolved = if location.starts_with('/') {
+                    // Extract origin (scheme + host) from the original URL.
+                    match url.find("://") {
+                        Some(scheme_end) => {
+                            let after_scheme = &url[scheme_end + 3..];
+                            let host_end = after_scheme.find('/').unwrap_or(after_scheme.len());
+                            format!("{}{}", &url[..scheme_end + 3 + host_end], location)
+                        }
+                        None => location.clone(),
+                    }
+                } else {
+                    location
+                };
 
-            if start_byte > 0 {
-                redirect_req = redirect_req.header("Range", format!("bytes={}-", start_byte));
+                let mut redirect_req = client.get(&resolved);
+                if start_byte > 0 {
+                    redirect_req = redirect_req.header("Range", format!("bytes={}-", start_byte));
+                }
+                resp = redirect_req
+                    .send()
+                    .await
+                    .context("Failed to follow redirect")?;
+                hops += 1;
             }
-
-            redirect_req
-                .send()
-                .await
-                .context("Failed to follow redirect")?
-        } else {
-            response
+            resp
         };
 
         if !response.status().is_success() && response.status().as_u16() != 206 {
+            if response.status().as_u16() == 403 && url.contains("huggingface.co") {
+                anyhow::bail!(
+                    "Access denied (HTTP 403). This model may require accepting license terms.\n  \
+                     Visit the model page on huggingface.co and accept the terms, then retry."
+                );
+            }
             anyhow::bail!("Download failed: HTTP {} for {}", response.status(), url);
         }
 
