@@ -20,7 +20,11 @@ from modl_worker.adapters.arch_config import (
     resolve_pipeline_class_for_mode,
     resolve_gen_defaults,
     resolve_gen_components,
+    resolve_gen_assembly,
 )
+
+# Bundled config files directory
+CONFIGS_DIR = Path(__file__).parent.parent / "configs"
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +44,213 @@ def _get_pipeline(cls_name: str):
     return getattr(diffusers, cls_name)
 
 
+# ---------------------------------------------------------------------------
+# Model format detection
+# ---------------------------------------------------------------------------
+
+
+def detect_model_format(model_source: str) -> str:
+    """Detect the format of a model source path.
+
+    Returns one of:
+        "hf_directory"      — directory with model_index.json
+        "full_checkpoint"   — single safetensors with UNet+VAE+TE keys
+        "gguf"              — GGUF quantized model
+        "transformer_only"  — safetensors with only transformer keys
+        "hf_repo"           — HuggingFace repo identifier
+    """
+    import struct
+
+    # Directory with model_index.json = HF pretrained layout
+    if os.path.isdir(model_source):
+        if os.path.exists(os.path.join(model_source, "model_index.json")):
+            return "hf_directory"
+        return "hf_directory"  # assume any dir is HF layout
+
+    # GGUF file
+    if model_source.endswith(".gguf"):
+        return "gguf"
+
+    # Safetensors — peek at header to detect full checkpoint vs transformer-only
+    if model_source.endswith(".safetensors") and os.path.exists(model_source):
+        try:
+            with open(model_source, "rb") as f:
+                header_size = struct.unpack("<Q", f.read(8))[0]
+                # Read header JSON (cap at 4MB to avoid reading weight data)
+                header_bytes = f.read(min(header_size, 4 * 1024 * 1024))
+                import json as _json
+                header = _json.loads(header_bytes)
+
+            keys = set(header.keys()) - {"__metadata__"}
+            # Sample a few keys to determine format
+            sample_keys = list(keys)[:50]
+            key_str = " ".join(sample_keys)
+
+            # Full checkpoint indicators (SD/SDXL format)
+            full_ckpt_prefixes = [
+                "conditioner.", "first_stage_model.", "model.diffusion_model.",
+                "cond_stage_model.",
+            ]
+            if any(p in key_str for p in full_ckpt_prefixes):
+                return "full_checkpoint"
+
+            # If we got here with safetensors keys, it's transformer-only
+            return "transformer_only"
+        except Exception:
+            return "transformer_only"  # assume transformer-only if header read fails
+
+    # Not a local file — treat as HF repo identifier
+    return "hf_repo"
+
+
+# ---------------------------------------------------------------------------
+# Pipeline assembly from local components
+# ---------------------------------------------------------------------------
+
+
+def _import_class(class_name: str):
+    """Import a class from diffusers or transformers."""
+    import importlib
+    for mod in ["diffusers", "transformers"]:
+        try:
+            module = importlib.import_module(mod)
+            cls = getattr(module, class_name, None)
+            if cls is not None:
+                return cls
+        except ImportError:
+            continue
+    raise ImportError(f"Cannot find class {class_name} in diffusers or transformers")
+
+
+def _materialize_meta_tensors(model):
+    """Replace any remaining meta tensors with zeros on CPU.
+
+    After init_empty_weights() + load_state_dict(assign=True), some
+    buffers (e.g. position_ids) may remain on the meta device because
+    they weren't in the state dict.  This materializes them so the
+    model can be moved to a real device.
+    """
+    import torch
+
+    for module in model.modules():
+        for name in list(module._parameters.keys()):
+            p = module._parameters[name]
+            if p is not None and p.device == torch.device("meta"):
+                module._parameters[name] = torch.nn.Parameter(
+                    torch.zeros(p.shape, dtype=p.dtype, device="cpu"),
+                    requires_grad=p.requires_grad,
+                )
+        for name in list(module._buffers.keys()):
+            b = module._buffers[name]
+            if b is not None and b.device == torch.device("meta"):
+                module._buffers[name] = torch.zeros(
+                    b.shape, dtype=b.dtype, device="cpu"
+                )
+
+
+
+
+def assemble_pipeline(
+    base_model_id: str,
+    base_model_path: str,
+    cls_name: str,
+    emitter: EventEmitter,
+):
+    """Assemble a pipeline from locally installed components.
+
+    Uses bundled config files + model weights from the modl store.
+    This is the core of the strategy pattern — each component is loaded
+    individually and then composed into a pipeline.
+
+    Uses accelerate's init_empty_weights() to avoid allocating full fp32
+    models in RAM before loading the actual weights (which may be fp8/bf16).
+    """
+    import torch
+    import safetensors.torch
+    from accelerate import init_empty_weights
+
+    assembly = resolve_gen_assembly(base_model_id)
+    if not assembly:
+        raise RuntimeError(
+            f"No assembly spec for {base_model_id}. "
+            f"Cannot load transformer-only file without component configs."
+        )
+
+    PipelineClass = _get_pipeline(cls_name)
+    components = {}
+
+    for param_name, spec in assembly.items():
+        model_class_name = spec["model_class"]
+        config_dir = CONFIGS_DIR / spec["config_dir"]
+        resolved_path = spec.get("resolved_path")
+        ModelClass = _import_class(model_class_name)
+
+        if param_name == "transformer":
+            # Transformer weights come from base_model_path.
+            # from_single_file handles ComfyUI→diffusers key conversion.
+            is_fp8 = "fp8" in Path(base_model_path).name.lower()
+            emitter.info(f"Loading transformer from {base_model_path}")
+            # Always load in bf16 first. For fp8 files, from_single_file
+            # upcasts to bf16 during key conversion.
+            model = ModelClass.from_single_file(
+                base_model_path, config=str(config_dir), torch_dtype=torch.bfloat16,
+            )
+            if is_fp8:
+                # Use diffusers' built-in layerwise casting: casts weights
+                # down to fp8 for storage (~12GB vs 24GB) but upcasts to
+                # bf16 during forward passes. Automatically keeps norms
+                # and embeddings in bf16 for numerical stability.
+                model.enable_layerwise_casting(
+                    storage_dtype=torch.float8_e4m3fn,
+                    compute_dtype=torch.bfloat16,
+                )
+            components["transformer"] = model
+
+        elif param_name in ("scheduler",):
+            emitter.info(f"Loading {param_name} from config")
+            components[param_name] = ModelClass.from_pretrained(str(config_dir))
+
+        elif param_name.startswith("tokenizer"):
+            emitter.info(f"Loading {param_name} from config")
+            components[param_name] = ModelClass.from_pretrained(str(config_dir))
+
+        elif resolved_path:
+            emitter.info(f"Loading {param_name} from {resolved_path}")
+
+            if hasattr(ModelClass, "from_single_file"):
+                # Diffusers models (VAE) — from_single_file handles memory
+                components[param_name] = ModelClass.from_single_file(
+                    resolved_path,
+                    config=str(config_dir),
+                    torch_dtype=torch.bfloat16,
+                )
+            else:
+                # Transformers models (CLIP, T5) — use empty weights to
+                # avoid ~44GB fp32 allocation for large models like T5-XXL
+                config_obj = ModelClass.config_class.from_pretrained(str(config_dir))
+                with init_empty_weights():
+                    model = ModelClass(config_obj)
+                state_dict = safetensors.torch.load_file(resolved_path)
+                model.load_state_dict(state_dict, strict=False, assign=True)
+                _materialize_meta_tensors(model)
+                # Always cast text encoders to bf16 for numerical stability.
+                # fp8 text encoders produce unreliable embeddings.
+                model = model.to(torch.bfloat16)
+                components[param_name] = model
+        else:
+            emitter.info(f"Skipping {param_name} (no weights found)")
+
+    emitter.info(f"Assembling {cls_name} from {len(components)} components")
+    pipe = PipelineClass(**components)
+    pipe.enable_model_cpu_offload()
+    return pipe
+
+
+# ---------------------------------------------------------------------------
+# Main pipeline loader (strategy dispatch)
+# ---------------------------------------------------------------------------
+
+
 def load_pipeline(
     base_model_id: str,
     base_model_path: str | None,
@@ -51,38 +262,55 @@ def load_pipeline(
     This is the single loading path used by both one-shot mode
     (``run_generate()``) and the persistent worker (``ModelCache``).
 
-    Args:
-        base_model_id: modl model ID (e.g. "flux-dev")
-        base_model_path: Local store path to .safetensors, or None
-        cls_name: Pipeline class name (e.g. "FluxPipeline")
-        emitter: EventEmitter for progress/log messages
-
-    Returns:
-        A loaded diffusers pipeline on CUDA.
+    Strategy:
+        1. HF directory layout  → from_pretrained(dir)
+        2. Full checkpoint       → from_single_file(path)
+        3. Transformer-only      → assemble from local components
+        4. GGUF                  → assemble with GGUFQuantizationConfig
+        5. HF repo identifier    → from_pretrained(repo_id)
     """
     import torch
 
     PipelineClass = _get_pipeline(cls_name)
     model_source = base_model_path or resolve_model_path(base_model_id)
+    fmt = detect_model_format(model_source)
 
-    # Models with separate components (e.g. z-image-turbo with Qwen3 text
-    # encoder) need from_pretrained with the full HF repo — from_single_file
-    # can't discover configs for non-standard text encoders.
-    components = resolve_gen_components(base_model_id)
+    emitter.info(f"Model source: {model_source} (format={fmt})")
 
-    if components and model_source.endswith(".safetensors"):
-        hf_repo = resolve_model_path(base_model_id)
-        emitter.info(f"Loading from HF repo {hf_repo} (model has separate components)")
+    if fmt == "hf_directory":
         pipe = PipelineClass.from_pretrained(
-            hf_repo,
+            model_source,
             torch_dtype=torch.bfloat16,
         )
-    elif model_source.endswith(".safetensors"):
+    elif fmt == "full_checkpoint":
         pipe = PipelineClass.from_single_file(
             model_source,
             torch_dtype=torch.bfloat16,
         )
+    elif fmt == "transformer_only":
+        # Assemble pipeline from locally installed components
+        assembly = resolve_gen_assembly(base_model_id)
+        if assembly:
+            return assemble_pipeline(base_model_id, model_source, cls_name, emitter)
+        else:
+            # Fallback: try from_pretrained with HF repo
+            hf_repo = resolve_model_path(base_model_id)
+            emitter.info(f"No assembly spec, falling back to HF: {hf_repo}")
+            pipe = PipelineClass.from_pretrained(
+                hf_repo,
+                torch_dtype=torch.bfloat16,
+            )
+    elif fmt == "gguf":
+        # GGUF models need assembly with quantization config
+        assembly = resolve_gen_assembly(base_model_id)
+        if assembly:
+            return assemble_pipeline(base_model_id, model_source, cls_name, emitter)
+        else:
+            raise RuntimeError(
+                f"GGUF model {model_source} requires assembly spec in arch_config"
+            )
     else:
+        # HF repo identifier
         pipe = PipelineClass.from_pretrained(
             model_source,
             torch_dtype=torch.bfloat16,

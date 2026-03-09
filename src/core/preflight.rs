@@ -104,7 +104,14 @@ pub fn check_dependencies(base_model_id: &str) -> Result<()> {
     let mut missing = Vec::new();
 
     for dep in &manifest.requires {
-        if !db.is_installed(&dep.id)? {
+        let installed = db.is_installed(&dep.id)?
+            || dep
+                .optional_variant
+                .as_deref()
+                .map(|v| db.is_installed(v))
+                .transpose()?
+                .unwrap_or(false);
+        if !installed {
             let reason = dep.reason.as_deref().unwrap_or("");
             missing.push(format!("  - {} ({}): {}", dep.id, dep.dep_type, reason));
         }

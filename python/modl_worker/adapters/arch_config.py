@@ -43,6 +43,39 @@ ARCH_CONFIGS: dict[str, dict] = {
         "pipeline_class": "FluxPipeline",
         "img2img_class": "FluxImg2ImgPipeline",
         "inpaint_class": "FluxInpaintPipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "FluxTransformer2DModel",
+                "config_dir": "flux-dev-transformer",
+            },
+            "text_encoder": {
+                "model_id": "clip-l",
+                "model_class": "CLIPTextModel",
+                "config_dir": "clip-l",
+            },
+            "tokenizer": {
+                "model_class": "CLIPTokenizer",
+                "config_dir": "clip-tokenizer",
+            },
+            "text_encoder_2": {
+                "model_id": ["t5-xxl-fp8", "t5-xxl-fp16"],
+                "model_class": "T5EncoderModel",
+                "config_dir": "t5-xxl",
+            },
+            "tokenizer_2": {
+                "model_class": "T5TokenizerFast",
+                "config_dir": "t5-tokenizer",
+            },
+            "vae": {
+                "model_id": "flux-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "flux-dev-scheduler",
+            },
+        },
         "model_flags": {"is_flux": True, "quantize": True},
         "noise_scheduler": "flowmatch",
         "dtype": "bf16",
@@ -55,6 +88,39 @@ ARCH_CONFIGS: dict[str, dict] = {
         "pipeline_class": "FluxPipeline",
         "img2img_class": "FluxImg2ImgPipeline",
         "inpaint_class": "FluxInpaintPipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "FluxTransformer2DModel",
+                "config_dir": "flux-schnell-transformer",
+            },
+            "text_encoder": {
+                "model_id": "clip-l",
+                "model_class": "CLIPTextModel",
+                "config_dir": "clip-l",
+            },
+            "tokenizer": {
+                "model_class": "CLIPTokenizer",
+                "config_dir": "clip-tokenizer",
+            },
+            "text_encoder_2": {
+                "model_id": ["t5-xxl-fp8", "t5-xxl-fp16"],
+                "model_class": "T5EncoderModel",
+                "config_dir": "t5-xxl",
+            },
+            "tokenizer_2": {
+                "model_class": "T5TokenizerFast",
+                "config_dir": "t5-tokenizer",
+            },
+            "vae": {
+                "model_id": "flux-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "flux-schnell-scheduler",
+            },
+        },
         "model_flags": {
             "is_flux": True,
             "quantize": True,
@@ -70,8 +136,28 @@ ARCH_CONFIGS: dict[str, dict] = {
     "zimage_turbo": {
         "pipeline_class": "ZImagePipeline",
         "gen_components": {
-            "text_encoder": "z-image-text-encoder",
-            "vae": "z-image-vae",
+            "transformer": {
+                "model_class": "ZImageTransformer2DModel",
+                "config_dir": "zimage-turbo-transformer",
+            },
+            "text_encoder": {
+                "model_id": "z-image-text-encoder",
+                "model_class": "Qwen3ForCausalLM",
+                "config_dir": "qwen3-4b",
+            },
+            "tokenizer": {
+                "model_class": "AutoTokenizer",
+                "config_dir": "qwen3-tokenizer",
+            },
+            "vae": {
+                "model_id": "z-image-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "zimage-scheduler",
+            },
         },
         "model_flags": {
             "arch": "zimage",
@@ -95,8 +181,28 @@ ARCH_CONFIGS: dict[str, dict] = {
     "zimage": {
         "pipeline_class": "ZImagePipeline",
         "gen_components": {
-            "text_encoder": "z-image-text-encoder",
-            "vae": "z-image-vae",
+            "transformer": {
+                "model_class": "ZImageTransformer2DModel",
+                "config_dir": "zimage-transformer",
+            },
+            "text_encoder": {
+                "model_id": "z-image-text-encoder",
+                "model_class": "Qwen3ForCausalLM",
+                "config_dir": "qwen3-4b",
+            },
+            "tokenizer": {
+                "model_class": "AutoTokenizer",
+                "config_dir": "qwen3-tokenizer",
+            },
+            "vae": {
+                "model_id": "z-image-vae",
+                "model_class": "AutoencoderKL",
+                "config_dir": "flux-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "zimage-scheduler",
+            },
         },
         "model_flags": {
             "arch": "zimage",
@@ -293,8 +399,11 @@ def resolve_gen_components(base_model_id: str) -> dict[str, str]:
     """Resolve component paths (text_encoder, vae) for generation.
 
     Returns a dict like {"text_encoder": "/path/to/qwen3.safetensors", "vae": ...}
-    for models that require separate component loading (z-image, chroma, etc.).
+    for models that require separate component loading.
     Returns empty dict if no components needed or not found.
+
+    Handles both old simple format ({"text_encoder": "clip-l"}) and
+    new richer format ({"text_encoder": {"model_id": "clip-l", ...}}).
     """
     arch = detect_arch(base_model_id)
     config = ARCH_CONFIGS.get(arch, {})
@@ -303,11 +412,57 @@ def resolve_gen_components(base_model_id: str) -> dict[str, str]:
         return {}
 
     resolved = {}
-    for component_type, model_id in gen_components.items():
-        path = _get_installed_path(model_id)
-        if path:
-            resolved[component_type] = path
+    for component_type, spec in gen_components.items():
+        # New richer format: spec is a dict with model_id, model_class, config_dir
+        if isinstance(spec, dict):
+            model_ids = spec.get("model_id")
+            if model_ids is None:
+                continue  # transformer or config-only component
+            if isinstance(model_ids, str):
+                model_ids = [model_ids]
+        else:
+            # Old simple format: spec is a string or list of strings
+            model_ids = [spec] if isinstance(spec, str) else spec
+
+        for model_id in model_ids:
+            path = _get_installed_path(model_id)
+            if path:
+                resolved[component_type] = path
+                break
     return resolved
+
+
+def resolve_gen_assembly(base_model_id: str) -> dict[str, dict] | None:
+    """Return the full assembly spec for a model, or None if not available.
+
+    Returns the gen_components dict with model_class, config_dir, and resolved
+    model paths for each component. Used by assemble_pipeline() in gen_adapter.
+    """
+    arch = detect_arch(base_model_id)
+    config = ARCH_CONFIGS.get(arch, {})
+    gen_components = config.get("gen_components", {})
+    if not gen_components:
+        return None
+
+    # Only works with the new richer format (dicts with model_class)
+    first_val = next(iter(gen_components.values()))
+    if not isinstance(first_val, dict):
+        return None
+
+    assembly = {}
+    for component_type, spec in gen_components.items():
+        entry = dict(spec)  # copy
+        model_ids = spec.get("model_id")
+        if model_ids is not None:
+            if isinstance(model_ids, str):
+                model_ids = [model_ids]
+            for mid in model_ids:
+                path = _get_installed_path(mid)
+                if path:
+                    entry["resolved_path"] = path
+                    break
+        assembly[component_type] = entry
+    return assembly
 
 
 def resolve_qwen_qtype(lora_type: str) -> str:
