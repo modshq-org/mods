@@ -141,9 +141,11 @@ ARCH_CONFIGS: dict[str, dict] = {
                 "config_dir": "flux2-dev-transformer",
             },
             "text_encoder": {
-                "model_id": "flux2-text-encoder",
+                "model_id": "flux2-mistral-text-encoder",
                 "model_class": "Mistral3ForConditionalGeneration",
                 "config_dir": "flux2-text-encoder",
+                "quantize_nf4": True,
+                "hf_dir": True,
             },
             "tokenizer": {
                 "model_class": "AutoProcessor",
@@ -166,6 +168,41 @@ ARCH_CONFIGS: dict[str, dict] = {
         "resolutions": [512, 768, 1024],
         "default_resolution": 1024,
         "sample": {"sampler": "flowmatch", "steps": 28, "guidance": 4.0, "neg": ""},
+    },
+    "flux2_klein": {
+        "pipeline_class": "Flux2KleinPipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "Flux2Transformer2DModel",
+                "config_dir": "flux2-klein-4b-transformer",
+            },
+            "text_encoder": {
+                "model_id": "flux2-qwen3-4b-text-encoder",
+                "model_class": "Qwen3ForCausalLM",
+                "config_dir": "qwen3-4b",
+            },
+            "tokenizer": {
+                "model_class": "AutoTokenizer",
+                "config_dir": "qwen3-tokenizer",
+            },
+            "vae": {
+                "model_id": "flux2-vae",
+                "model_class": "AutoencoderKLFlux2",
+                "config_dir": "flux2-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "flux2-klein-scheduler",
+            },
+        },
+        "pipeline_kwargs": {"is_distilled": True},
+        "model_flags": {"is_flux": True},
+        "noise_scheduler": "flowmatch",
+        "dtype": "bf16",
+        "train_text_encoder": False,
+        "resolutions": [512, 768, 1024],
+        "default_resolution": 1024,
+        "sample": {"sampler": "flowmatch", "steps": 4, "guidance": 1.0, "neg": ""},
     },
     "zimage_turbo": {
         "pipeline_class": "ZImagePipeline",
@@ -364,6 +401,7 @@ ARCH_CONFIGS: dict[str, dict] = {
 
 MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     "flux2-dev":      ("flux2",         "black-forest-labs/FLUX.2-dev"),
+    "flux2-klein-4b": ("flux2_klein",   "black-forest-labs/FLUX.2-klein-4b-fp8"),
     "flux-dev":       ("flux",          "black-forest-labs/FLUX.1-dev"),
     "flux-schnell":   ("flux_schnell",  "black-forest-labs/FLUX.1-schnell"),
     "z-image-turbo":  ("zimage_turbo",  "Tongyi-MAI/Z-Image-Turbo"),
@@ -402,6 +440,8 @@ def detect_arch(base_model_id: str) -> str:
         return "chroma"
     if "flux" in bid and "schnell" in bid:
         return "flux_schnell"
+    if "klein" in bid and ("flux2" in bid or "flux.2" in bid or "flux-2" in bid):
+        return "flux2_klein"
     if "flux" in bid and ("2" in bid or "flux.2" in bid or "flux2" in bid):
         return "flux2"
     if "flux" in bid:

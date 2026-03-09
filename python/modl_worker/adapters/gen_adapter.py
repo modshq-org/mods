@@ -245,14 +245,45 @@ def assemble_pipeline(
 
             # Always load in bf16 first. For fp8 files, from_single_file
             # upcasts to bf16 during key conversion.
+            #
+            # ComfyUI fp8 files include scale tensors (weight_scale,
+            # input_scale) that break the key conversion. Pre-load and
+            # strip them so from_single_file only sees model weights.
+            checkpoint = safetensors.torch.load_file(base_model_path)
+            # ComfyUI fp8 files have per-tensor weight_scale values.
+            # Dequantize fp8 weights: bf16 = fp8.float() * weight_scale
+            dequant_count = 0
+            weight_scale_keys = [
+                k for k in checkpoint if k.endswith(".weight_scale")
+            ]
+            for sk in weight_scale_keys:
+                wk = sk.removesuffix("_scale")  # e.g. "blocks.0.attn.qkv.weight"
+                if wk in checkpoint and checkpoint[wk].dtype == torch.float8_e4m3fn:
+                    checkpoint[wk] = (
+                        checkpoint[wk].float() * checkpoint[sk].float()
+                    ).to(torch.bfloat16)
+                    dequant_count += 1
+            # Strip all scale/quant tensors after dequantization
+            scale_keys = [
+                k for k in checkpoint
+                if k.endswith("_scale") or k.endswith("_scale_2")
+            ]
+            for k in scale_keys:
+                del checkpoint[k]
+            if dequant_count:
+                emitter.info(
+                    f"  → Dequantized {dequant_count} fp8 weight tensors"
+                )
+            # When loading from a pre-processed dict, low_cpu_mem_usage
+            # must be False to avoid meta-device tensor issues.
             model = ModelClass.from_single_file(
-                base_model_path, config=str(config_dir), torch_dtype=torch.bfloat16,
+                checkpoint, config=str(config_dir), torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=False,
             )
-            if is_fp8:
-                # Use diffusers' built-in layerwise casting: casts weights
-                # down to fp8 for storage (~12GB vs 24GB) but upcasts to
-                # bf16 during forward passes. Automatically keeps norms
-                # and embeddings in bf16 for numerical stability.
+            if is_fp8 and dequant_count == 0:
+                # Only use layerwise casting for native fp8 weights that
+                # were NOT dequantized. Dequantized weights are already
+                # proper bf16; re-quantizing via simple cast can clip values.
                 model.enable_layerwise_casting(
                     storage_dtype=torch.float8_e4m3fn,
                     compute_dtype=torch.bfloat16,
@@ -281,19 +312,51 @@ def assemble_pipeline(
                 "class": model_class_name,
             }
 
-            # Check if this is an NF4-quantized model (HF directory with
-            # quantization config, e.g. Flux2's Mistral3 text encoder)
+            # Check if this component needs NF4 quantization and/or
+            # HF directory-style loading (e.g. Flux2's Mistral3 text encoder)
             quantize_nf4 = spec.get("quantize_nf4", False)
+            use_hf_dir = spec.get("hf_dir", False) or os.path.isdir(resolved_path)
 
-            if hasattr(ModelClass, "from_single_file"):
-                # Diffusers models (VAE) — from_single_file handles memory
-                components[param_name] = ModelClass.from_single_file(
-                    resolved_path,
-                    config=str(config_dir),
-                    torch_dtype=torch.bfloat16,
-                )
-            elif os.path.isdir(resolved_path):
-                # HF directory layout (e.g. quantized Mistral3 from BFL)
+            if use_hf_dir and not os.path.isdir(resolved_path):
+                # Single safetensors file but component needs from_pretrained.
+                # Create a synthetic HF directory with config + weights symlink.
+                hf_dir = Path(resolved_path).parent / "hf_layout"
+                hf_dir.mkdir(exist_ok=True)
+                link = hf_dir / "model.safetensors"
+                if not link.exists():
+                    link.symlink_to(resolved_path)
+                # Copy config files into the HF directory
+                import shutil
+                for cfg_file in config_dir.iterdir():
+                    dst = hf_dir / cfg_file.name
+                    if not dst.exists():
+                        shutil.copy2(str(cfg_file), str(dst))
+                resolved_path = str(hf_dir)
+                use_hf_dir = True
+
+            if hasattr(ModelClass, "from_single_file") and not use_hf_dir:
+                # Diffusers models (VAE, etc.) — from_single_file handles
+                # ComfyUI→diffusers key conversion.  Some newer model
+                # classes (e.g. AutoencoderKLFlux2) have from_single_file
+                # but aren't in the allowlist yet — fall back to manual
+                # loading if the call fails.
+                try:
+                    components[param_name] = ModelClass.from_single_file(
+                        resolved_path,
+                        config=str(config_dir),
+                        torch_dtype=torch.bfloat16,
+                    )
+                except (ValueError, NotImplementedError):
+                    # Fall back: load config → create model → load weights
+                    config_dict = ModelClass.load_config(str(config_dir))
+                    model = ModelClass.from_config(config_dict)
+                    state_dict = safetensors.torch.load_file(resolved_path)
+                    model.load_state_dict(state_dict, strict=False)
+                    model = model.to(torch.bfloat16)
+                    components[param_name] = model
+            elif use_hf_dir:
+                # HF directory layout — use from_pretrained with optional
+                # NF4 quantization (e.g. Flux2's 24B Mistral3 text encoder)
                 load_kwargs = {"torch_dtype": torch.bfloat16}
                 if quantize_nf4:
                     try:
@@ -305,7 +368,7 @@ def assemble_pipeline(
                     except ImportError:
                         emitter.info(f"  → bitsandbytes not available, loading in bf16")
                 model = ModelClass.from_pretrained(
-                    resolved_path, config=str(config_dir), **load_kwargs,
+                    resolved_path, **load_kwargs,
                 )
                 components[param_name] = model
             else:
@@ -325,7 +388,11 @@ def assemble_pipeline(
             emitter.info(f"Skipping {param_name} (no weights found)")
 
     emitter.info(f"Assembling {cls_name} from {len(components)} components")
-    pipe = PipelineClass(**components)
+    # Pass any extra pipeline constructor kwargs (e.g. is_distilled for Klein)
+    from .arch_config import ARCH_CONFIGS, detect_arch
+    arch_name = detect_arch(base_model_id)
+    pipeline_kwargs = ARCH_CONFIGS.get(arch_name, {}).get("pipeline_kwargs", {})
+    pipe = PipelineClass(**components, **pipeline_kwargs)
     pipe.enable_model_cpu_offload()
     # Attach loaded file info for downstream metadata embedding
     pipe._modl_loaded_files = loaded_files

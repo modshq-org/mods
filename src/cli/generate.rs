@@ -77,7 +77,11 @@ fn default_steps(base_model: &str) -> u32 {
     let lower = base_model.to_lowercase();
     if lower.contains("z-image-turbo") || lower.contains("z_image_turbo") {
         8
-    } else if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
+    } else if lower.contains("klein")
+        || lower.contains("schnell")
+        || lower.contains("turbo")
+        || lower.contains("lightning")
+    {
         4
     } else if lower.contains("flux2") || lower.contains("flux.2") || lower.contains("flux-2") {
         28
@@ -93,7 +97,8 @@ fn default_steps(base_model: &str) -> u32 {
 /// Default guidance scale based on model type.
 fn default_guidance(base_model: &str) -> f32 {
     let lower = base_model.to_lowercase();
-    if lower.contains("z-image-turbo") || lower.contains("z_image_turbo") {
+    if lower.contains("z-image-turbo") || lower.contains("z_image_turbo") || lower.contains("klein")
+    {
         1.0
     } else if lower.contains("schnell") || lower.contains("turbo") || lower.contains("lightning") {
         0.0
