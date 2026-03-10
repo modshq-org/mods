@@ -419,6 +419,8 @@ class WorkerDaemon:
 
         if action == "generate":
             self._handle_generate(conn, request)
+        elif action == "edit":
+            self._handle_edit(conn, request)
         elif action == "status":
             self._handle_status(conn)
         elif action == "shutdown":
@@ -462,6 +464,32 @@ class WorkerDaemon:
             emitter.error(
                 "WORKER_GENERATE_ERROR",
                 f"Generation failed: {exc}",
+                recoverable=False,
+            )
+
+    def _handle_edit(self, conn: socket.socket, request: dict) -> None:
+        """Run image editing with a cached pipeline."""
+        job_id = request.get("job_id", "edit-worker")
+        spec = request.get("spec", {})
+
+        emitter = SocketEventEmitter(conn, job_id=job_id)
+        emitter.job_accepted(worker_pid=os.getpid())
+
+        try:
+            # Get or load pipeline from cache (edit uses its own pipeline class)
+            pipeline, cls_name = self.cache.get_or_load(spec, emitter)
+
+            from modl_worker.adapters.edit_adapter import run_edit_with_pipeline
+            exit_code = run_edit_with_pipeline(spec, emitter, pipeline)
+
+            self._jobs_served += 1
+            if exit_code != 0:
+                emitter.info(f"Edit finished with exit code {exit_code}")
+
+        except Exception as exc:
+            emitter.error(
+                "WORKER_EDIT_ERROR",
+                f"Edit failed: {exc}",
                 recoverable=False,
             )
 

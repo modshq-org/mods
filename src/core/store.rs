@@ -17,11 +17,20 @@ impl Store {
     }
 
     /// Get the storage path for a file: store/<type>/<sha256_prefix>/<filename>
+    ///
+    /// When sha256 is empty (unverified GGUF variants), falls back to a hash
+    /// of the filename to produce a stable directory name.
     pub fn path_for(&self, asset_type: &AssetType, sha256: &str, file_name: &str) -> PathBuf {
         let prefix = if sha256.len() >= 16 {
-            &sha256[..16]
+            sha256[..16].to_string()
+        } else if sha256.is_empty() {
+            // No hash available — derive prefix from filename for stable paths
+            let mut hasher = Sha256::new();
+            hasher.update(file_name.as_bytes());
+            let h = format!("{:x}", hasher.finalize());
+            h[..16].to_string()
         } else {
-            sha256
+            sha256.to_string()
         };
         self.root
             .join(asset_type.to_string())

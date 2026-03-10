@@ -413,7 +413,7 @@ def assemble_pipeline(
         elif param_name in ("scheduler",):
             components[param_name] = ModelClass.from_pretrained(str(config_dir))
 
-        elif param_name.startswith("tokenizer"):
+        elif param_name.startswith("tokenizer") or param_name == "processor":
             components[param_name] = ModelClass.from_pretrained(str(config_dir))
 
         elif resolved_path:
@@ -791,11 +791,11 @@ def run_generate_with_pipeline(
         "generator": generator,
     }
 
-    # QwenImagePipeline uses true_cfg_scale (not guidance_scale) for CFG.
-    # negative_prompt="" is required to enable CFG — without it quality degrades.
-    if arch == "qwen_image":
+    # QwenImagePipeline/QwenImageEditPlusPipeline use true_cfg_scale (not guidance_scale).
+    # negative_prompt=" " (space) is required to enable true CFG — without it quality degrades.
+    if arch in ("qwen_image", "qwen_image_edit"):
         gen_kwargs["true_cfg_scale"] = guidance
-        gen_kwargs["negative_prompt"] = ""
+        gen_kwargs["negative_prompt"] = " "
     else:
         gen_kwargs["guidance_scale"] = guidance
 

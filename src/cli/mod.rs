@@ -5,6 +5,7 @@ mod config;
 mod datasets;
 mod detect;
 mod doctor;
+mod edit;
 mod enhance;
 mod export;
 mod face_restore;
@@ -463,6 +464,42 @@ pub enum Commands {
         json: bool,
     },
 
+    /// Edit images using AI (instruction-based editing)
+    Edit {
+        /// Edit instruction prompt
+        prompt: String,
+        /// Source image(s) — local path or URL (can be repeated)
+        #[arg(long, required = true)]
+        image: Vec<String>,
+        /// Base model to use (default: qwen-image-edit)
+        #[arg(long)]
+        base: Option<String>,
+        /// Random seed for reproducibility
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Number of inference steps
+        #[arg(long)]
+        steps: Option<u32>,
+        /// Guidance scale
+        #[arg(long)]
+        guidance: Option<f32>,
+        /// Number of output images
+        #[arg(long, default_value = "1")]
+        count: u32,
+        /// Run on cloud
+        #[arg(long)]
+        cloud: bool,
+        /// Cloud provider
+        #[arg(long, value_enum)]
+        provider: Option<CloudProvider>,
+        /// Force one-shot mode
+        #[arg(long)]
+        no_worker: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Enhance a prompt using AI (adds quality tags, descriptors, structure)
     #[command(after_help = ENHANCE_EXAMPLES)]
     Enhance {
@@ -865,6 +902,34 @@ pub async fn run(cli: Cli) -> Result<()> {
                 mask: mask.as_deref(),
                 strength,
                 fast,
+                cloud,
+                provider,
+                no_worker,
+                json,
+            })
+            .await
+        }
+        Commands::Edit {
+            prompt,
+            image,
+            base,
+            seed,
+            steps,
+            guidance,
+            count,
+            cloud,
+            provider,
+            no_worker,
+            json,
+        } => {
+            edit::run(edit::EditArgs {
+                prompt: &prompt,
+                images: &image,
+                base: base.as_deref(),
+                seed,
+                steps,
+                guidance,
+                count,
                 cloud,
                 provider,
                 no_worker,

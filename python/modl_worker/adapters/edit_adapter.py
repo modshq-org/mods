@@ -1,0 +1,196 @@
+"""Image editing adapter — QwenImageEditPlusPipeline (Qwen-Image-Edit-2511).
+
+Handles instruction-based image editing: takes one or more source images
+plus a text prompt describing the edit, produces an output image.
+"""
+
+import hashlib
+import json
+import os
+import time
+from pathlib import Path
+
+from modl_worker.protocol import EventEmitter
+
+
+def run_edit(config_path: Path, emitter: EventEmitter) -> int:
+    """Run image editing from an EditJobSpec YAML file (one-shot mode)."""
+    import yaml
+
+    if not config_path.exists():
+        emitter.error("SPEC_NOT_FOUND", f"Edit spec not found: {config_path}", recoverable=False)
+        return 2
+
+    try:
+        with open(config_path) as f:
+            spec = yaml.safe_load(f)
+    except Exception as exc:
+        emitter.error("SPEC_PARSE_ERROR", str(exc), recoverable=False)
+        return 2
+
+    model_info = spec.get("model", {})
+    base_model_id = model_info.get("base_model_id", "qwen-image-edit")
+    base_model_path = model_info.get("base_model_path")
+
+    params = spec.get("params", {})
+    count = params.get("count", 1)
+
+    emitter.info(f"Loading edit pipeline for {base_model_id}...")
+    emitter.progress(stage="load", step=0, total_steps=count)
+
+    try:
+        pipe = _load_edit_pipeline(base_model_id, base_model_path, emitter)
+        emitter.job_started(config=str(config_path))
+    except Exception as exc:
+        emitter.error(
+            "PIPELINE_LOAD_FAILED",
+            f"Failed to load edit pipeline: {exc}",
+            recoverable=False,
+        )
+        return 1
+
+    return run_edit_with_pipeline(spec, emitter, pipe)
+
+
+def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) -> int:
+    """Run image editing using an already-loaded pipeline.
+
+    Shared inference loop used by both one-shot and persistent-worker modes.
+    """
+    import torch
+    from PIL import Image
+
+    prompt = spec.get("prompt", "")
+    model_info = spec.get("model", {})
+    output_info = spec.get("output", {})
+    params = spec.get("params", {})
+
+    base_model_id = model_info.get("base_model_id", "qwen-image-edit")
+
+    steps = params.get("steps", 40)
+    guidance = params.get("guidance", 4.0)
+    seed = params.get("seed")
+    count = params.get("count", 1)
+    image_paths = params.get("image_paths", [])
+
+    if not image_paths:
+        emitter.error("NO_IMAGES", "No input images provided", recoverable=False)
+        return 1
+
+    # Load source images
+    source_images = []
+    for p in image_paths:
+        try:
+            img = Image.open(p).convert("RGB")
+            source_images.append(img)
+            emitter.info(f"Loaded input image: {p} ({img.size[0]}x{img.size[1]})")
+        except Exception as exc:
+            emitter.error("IMAGE_LOAD_FAILED", f"Failed to load {p}: {exc}", recoverable=False)
+            return 1
+
+    output_dir = output_info.get("output_dir", ".")
+    os.makedirs(output_dir, exist_ok=True)
+
+    generator = torch.Generator(device="cuda")
+    if seed is not None:
+        generator.manual_seed(seed)
+
+    # Build inference kwargs for QwenImageEditPlusPipeline
+    gen_kwargs = {
+        "image": source_images if len(source_images) > 1 else source_images[0],
+        "prompt": prompt,
+        "true_cfg_scale": guidance,
+        "negative_prompt": " ",
+        "num_inference_steps": steps,
+        "generator": generator,
+    }
+
+    artifact_paths = []
+
+    for i in range(count):
+        t0 = time.time()
+
+        try:
+            result = pipeline(**gen_kwargs)
+            image = result.images[0]
+        except Exception as exc:
+            emitter.error(
+                "EDIT_FAILED",
+                f"Edit failed on image {i + 1}/{count}: {exc}",
+                recoverable=(i + 1 < count),
+            )
+            continue
+
+        elapsed = time.time() - t0
+
+        if seed is not None:
+            generator.manual_seed(seed + i + 1)
+
+        image_seed = seed + i if seed is not None else None
+
+        # Save image
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        filename = f"{timestamp}_{i:03d}.png" if count > 1 else f"{timestamp}.png"
+        filepath = os.path.join(output_dir, filename)
+
+        # Embed provenance metadata
+        save_kwargs = {}
+        if filepath.lower().endswith(".png"):
+            try:
+                from PIL.PngImagePlugin import PngInfo
+
+                embedded_meta = {
+                    "generated_with": "modl.run",
+                    "mode": "edit",
+                    "prompt": prompt,
+                    "base_model_id": base_model_id,
+                    "input_images": image_paths,
+                    "steps": steps,
+                    "guidance": guidance,
+                    "seed": image_seed,
+                    "image_index": i,
+                    "count": count,
+                    "timestamp": timestamp,
+                }
+                pnginfo = PngInfo()
+                pnginfo.add_text("Software", "modl.run")
+                pnginfo.add_text("Comment", "edited with modl.run")
+                pnginfo.add_text("modl_metadata", json.dumps(embedded_meta, separators=(",", ":")))
+                save_kwargs["pnginfo"] = pnginfo
+            except Exception:
+                pass
+
+        image.save(filepath, **save_kwargs)
+
+        sha256 = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+
+        size_bytes = os.path.getsize(filepath)
+
+        emitter.artifact(path=filepath, sha256=sha256.hexdigest(), size_bytes=size_bytes)
+        emitter.progress(
+            stage="edit",
+            step=i + 1,
+            total_steps=count,
+            eta_seconds=elapsed * (count - i - 1) if count > 1 else None,
+        )
+        artifact_paths.append(filepath)
+        emitter.info(f"Image {i + 1}/{count}: {filepath} ({elapsed:.1f}s)")
+
+    if artifact_paths:
+        emitter.completed(f"Edited {len(artifact_paths)} image(s)")
+    else:
+        emitter.error("NO_IMAGES_GENERATED", "All edit attempts failed.", recoverable=False)
+
+    return 0 if artifact_paths else 1
+
+
+def _load_edit_pipeline(base_model_id: str, base_model_path: str | None, emitter: EventEmitter):
+    """Load the edit pipeline for the given model."""
+    from .arch_config import resolve_pipeline_class
+    from .gen_adapter import load_pipeline
+
+    cls_name = resolve_pipeline_class(base_model_id)
+    return load_pipeline(base_model_id, base_model_path, cls_name, emitter)

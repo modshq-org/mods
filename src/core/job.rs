@@ -212,6 +212,29 @@ pub struct RemoveBgJobSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditJobSpec {
+    pub prompt: String,
+    pub model: ModelRef,
+    pub output: GenerateOutputRef,
+    pub params: EditParams,
+    pub runtime: RuntimeRef,
+    pub target: ExecutionTarget,
+    #[serde(default)]
+    pub labels: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditParams {
+    /// Source image paths (1 or more, already resolved to local files)
+    pub image_paths: Vec<String>,
+    pub steps: u32,
+    pub guidance: f32,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoraRef {
     pub name: String,
     pub path: String,

@@ -402,6 +402,50 @@ ARCH_CONFIGS: dict[str, dict] = {
         },
         "sample": {"sampler": "flowmatch", "steps": 25, "guidance": 3.0, "neg": ""},
     },
+    "qwen_image_edit": {
+        "pipeline_class": "QwenImageEditPlusPipeline",
+        "gen_components": {
+            "transformer": {
+                "model_class": "QwenImageTransformer2DModel",
+                "config_dir": "qwen-image-edit-transformer",
+            },
+            "text_encoder": {
+                "model_id": "qwen-image-clip",
+                "model_class": "Qwen2_5_VLForConditionalGeneration",
+                "config_dir": "qwen-image-text-encoder",
+            },
+            "tokenizer": {
+                "model_class": "AutoTokenizer",
+                "config_dir": "qwen-image-tokenizer",
+            },
+            "processor": {
+                "model_class": "Qwen2VLProcessor",
+                "config_dir": "qwen-image-processor",
+            },
+            "vae": {
+                "model_id": "qwen-image-vae",
+                "model_class": "AutoencoderKLQwenImage",
+                "config_dir": "qwen-image-vae",
+            },
+            "scheduler": {
+                "model_class": "FlowMatchEulerDiscreteScheduler",
+                "config_dir": "qwen-image-scheduler",
+            },
+        },
+        "model_flags": {
+            "arch": "qwen_image_edit",
+            "quantize": True,
+            "quantize_te": True,
+            "qtype_te": "qfloat8",
+            "low_vram": True,
+        },
+        "noise_scheduler": "flowmatch",
+        "dtype": "bf16",
+        "train_text_encoder": False,
+        "resolutions": [512, 768, 1024],
+        "default_resolution": 1024,
+        "sample": {"sampler": "flowmatch", "steps": 50, "guidance": 4.0, "neg": ""},
+    },
     "sdxl": {
         "pipeline_class": "StableDiffusionXLPipeline",
         "img2img_class": "StableDiffusionXLImg2ImgPipeline",
@@ -443,8 +487,10 @@ MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     "z-image-turbo":  ("zimage_turbo",  "Tongyi-MAI/Z-Image-Turbo"),
     "z-image":        ("zimage",        "Tongyi-MAI/Z-Image"),
     "chroma":         ("chroma",        "lodestones/Chroma"),
-    "qwen-image":     ("qwen_image",    "Qwen/Qwen-Image"),
-    "qwen_image":     ("qwen_image",    "Qwen/Qwen-Image"),
+    "qwen-image":     ("qwen_image",    "Qwen/Qwen-Image-2512"),
+    "qwen_image":     ("qwen_image",    "Qwen/Qwen-Image-2512"),
+    "qwen-image-edit":  ("qwen_image_edit", "Qwen/Qwen-Image-Edit-2511"),
+    "qwen_image_edit":  ("qwen_image_edit", "Qwen/Qwen-Image-Edit-2511"),
     "sdxl-base-1.0":  ("sdxl",          "stabilityai/stable-diffusion-xl-base-1.0"),
     "sdxl-turbo":     ("sdxl",          "stabilityai/sdxl-turbo"),
     "sd-1.5":         ("sd15",          "stable-diffusion-v1-5/stable-diffusion-v1-5"),
@@ -466,6 +512,8 @@ def detect_arch(base_model_id: str) -> str:
         return entry[0]
 
     bid = base_model_id.lower()
+    if ("qwen" in bid and "edit" in bid) or "qwen_image_edit" in bid:
+        return "qwen_image_edit"
     if "qwen-image" in bid or "qwen_image" in bid:
         return "qwen_image"
     if "z-image-turbo" in bid or "z_image_turbo" in bid:

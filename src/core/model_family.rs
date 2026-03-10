@@ -468,8 +468,8 @@ pub static LIGHTNING_CONFIGS: &[LightningConfig] = &[
     LightningConfig {
         base_model_id: "qwen-image-edit",
         lora_registry_id: "qwen-image-edit-lightning",
-        lora_variant: "fp8-gen-4step-v1-bf16",
-        steps: 4,
+        lora_variant: "edit-8step-v1-bf16",
+        steps: 8,
         guidance: 1.0,
     },
     // qwen-image (standalone gen): needs Qwen-Image-2512 model + safetensors variant
