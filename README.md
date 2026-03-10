@@ -115,6 +115,29 @@ Full reference: `modl --help` or run `scripts/generate-cli-reference.sh` to rege
 
 <!-- END AUTO-GENERATED -->
 
+## Supported Models
+
+| Family | Model | Params | Steps | Modes | VRAM (fp8) | Notes |
+|--------|-------|--------|-------|-------|------------|-------|
+| **Flux 1** (2024) | Flux Dev | 17B | 28 | txt2img, img2img, inpaint | 16 GB | High quality, slower |
+| | Flux Schnell | 17B | 4 | txt2img, img2img, inpaint | 16 GB | Fast, distilled |
+| | Chroma | 17B | 20 | txt2img | 16 GB | No CLIP, T5-only |
+| **Flux 2** (2025) | Flux 2 Dev | 46B | 28 | txt2img, img2img, inpaint | 24 GB | Best quality, needs NF4 on 24GB |
+| | Flux 2 Klein 4B | 9B | 4 | txt2img, img2img | 10 GB | Fast, Qwen3 text encoder |
+| | Flux 2 Klein 9B | 18B | 4 | txt2img, img2img | 16 GB | Balance of quality and speed |
+| **Z-Image** (2025) | Z-Image | 11B | 28 | txt2img | 12 GB | Good quality, Qwen3 encoder |
+| | Z-Image Turbo | 11B | 4 | txt2img | 12 GB | Fast variant |
+| **Qwen Image** (2025) | Qwen Image | 27B | 50 | txt2img | 20 GB | Excellent text rendering |
+| | Qwen Image Edit | 27B | 50 | edit | 20 GB | Image editing via prompt |
+| **Legacy SD** (2022–23) | SDXL | 3.7B | 25 | txt2img, img2img, inpaint | 5 GB | Huge LoRA ecosystem |
+| | SD 1.5 | 1.1B | 25 | txt2img, img2img, inpaint | 3 GB | Lightweight, fast |
+
+```bash
+modl pull flux-schnell     # fast, 4-step generation
+modl pull flux-dev         # high quality
+modl pull sdxl             # lightweight, lots of LoRAs
+```
+
 ## Variant Selection
 
 Models come in multiple variants. Modl picks the best one for your GPU:
