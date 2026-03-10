@@ -446,6 +446,44 @@ pub static FAMILIES: &[ModelFamily] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// Lightning (distillation) LoRA configs
+// ---------------------------------------------------------------------------
+
+/// Configuration for `--fast` mode: a distillation LoRA that drastically
+/// reduces the number of inference steps while preserving quality.
+pub struct LightningConfig {
+    /// Base model ID this config applies to
+    pub base_model_id: &'static str,
+    /// Registry ID of the Lightning LoRA
+    pub lora_registry_id: &'static str,
+    /// Recommended variant for `modl pull`
+    pub lora_variant: &'static str,
+    /// Override steps
+    pub steps: u32,
+    /// Override guidance
+    pub guidance: f32,
+}
+
+pub static LIGHTNING_CONFIGS: &[LightningConfig] = &[
+    LightningConfig {
+        base_model_id: "qwen-image",
+        lora_registry_id: "qwen-image-edit-lightning",
+        lora_variant: "fp8-gen-4step-v1-bf16",
+        steps: 4,
+        guidance: 1.0,
+    },
+    // Future: sdxl-lightning, flux-lightning, etc.
+];
+
+/// Look up the Lightning config for a model (fuzzy-matched).
+pub fn lightning_config(model_id: &str) -> Option<&'static LightningConfig> {
+    let resolved = resolve_model(model_id)?;
+    LIGHTNING_CONFIGS
+        .iter()
+        .find(|c| c.base_model_id == resolved.id)
+}
+
+// ---------------------------------------------------------------------------
 // Lookup helpers
 // ---------------------------------------------------------------------------
 

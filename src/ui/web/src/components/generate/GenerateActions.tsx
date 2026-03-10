@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { ListIcon, SparklesIcon, SquareIcon, XIcon } from 'lucide-react'
+import { ListIcon, SparklesIcon, SquareIcon, XIcon, ZapIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { GpuStatus } from '../../api'
 import type { GenerateFormState } from './generate-state'
@@ -12,9 +12,10 @@ type Props = {
   onGenerate: () => void
   onInterrupt?: () => void
   onClearQueue?: () => void
+  onToggleFast?: (fast: boolean) => void
 }
 
-export function GenerateActions({ form, gpu, isGenerating, queueCount, onGenerate, onInterrupt, onClearQueue }: Props) {
+export function GenerateActions({ form, gpu, isGenerating, queueCount, onGenerate, onInterrupt, onClearQueue, onToggleFast }: Props) {
   const canSubmit = useMemo(() => {
     return (
       !gpu.training_active &&
@@ -31,6 +32,22 @@ export function GenerateActions({ form, gpu, isGenerating, queueCount, onGenerat
 
   return (
     <div className="w-full space-y-2">
+      {/* Fast mode toggle */}
+      {onToggleFast && (
+        <button
+          type="button"
+          onClick={() => onToggleFast(!form.fast)}
+          className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors ${
+            form.fast
+              ? 'border-amber-500/50 bg-amber-500/10 text-amber-400'
+              : 'border-border/40 bg-secondary/20 text-muted-foreground hover:text-foreground'
+          }`}
+          title="Use Lightning LoRA for faster generation (fewer steps)"
+        >
+          <ZapIcon className="size-3" />
+          Fast {form.fast ? 'ON' : 'OFF'}
+        </button>
+      )}
       <div className="flex gap-2">
         <Button
           type="submit"

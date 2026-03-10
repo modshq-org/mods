@@ -213,6 +213,7 @@ export function GenerateView({ setTab: _setTab }: Props) {
       loras: form.loras.map((l) => ({ id: l.id, strength: l.strength })),
       init_image: initImagePath,
       strength: initImagePath ? form.denoise_strength : undefined,
+      fast: form.fast || undefined,
     }
 
     // If not currently generating, this is a fresh start
@@ -372,6 +373,7 @@ export function GenerateView({ setTab: _setTab }: Props) {
               setQueueCount(0)
               toast.info('Queue cleared')
             }}
+            onToggleFast={(fast) => setForm((f) => ({ ...f, fast }))}
           />
           <GenerateProgressBar state={progressState} />
           <p className="mt-1 text-center text-[10px] text-muted-foreground/30">

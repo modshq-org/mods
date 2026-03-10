@@ -165,6 +165,7 @@ export type GenerateRequest = {
   init_image?: string  // server-side path to init image for img2img
   mask?: string        // server-side path to mask image for inpainting
   strength?: number    // denoising strength (0.0-1.0)
+  fast?: boolean       // use Lightning distillation LoRA
 }
 
 export type EnhanceRequest = {

@@ -110,6 +110,7 @@ pub struct GenerateArgs<'a> {
     pub init_image: Option<&'a str>,
     pub mask: Option<&'a str>,
     pub strength: Option<f32>,
+    pub fast: bool,
     pub cloud: bool,
     pub provider: Option<CloudProvider>,
     pub no_worker: bool,
@@ -133,6 +134,7 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         init_image,
         mask,
         strength,
+        fast,
         cloud,
         provider,
         no_worker,
@@ -159,13 +161,53 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     let (width, height) = resolve_size(size)?;
 
     // -------------------------------------------------------------------
-    // Resolve LoRA
+    // Resolve --fast (Lightning LoRA)
     // -------------------------------------------------------------------
-    let lora_ref = match lora {
-        Some(name) => {
-            Some(resolve_lora(name, lora_strength, &db)?.context("LoRA resolution returned None")?)
+    let (fast_lora, fast_steps, fast_guidance) = if fast {
+        if lora.is_some() {
+            anyhow::bail!(
+                "--fast and --lora cannot be used together. \
+                 The --fast flag auto-applies a Lightning distillation LoRA."
+            );
         }
-        None => None,
+
+        let lightning = model_family::lightning_config(&base_model).with_context(|| {
+            let supported: Vec<&str> = model_family::LIGHTNING_CONFIGS
+                .iter()
+                .map(|c| c.base_model_id)
+                .collect();
+            format!(
+                "--fast is not yet supported for '{}'. Supported: {}",
+                base_model,
+                supported.join(", ")
+            )
+        })?;
+
+        let lora_ref = resolve_lora(lightning.lora_registry_id, 1.0, &db).with_context(|| {
+            format!(
+                "Lightning LoRA '{}' is not installed.\n\n  \
+                 Install it:\n\n    modl pull {} --variant {}\n",
+                lightning.lora_registry_id, lightning.lora_registry_id, lightning.lora_variant,
+            )
+        })?;
+
+        (lora_ref, Some(lightning.steps), Some(lightning.guidance))
+    } else {
+        (None, None, None)
+    };
+
+    // -------------------------------------------------------------------
+    // Resolve LoRA (--fast takes priority, then --lora)
+    // -------------------------------------------------------------------
+    let lora_ref = if fast_lora.is_some() {
+        fast_lora
+    } else {
+        match lora {
+            Some(name) => Some(
+                resolve_lora(name, lora_strength, &db)?.context("LoRA resolution returned None")?,
+            ),
+            None => None,
+        }
     };
 
     // -------------------------------------------------------------------
@@ -211,8 +253,13 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     // -------------------------------------------------------------------
     // Build spec
     // -------------------------------------------------------------------
-    let steps = steps.unwrap_or_else(|| default_steps(&base_model));
-    let guidance = guidance.unwrap_or_else(|| default_guidance(&base_model));
+    // --fast overrides defaults, but explicit --steps/--guidance wins
+    let steps = steps
+        .or(fast_steps)
+        .unwrap_or_else(|| default_steps(&base_model));
+    let guidance = guidance
+        .or(fast_guidance)
+        .unwrap_or_else(|| default_guidance(&base_model));
 
     let spec = GenerateJobSpec {
         prompt: prompt.to_string(),
@@ -265,7 +312,15 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         );
         println!("  Prompt: {}", style(prompt).italic());
         println!("  Model:  {}", base_model);
-        if let Some(ref lr) = lora_ref {
+        if fast {
+            println!(
+                "  Mode:   {}",
+                style("fast (Lightning LoRA)").green().bold()
+            );
+        }
+        if let Some(ref lr) = lora_ref
+            && !fast
+        {
             println!("  LoRA:   {} (strength: {:.2})", lr.name, lr.weight);
         }
         if let Some(path) = init_image {

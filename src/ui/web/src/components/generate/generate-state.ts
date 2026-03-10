@@ -37,6 +37,9 @@ export type GenerateFormState = {
   // Batch
   batch_count: number
 
+  // Fast mode (Lightning distillation LoRA)
+  fast: boolean
+
   // Img2Img
   init_image: string | null // data-url or object-url
   init_image_file: File | null
@@ -61,6 +64,7 @@ export function createDefaultGenerateFormState(): GenerateFormState {
     width: 1024,
     height: 1024,
     batch_count: 1,
+    fast: false,
     init_image: null,
     init_image_file: null,
     denoise_strength: 0.7,

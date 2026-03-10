@@ -452,6 +452,9 @@ pub enum Commands {
         /// Denoising strength for img2img (0.0-1.0, default: 0.75)
         #[arg(long)]
         strength: Option<f32>,
+        /// Use Lightning distillation LoRA for faster generation (fewer steps)
+        #[arg(long)]
+        fast: bool,
         /// Force one-shot mode (skip persistent worker, cold start every time)
         #[arg(long)]
         no_worker: bool,
@@ -842,6 +845,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             init_image,
             mask,
             strength,
+            fast,
             cloud,
             provider,
             no_worker,
@@ -860,6 +864,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 init_image: init_image.as_deref(),
                 mask: mask.as_deref(),
                 strength,
+                fast,
                 cloud,
                 provider,
                 no_worker,

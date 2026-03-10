@@ -47,6 +47,9 @@ pub struct GenerateRequest {
     /// Denoising strength for img2img (0.0-1.0)
     #[serde(default)]
     pub strength: Option<f32>,
+    /// Use Lightning distillation LoRA for fast generation
+    #[serde(default)]
+    pub fast: bool,
 }
 
 #[derive(Serialize)]
@@ -120,6 +123,7 @@ async fn run_single_generate(sender: &broadcast::Sender<String>, req: GenerateRe
         init_image: req.init_image.as_deref(),
         mask: req.mask.as_deref(),
         strength: req.strength,
+        fast: req.fast,
         cloud: false,
         provider: None,
         no_worker: false,
