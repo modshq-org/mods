@@ -466,12 +466,14 @@ pub struct LightningConfig {
 
 pub static LIGHTNING_CONFIGS: &[LightningConfig] = &[
     LightningConfig {
-        base_model_id: "qwen-image",
+        base_model_id: "qwen-image-edit",
         lora_registry_id: "qwen-image-edit-lightning",
         lora_variant: "fp8-gen-4step-v1-bf16",
         steps: 4,
         guidance: 1.0,
     },
+    // qwen-image (standalone gen): needs Qwen-Image-2512 model + safetensors variant
+    // qwen-image-2512-lightning exists in registry but model version mismatch blocks it
     // Future: sdxl-lightning, flux-lightning, etc.
 ];
 
