@@ -14,6 +14,7 @@ pub mod install;
 pub mod job;
 pub mod llm;
 pub mod manifest;
+pub mod model_family;
 pub mod outputs;
 pub mod preflight;
 pub mod presets;

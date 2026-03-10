@@ -6,7 +6,7 @@ import {
   Maximize2Icon,
   Minimize2Icon,
 } from 'lucide-react'
-import { api, type GeneratedImage, type GeneratedOutput, type GenerateRequest, type GpuStatus, type InstalledModel } from '../../api'
+import { api, type GeneratedImage, type GeneratedOutput, type GenerateRequest, type GpuStatus, type InstalledModel, type ModelFamily } from '../../api'
 import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { useSSE } from '../../hooks/useSSE'
 import { CollapsibleSection } from '../ui/collapsible-section'
@@ -21,7 +21,7 @@ import { ModelPanel } from './ModelPanel'
 import { PromptPanel } from './PromptPanel'
 import { SamplingPanel } from './SamplingPanel'
 import { SizePanel } from './SizePanel'
-import { createDefaultGenerateFormState, type GenerateFormState } from './generate-state'
+import { createDefaultGenerateFormState, findModelFamily, type GenerateFormState } from './generate-state'
 
 // ---------------------------------------------------------------------------
 // GenerateView — pro sidebar layout with scrollable controls + fixed canvas
@@ -60,6 +60,12 @@ export function GenerateView({ setTab: _setTab }: Props) {
     staleTime: 5 * 60_000,
   })
   const models = modelsResponse?.models ?? []
+
+  const { data: families = [] } = useQuery<ModelFamily[]>({
+    queryKey: ['model-families'],
+    queryFn: api.modelFamilies,
+    staleTime: 60 * 60_000, // static data, rarely changes
+  })
 
   // Auto-select first checkpoint if none selected
   useEffect(() => {
@@ -318,8 +324,8 @@ export function GenerateView({ setTab: _setTab }: Props) {
           {/* ─── Model & LoRA ─── */}
           <CollapsibleSection title="Model">
             <div className="space-y-3">
-              <ModelPanel models={models} form={form} setForm={setForm} />
-              <LoraPanel models={models} form={form} setForm={setForm} />
+              <ModelPanel models={models} families={families} form={form} setForm={setForm} />
+              <LoraPanel models={models} families={families} form={form} setForm={setForm} />
             </div>
           </CollapsibleSection>
 
@@ -333,7 +339,15 @@ export function GenerateView({ setTab: _setTab }: Props) {
 
           {/* ─── Img2Img ─── */}
           <CollapsibleSection title="Img2Img" defaultOpen={false}>
-            <Img2ImgPanel form={form} setForm={setForm} />
+            <Img2ImgPanel
+              form={form}
+              setForm={setForm}
+              modelInfo={
+                models.find((m) => m.id === form.base_model_id)
+                  ? findModelFamily(models.find((m) => m.id === form.base_model_id)!.name, families)
+                  : null
+              }
+            />
           </CollapsibleSection>
 
           {/* ─── Sampling ─── */}

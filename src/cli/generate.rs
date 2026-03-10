@@ -7,6 +7,7 @@ use crate::core::cloud::{CloudExecutor, CloudProvider};
 use crate::core::db::Database;
 use crate::core::executor::{Executor, LocalExecutor};
 use crate::core::job::*;
+use crate::core::model_family;
 use crate::core::preflight;
 
 /// Size presets: aspect ratio → (width, height)
@@ -74,48 +75,12 @@ fn resolve_lora(name: &str, weight: f32, db: &Database) -> Result<Option<LoraRef
 
 /// Default inference steps based on model type.
 fn default_steps(base_model: &str) -> u32 {
-    let lower = base_model.to_lowercase();
-    if lower.contains("z-image-turbo") || lower.contains("z_image_turbo") {
-        8
-    } else if lower.contains("klein") || lower.contains("schnell") || lower.contains("lightning") {
-        4
-    } else if lower.contains("flux2") || lower.contains("flux.2") || lower.contains("flux-2") {
-        28
-    } else if lower.contains("chroma") || lower.contains("qwen") {
-        25
-    } else if lower.contains("turbo") {
-        4
-    } else if lower.contains("sdxl") || lower.contains("sd-1.5") || lower.contains("sd15") {
-        30
-    } else {
-        28
-    }
+    model_family::model_defaults(base_model).0
 }
 
 /// Default guidance scale based on model type.
 fn default_guidance(base_model: &str) -> f32 {
-    let lower = base_model.to_lowercase();
-    if lower.contains("z-image-turbo")
-        || lower.contains("z_image_turbo")
-        || lower.contains("klein")
-        || lower.contains("schnell")
-        || lower.contains("turbo")
-        || lower.contains("lightning")
-    {
-        1.0
-    } else if lower.contains("flux2")
-        || lower.contains("flux.2")
-        || lower.contains("flux-2")
-        || lower.contains("chroma")
-    {
-        4.0
-    } else if lower.contains("sdxl") {
-        7.5
-    } else if lower.contains("qwen") {
-        3.0
-    } else {
-        3.5
-    }
+    model_family::model_defaults(base_model).1
 }
 
 /// Resolve base model path from installed models (match by ID or display name).
@@ -204,7 +169,7 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     };
 
     // -------------------------------------------------------------------
-    // Validate img2img / inpainting paths
+    // Validate img2img / inpainting paths + model capabilities
     // -------------------------------------------------------------------
     if let Some(path) = init_image
         && !PathBuf::from(path).exists()
@@ -218,6 +183,18 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         if !PathBuf::from(path).exists() {
             anyhow::bail!("Mask image not found: {path}");
         }
+    }
+
+    // Check model supports the requested mode
+    let mode = if mask.is_some() {
+        "inpaint"
+    } else if init_image.is_some() {
+        "img2img"
+    } else {
+        "txt2img"
+    };
+    if let Err(msg) = model_family::validate_mode(&base_model, mode) {
+        anyhow::bail!(msg);
     }
 
     // -------------------------------------------------------------------

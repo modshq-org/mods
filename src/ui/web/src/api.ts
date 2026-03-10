@@ -205,6 +205,47 @@ export type AgentEvent = {
   images?: string[]
 }
 
+// ---------------------------------------------------------------------------
+// Model family types (from /api/model-families)
+// ---------------------------------------------------------------------------
+
+export type ModelCapabilities = {
+  txt2img: boolean
+  img2img: boolean
+  inpaint: boolean
+  edit: boolean
+  lora: boolean
+  training: boolean
+}
+
+export type ModelFamilyInfo = {
+  id: string
+  name: string
+  arch_key: string
+  transformer_b: number
+  text_encoder_name: string
+  text_encoder_b: number
+  total_b: number
+  vram_bf16_gb: number
+  vram_fp8_gb: number
+  capabilities: ModelCapabilities
+  default_steps: number
+  default_guidance: number
+  default_resolution: number
+  quality: number
+  speed: number
+  text_rendering: boolean
+  description: string
+}
+
+export type ModelFamily = {
+  id: string
+  name: string
+  vendor: string
+  year: number
+  models: ModelFamilyInfo[]
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   if (!res.ok) {
@@ -224,6 +265,7 @@ export const api = {
     }
     return raw
   },
+  modelFamilies: () => fetchJson<ModelFamily[]>('/api/model-families'),
   deleteModel: (id: string) =>
     fetchJson<{ deleted: string }>(`/api/models/${encodeURIComponent(id)}`, {
       method: 'DELETE',

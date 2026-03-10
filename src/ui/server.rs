@@ -89,6 +89,7 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         // Models & GPU
         .route("/api/gpu", get(models::api_gpu_status))
         .route("/api/models", get(models::api_list_models))
+        .route("/api/model-families", get(models::api_model_families))
         .route("/api/models/{id}", delete(models::api_delete_model))
         .route("/api/registry/search", get(models::api_search_registry))
         .route("/api/models/install", post(models::api_install_model))

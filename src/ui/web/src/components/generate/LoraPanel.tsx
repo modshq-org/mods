@@ -8,11 +8,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Slider } from '@/components/ui/slider'
-import type { InstalledModel } from '../../api'
-import type { GenerateFormState, LoraEntry } from './generate-state'
+import type { InstalledModel, ModelFamily } from '../../api'
+import { findModelFamily, type GenerateFormState, type LoraEntry } from './generate-state'
 
 type Props = {
   models: InstalledModel[]
+  families: ModelFamily[]
   form: GenerateFormState
   setForm: React.Dispatch<React.SetStateAction<GenerateFormState>>
 }
@@ -33,8 +34,34 @@ function displayName(name: string): { base: string; step: number | null } {
   return { base: name, step: null }
 }
 
-export function LoraPanel({ models, form, setForm }: Props) {
-  const loras = models.filter((m) => m.model_type === 'lora')
+/** Check if a LoRA is compatible with the selected base model.
+ *  LoRAs trained on the same family (e.g. flux-dev LoRA on flux-schnell) are compatible. */
+function isLoraCompatible(
+  lora: InstalledModel,
+  selectedModelName: string,
+  families: ModelFamily[],
+): boolean {
+  if (!lora.base_model_id) return true // unknown base = show it
+  const loraFamily = findModelFamily(lora.base_model_id, families)
+  const selectedFamily = findModelFamily(selectedModelName, families)
+  if (!loraFamily || !selectedFamily) return true // can't determine = show it
+  // Same family = compatible (e.g. flux-dev LoRA works on flux-schnell)
+  // Find parent family by checking which family contains each model
+  const loraParent = families.find((f) => f.models.some((m) => m.id === loraFamily.id))
+  const selectedParent = families.find((f) => f.models.some((m) => m.id === selectedFamily.id))
+  return loraParent?.id === selectedParent?.id
+}
+
+export function LoraPanel({ models, families, form, setForm }: Props) {
+  const allLoras = models.filter((m) => m.model_type === 'lora')
+  const selectedModel = models.find((m) => m.id === form.base_model_id)
+
+  // Split into compatible and incompatible
+  const compatibleLoras = allLoras.filter((l) =>
+    isLoraCompatible(l, selectedModel?.name ?? '', families),
+  )
+  const incompatibleCount = allLoras.length - compatibleLoras.length
+  const loras = compatibleLoras
 
   /** Insert a trigger word into the prompt (at the start, if not already present) */
   const insertTriggerWord = (word: string) => {
@@ -89,7 +116,11 @@ export function LoraPanel({ models, form, setForm }: Props) {
 
       {form.loras.length === 0 && (
         <p className="text-[11px] text-muted-foreground/60">
-          {loras.length === 0 ? 'No LoRAs installed' : 'No LoRAs applied'}
+          {allLoras.length === 0
+            ? 'No LoRAs installed'
+            : loras.length === 0
+              ? `No compatible LoRAs (${incompatibleCount} hidden)`
+              : 'No LoRAs applied'}
         </p>
       )}
 

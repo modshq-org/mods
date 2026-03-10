@@ -83,45 +83,48 @@ export function detectSizePreset(w: number, h: number): SizePreset {
   return match ? match.label : 'custom'
 }
 
-/** Smart defaults based on model type identifiers.
- *  Must stay in sync with arch_config.py `sample` blocks and
- *  generate.rs `default_steps` / `default_guidance`. */
-export function modelDefaults(modelName: string): { steps: number; guidance: number } {
+/** Smart defaults from model-families API data.
+ *  Falls back to string matching if family data isn't loaded yet. */
+export function modelDefaults(
+  modelName: string,
+  familyInfo?: import('../../api').ModelFamilyInfo | null,
+): { steps: number; guidance: number } {
+  if (familyInfo) {
+    return { steps: familyInfo.default_steps, guidance: familyInfo.default_guidance }
+  }
+  // Fallback: string matching (for initial load before families are fetched)
   const lower = modelName.toLowerCase()
-  // Order matters — check specific variants before generic families
-  if (lower.includes('z-image-turbo') || lower.includes('z_image_turbo')) {
-    return { steps: 8, guidance: 1.0 }
-  }
-  if (lower.includes('z-image') || lower.includes('z_image') || lower.includes('zimage')) {
-    return { steps: 30, guidance: 4.0 }
-  }
-  if (lower.includes('klein')) {
-    return { steps: 4, guidance: 1.0 }
-  }
-  if (lower.includes('schnell') || lower.includes('lightning')) {
-    return { steps: 4, guidance: 1.0 }
-  }
-  if (lower.includes('qwen')) {
-    return { steps: 25, guidance: 3.0 }
-  }
-  if (lower.includes('chroma')) {
-    return { steps: 25, guidance: 4.0 }
-  }
-  if (lower.includes('flux2') || lower.includes('flux.2') || lower.includes('flux-2')) {
-    return { steps: 28, guidance: 4.0 }
-  }
-  if (lower.includes('turbo')) {
-    return { steps: 4, guidance: 1.0 }
-  }
-  if (lower.includes('sdxl')) {
-    return { steps: 30, guidance: 7.5 }
-  }
-  if (lower.includes('sd3') || lower.includes('stable-diffusion-3')) {
-    return { steps: 28, guidance: 7.0 }
-  }
-  if (lower.includes('sd-1.5') || lower.includes('sd15')) {
-    return { steps: 30, guidance: 7.5 }
-  }
-  // flux-dev and others
+  if (lower.includes('z-image-turbo') || lower.includes('z_image_turbo')) return { steps: 8, guidance: 1.0 }
+  if (lower.includes('klein') || lower.includes('schnell')) return { steps: 4, guidance: 1.0 }
+  if (lower.includes('qwen')) return { steps: 25, guidance: 3.0 }
+  if (lower.includes('chroma')) return { steps: 25, guidance: 4.0 }
+  if (lower.includes('flux2') || lower.includes('flux.2') || lower.includes('flux-2')) return { steps: 28, guidance: 4.0 }
+  if (lower.includes('turbo')) return { steps: 4, guidance: 1.0 }
+  if (lower.includes('sdxl')) return { steps: 30, guidance: 7.5 }
+  if (lower.includes('sd-1.5') || lower.includes('sd15')) return { steps: 30, guidance: 7.5 }
   return { steps: 28, guidance: 3.5 }
+}
+
+/** Find the ModelFamilyInfo that best matches a model name. */
+export function findModelFamily(
+  modelName: string,
+  families: import('../../api').ModelFamily[],
+): import('../../api').ModelFamilyInfo | null {
+  const lower = modelName.toLowerCase()
+  for (const family of families) {
+    for (const model of family.models) {
+      if (lower === model.id || lower.includes(model.id)) {
+        return model
+      }
+    }
+  }
+  // Fuzzy: check arch_key
+  for (const family of families) {
+    for (const model of family.models) {
+      if (lower.includes(model.arch_key.replace(/_/g, '-'))) {
+        return model
+      }
+    }
+  }
+  return null
 }

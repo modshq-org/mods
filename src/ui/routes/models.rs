@@ -7,6 +7,7 @@ use crate::core::config::Config;
 use crate::core::db::Database;
 use crate::core::install;
 use crate::core::manifest::AssetType;
+use crate::core::model_family;
 use crate::core::registry::RegistryIndex;
 use crate::core::store::Store;
 use crate::core::training_status;
@@ -548,4 +549,9 @@ pub async fn api_delete_model(Path(id): Path<String>) -> impl IntoResponse {
             Json(serde_json::json!({ "error": "Internal error" })),
         ),
     }
+}
+
+/// GET /api/model-families — all model families with capabilities, params, and UI metadata.
+pub async fn api_model_families() -> impl IntoResponse {
+    Json(model_family::FAMILIES)
 }

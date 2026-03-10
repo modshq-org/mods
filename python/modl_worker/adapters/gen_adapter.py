@@ -148,6 +148,61 @@ def _materialize_meta_tensors(model):
                 )
 
 
+def _prepare_fp8_model(model):
+    """Prepare an fp8 model for inference with enable_model_cpu_offload.
+
+    1. Cast all non-Linear-weight parameters (norms, biases, embeddings)
+       to bf16.  These are small and PyTorch can't auto-promote fp8.
+    2. Add PyTorch hooks to each nn.Linear to cast the fp8 weight to
+       bf16 before forward and restore after.  This keeps the model at
+       ~12GB (fp8 weights) on GPU while computing in bf16.
+    """
+    import torch
+
+    # ── Step 1: cast small params to bf16 ──────────────────────────────
+    # Everything except nn.Linear .weight stays as bf16.
+    cast_count = 0
+    for module in model.modules():
+        is_linear = isinstance(module, torch.nn.Linear)
+        for name in list(module._parameters.keys()):
+            p = module._parameters[name]
+            if p is None or p.dtype != torch.float8_e4m3fn:
+                continue
+            # Keep Linear weights as fp8 (handled by hooks below)
+            if is_linear and name == "weight":
+                continue
+            module._parameters[name] = torch.nn.Parameter(
+                p.to(torch.bfloat16), requires_grad=False,
+            )
+            cast_count += 1
+        for name in list(module._buffers.keys()):
+            b = module._buffers[name]
+            if b is not None and b.dtype == torch.float8_e4m3fn:
+                module._buffers[name] = b.to(torch.bfloat16)
+                cast_count += 1
+
+    # ── Step 2: per-layer fp8→bf16 hooks on Linear weights ─────────────
+    def _pre_hook(module, args):
+        if module.weight.dtype == torch.float8_e4m3fn:
+            module._fp8_orig_weight = module.weight.data
+            module.weight.data = module.weight.data.to(torch.bfloat16)
+
+    def _post_hook(module, args, output):
+        if hasattr(module, "_fp8_orig_weight"):
+            module.weight.data = module._fp8_orig_weight
+            del module._fp8_orig_weight
+        return output
+
+    hook_count = 0
+    for m in model.modules():
+        if isinstance(m, torch.nn.Linear):
+            m.register_forward_pre_hook(_pre_hook)
+            m.register_forward_hook(_post_hook)
+            hook_count += 1
+
+    return hook_count, cast_count
+
+
 
 
 def _detect_weight_dtype(filepath: str) -> str:
@@ -315,38 +370,43 @@ def assemble_pipeline(
                 if use_fp8_inference:
                     # fp8 inference: create model from config with empty weights,
                     # convert checkpoint keys, load fp8 state dict directly.
-                    # This avoids allocating a full bf16 model alongside the
-                    # fp8 checkpoint dict (which would OOM for >8GB models).
-                    from diffusers.loaders.single_file_utils import (
-                        convert_flux2_transformer_checkpoint_to_diffusers,
-                    )
+                    # Layerwise casting (fp8 storage, bf16 compute) is applied
+                    # AFTER enable_model_cpu_offload so hooks fire in the
+                    # right order: move-to-GPU → cast-fp8→bf16 → forward.
+                    # Pick the right key converter for the model architecture.
+                    if model_class_name == "FluxTransformer2DModel":
+                        from diffusers.loaders.single_file_utils import (
+                            convert_flux_transformer_checkpoint_to_diffusers,
+                        )
+                        convert_fn = convert_flux_transformer_checkpoint_to_diffusers
+                    else:
+                        from diffusers.loaders.single_file_utils import (
+                            convert_flux2_transformer_checkpoint_to_diffusers,
+                        )
+                        convert_fn = convert_flux2_transformer_checkpoint_to_diffusers
                     config_dict = ModelClass.load_config(str(config_dir))
                     with init_empty_weights():
                         model = ModelClass.from_config(config_dict)
-                    converted = convert_flux2_transformer_checkpoint_to_diffusers(
-                        checkpoint
-                    )
+                    converted = convert_fn(checkpoint)
                     del checkpoint  # free memory
                     model.load_state_dict(converted, strict=False, assign=True)
                     del converted
                     _materialize_meta_tensors(model)
-                    model.enable_layerwise_casting(
-                        storage_dtype=torch.float8_e4m3fn,
-                        compute_dtype=torch.bfloat16,
+                    # Cast small params (norms, biases) to bf16 and add
+                    # per-layer hooks for Linear weights (fp8→bf16 on
+                    # forward, restore after).
+                    n_hooked, n_cast = _prepare_fp8_model(model)
+                    emitter.info(
+                        f"  → fp8 model prepared: {n_hooked} linear layers "
+                        f"hooked, {n_cast} small params cast to bf16"
                     )
                 else:
                     model = ModelClass.from_single_file(
-                        checkpoint, config=str(config_dir),
+                        base_model_path, config=str(config_dir),
                         torch_dtype=torch.bfloat16,
-                        low_cpu_mem_usage=False,
                     )
-                    if is_fp8 and dequant_count == 0:
-                        model.enable_layerwise_casting(
-                            storage_dtype=torch.float8_e4m3fn,
-                            compute_dtype=torch.bfloat16,
-                        )
                     emitter.info(
-                        f"  → fp8 layerwise casting enabled (storage=fp8, compute=bf16)"
+                        f"  → Loaded via from_single_file (bf16)"
                     )
             components["transformer"] = model
 
