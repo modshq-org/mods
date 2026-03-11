@@ -1,4 +1,4 @@
-import { Camera, Database, HardDrive, Images, Menu, Sparkles, X, Zap } from 'lucide-react'
+import { Database, HardDrive, Images, Menu, Sparkles, X, Zap } from 'lucide-react'
 
 function ModlLogo({ size = 24 }: { size?: number }) {
   return (
@@ -14,7 +14,6 @@ import type { Tab } from '../App'
 import { AppSidebar } from './AppSidebar'
 
 const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: 'studio', label: 'Studio', icon: Camera },
   { id: 'generate', label: 'Generate', icon: Sparkles },
   { id: 'outputs', label: 'Outputs', icon: Images },
   { id: 'datasets', label: 'Datasets', icon: Database },

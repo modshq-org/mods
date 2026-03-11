@@ -84,7 +84,9 @@ def _tag_florence2(model, processor, image_path: Path) -> str:
     import torch
     from PIL import Image
 
-    image = Image.open(image_path).convert("RGB")
+    from modl_worker.image_util import load_image
+
+    image = load_image(image_path)
     tags = []
 
     # 1) Detailed caption → extract key phrases
@@ -174,7 +176,9 @@ def _tag_wd(image_path: Path, threshold: float = 0.35) -> str:
     import numpy as np
     from PIL import Image
 
-    image = Image.open(image_path).convert("RGB")
+    from modl_worker.image_util import load_image
+
+    image = load_image(image_path)
     # WD tagger expects 448x448
     image = image.resize((448, 448), Image.LANCZOS)
     img_array = np.array(image).astype(np.float32)

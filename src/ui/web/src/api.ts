@@ -304,6 +304,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     }),
+  batchDeleteOutputs: (items: Array<{ artifact_id?: string; path?: string }>) =>
+    fetchJson<{ deleted_files: number; deleted_records: number; errors: string[] }>('/api/outputs/batch-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(items),
+    }),
   favoriteOutput: (path: string) =>
     fetchJson<{ favorited: boolean }>('/api/outputs/favorite', {
       method: 'POST',

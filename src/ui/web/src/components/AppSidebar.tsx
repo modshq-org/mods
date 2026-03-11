@@ -1,4 +1,4 @@
-import { Camera, ChevronsLeft, ChevronsRight, Database, HardDrive, Images, Sparkles, Zap } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, Database, HardDrive, Images, Sparkles, Zap } from 'lucide-react'
 
 function ModlLogo({ size = 28 }: { size?: number }) {
   return (
@@ -14,7 +14,6 @@ import { api } from '../api'
 import type { Tab } from '../App'
 
 const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: 'studio', label: 'Studio', icon: Camera },
   { id: 'generate', label: 'Generate', icon: Sparkles },
   { id: 'outputs', label: 'Outputs', icon: Images },
   { id: 'datasets', label: 'Datasets', icon: Database },

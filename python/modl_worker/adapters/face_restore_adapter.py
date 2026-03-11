@@ -167,7 +167,8 @@ def run_face_restore(config_path: Path, emitter: EventEmitter, model_cache: dict
 
             else:
                 # Simple fallback: just copy the image
-                Image.open(image_path).save(str(output_path))
+                from modl_worker.image_util import load_image
+                load_image(image_path, mode="").save(str(output_path))
 
             elapsed = time.time() - t0
 

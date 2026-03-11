@@ -58,6 +58,41 @@ pub async fn api_delete_output(Json(req): Json<DeleteOutputRequest>) -> impl Int
 }
 
 #[derive(Deserialize)]
+pub struct BatchDeleteItem {
+    #[serde(default)]
+    artifact_id: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BatchDeleteResponse {
+    deleted_files: usize,
+    deleted_records: usize,
+    errors: Vec<String>,
+}
+
+pub async fn api_batch_delete_outputs(
+    Json(items): Json<Vec<BatchDeleteItem>>,
+) -> impl IntoResponse {
+    let items: Vec<_> = items.into_iter().map(|i| (i.artifact_id, i.path)).collect();
+
+    match tokio::task::spawn_blocking(move || output_service::batch_delete_outputs(items)).await {
+        Ok(result) => Json(BatchDeleteResponse {
+            deleted_files: result.deleted_files,
+            deleted_records: result.deleted_records,
+            errors: result.errors,
+        })
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
 pub struct ToggleFavoriteRequest {
     path: String,
 }

@@ -1,14 +1,18 @@
 use axum::{
     Json,
-    extract::{Multipart, Path},
+    extract::{Multipart, Path, Query},
     http::{StatusCode, header},
     response::{Html, IntoResponse},
 };
+use serde::Deserialize;
 
 use super::super::server::modl_root;
 
 /// Serve files from ~/.modl/ (images, samples, etc.)
-pub async fn serve_file(Path(path): Path<String>) -> impl IntoResponse {
+pub async fn serve_file(
+    Path(path): Path<String>,
+    Query(params): Query<ThumbParams>,
+) -> impl IntoResponse {
     let full_path = modl_root().join(&path);
 
     // Security: ensure resolved path is still under modl_root
@@ -22,6 +26,12 @@ pub async fn serve_file(Path(path): Path<String>) -> impl IntoResponse {
     };
     if !canonical.starts_with(&root_canonical) {
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+    }
+
+    // If ?w= is requested, serve a cached thumbnail
+    if let Some(w) = params.w {
+        let w = w.clamp(32, 800);
+        return serve_thumbnail(&canonical, w).await;
     }
 
     match tokio::fs::read(&canonical).await {
@@ -38,6 +48,93 @@ pub async fn serve_file(Path(path): Path<String>) -> impl IntoResponse {
             ([(header::CONTENT_TYPE, content_type)], bytes).into_response()
         }
         Err(_) => (StatusCode::NOT_FOUND, "Not found").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ThumbParams {
+    /// Desired thumbnail width in pixels (height scales proportionally).
+    w: Option<u32>,
+}
+
+/// Generate (or serve cached) a JPEG thumbnail at the given width.
+async fn serve_thumbnail(source: &std::path::Path, width: u32) -> axum::response::Response {
+    let cache_dir = modl_root().join("cache").join("thumbs");
+    // Build cache key from source path hash + width
+    let hash_input = format!("{}:{}", source.to_string_lossy(), width);
+    let hash = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(hash_input.as_bytes());
+        format!("{:x}", h.finalize())
+    };
+    let cache_path = cache_dir.join(format!("{}.jpg", &hash[..16]));
+
+    // Check if source is newer than cached thumb
+    let cache_valid = if cache_path.exists() {
+        match (
+            source.metadata().and_then(|m| m.modified()),
+            cache_path.metadata().and_then(|m| m.modified()),
+        ) {
+            (Ok(src_mtime), Ok(cache_mtime)) => cache_mtime >= src_mtime,
+            _ => false,
+        }
+    } else {
+        false
+    };
+
+    if cache_valid && let Ok(bytes) = tokio::fs::read(&cache_path).await {
+        return (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "public, max-age=86400"),
+            ],
+            bytes,
+        )
+            .into_response();
+    }
+
+    // Generate thumbnail in a blocking task
+    let source_owned = source.to_path_buf();
+    let cache_path_owned = cache_path.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let img = image::open(&source_owned).map_err(|e| format!("Failed to open image: {e}"))?;
+        let thumb = img.thumbnail(width, width);
+
+        // Ensure cache dir exists
+        if let Some(parent) = cache_path_owned.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        // Encode as JPEG quality 80
+        let mut buf = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        thumb
+            .write_to(&mut cursor, image::ImageFormat::Jpeg)
+            .map_err(|e| format!("Failed to encode thumbnail: {e}"))?;
+
+        // Write cache file (best effort)
+        let _ = std::fs::write(&cache_path_owned, &buf);
+
+        Ok(buf)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(bytes)) => (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "public, max-age=86400"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {e}"),
+        )
+            .into_response(),
     }
 }
 

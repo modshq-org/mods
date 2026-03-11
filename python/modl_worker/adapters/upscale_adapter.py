@@ -124,8 +124,9 @@ def run_upscale(config_path: Path, emitter: EventEmitter, model_cache: dict | No
             # Load image as tensor
             from PIL import Image
             import numpy as np
+            from modl_worker.image_util import load_image
 
-            img_pil = Image.open(image_path).convert("RGB")
+            img_pil = load_image(image_path)
             w, h = img_pil.size
             img_np = np.array(img_pil).astype(np.float32) / 255.0
             img_tensor = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0)

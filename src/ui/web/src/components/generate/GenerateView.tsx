@@ -227,6 +227,10 @@ export function GenerateView({ setTab: _setTab }: Props) {
     // Upload init image if in img2img mode
     let initImagePath: string | undefined
     if (form.mode === 'img2img' && form.init_image_file) {
+      if (!(form.init_image_file instanceof File)) {
+        toast.error('Image reference expired — please re-add the image')
+        return
+      }
       try {
         const uploaded = await api.upload(form.init_image_file)
         initImagePath = uploaded.path
@@ -317,6 +321,10 @@ export function GenerateView({ setTab: _setTab }: Props) {
         if (img.type === 'server') {
           uploadedPaths.push(img.serverPath)
         } else {
+          if (!(img.file instanceof File)) {
+            toast.error('Image reference expired — please re-add the image')
+            return
+          }
           const uploaded = await api.upload(img.file)
           uploadedPaths.push(uploaded.path)
         }

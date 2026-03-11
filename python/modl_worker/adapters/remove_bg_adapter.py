@@ -15,6 +15,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from modl_worker.image_util import load_image
 from modl_worker.protocol import EventEmitter
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -64,7 +65,7 @@ def _remove_background(image_path: Path, model, emitter: EventEmitter) -> Image.
     import torch
     from torchvision import transforms
 
-    img = Image.open(image_path).convert("RGB")
+    img = load_image(image_path)
     w, h = img.size
 
     transform = transforms.Compose([

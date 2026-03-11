@@ -36,7 +36,9 @@ def _resize_image(image_path: Path, resolution: int, method: str) -> dict:
     """Resize a single image. Returns info dict with old/new dimensions."""
     from PIL import Image
 
-    img = Image.open(image_path).convert("RGB")
+    from modl_worker.image_util import load_image
+
+    img = load_image(image_path)
     orig_w, orig_h = img.size
 
     # Skip if already within resolution

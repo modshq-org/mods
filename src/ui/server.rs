@@ -123,6 +123,10 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
             "/api/outputs",
             get(outputs::api_list_outputs).delete(outputs::api_delete_output),
         )
+        .route(
+            "/api/outputs/batch-delete",
+            post(outputs::api_batch_delete_outputs),
+        )
         .route("/api/outputs/favorite", post(outputs::api_toggle_favorite))
         // Edit (shares generate queue + SSE stream)
         .route("/api/edit", post(generate::api_edit))

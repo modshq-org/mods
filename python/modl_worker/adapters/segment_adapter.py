@@ -22,12 +22,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
+from modl_worker.image_util import load_image
 from modl_worker.protocol import EventEmitter
 
 
 def _mask_from_bbox(image_path: Path, bbox: list[float], expand_px: int) -> Image.Image:
     """Create a mask from a bounding box with optional expansion and feathering."""
-    img = Image.open(image_path)
+    img = load_image(image_path, mode="")
     w, h = img.size
     mask = Image.new("L", (w, h), 0)
 
@@ -81,7 +82,7 @@ def _mask_from_birefnet(
             )
             if model_cache is not None:
                 model_cache["birefnet_pipe"] = pipe
-            img = Image.open(image_path).convert("RGB")
+            img = load_image(image_path)
             result = pipe(img)
             if result and isinstance(result, list):
                 return result[0]["mask"].convert("L")
@@ -92,7 +93,7 @@ def _mask_from_birefnet(
 
     from torchvision import transforms
 
-    img = Image.open(image_path).convert("RGB")
+    img = load_image(image_path)
     w, h = img.size
 
     transform = transforms.Compose([

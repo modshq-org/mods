@@ -59,7 +59,8 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
     Shared inference loop used by both one-shot and persistent-worker modes.
     """
     import torch
-    from PIL import Image
+
+    from modl_worker.image_util import load_image
 
     prompt = spec.get("prompt", "")
     model_info = spec.get("model", {})
@@ -78,11 +79,11 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
         emitter.error("NO_IMAGES", "No input images provided", recoverable=False)
         return 1
 
-    # Load source images
+    # Load source images (EXIF orientation is applied automatically)
     source_images = []
     for p in image_paths:
         try:
-            img = Image.open(p).convert("RGB")
+            img = load_image(p)
             source_images.append(img)
             emitter.info(f"Loaded input image: {p} ({img.size[0]}x{img.size[1]})")
         except Exception as exc:

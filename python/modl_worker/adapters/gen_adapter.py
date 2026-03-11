@@ -764,6 +764,8 @@ def run_generate_with_pipeline(
     import torch
     from PIL import Image
 
+    from modl_worker.image_util import load_image
+
     prompt = spec.get("prompt", "")
     model_info = spec.get("model", {})
     lora_info = spec.get("lora")
@@ -798,9 +800,9 @@ def run_generate_with_pipeline(
     init_img = None
     mask_img = None
     if init_image_path:
-        init_img = Image.open(init_image_path).convert("RGB")
+        init_img = load_image(init_image_path)
     if mask_path:
-        mask_img = Image.open(mask_path).convert("RGB")
+        mask_img = load_image(mask_path)
 
     # Switch pipeline if needed for img2img/inpaint via from_pipe()
     pipe = pipeline

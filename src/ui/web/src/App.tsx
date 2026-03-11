@@ -10,14 +10,12 @@ import { GpuBanner } from './components/GpuBanner'
 import { MobileNav } from './components/MobileNav'
 import { OutputsGallery } from './components/OutputsGallery'
 import { TrainingRuns } from './components/TrainingRuns'
-import { StudioView } from './components/studio/StudioView'
 import { TrainingStatusBar } from './components/TrainingStatusBar'
 import { useLocalStorage } from './hooks/useLocalStorage'
 
-export type Tab = 'studio' | 'train' | 'generate' | 'outputs' | 'datasets' | 'models'
+export type Tab = 'train' | 'generate' | 'outputs' | 'datasets' | 'models'
 
 const PAGE_TITLES: Record<Tab, string> = {
-  studio: 'Studio',
   train: 'Training',
   generate: 'Generate',
   outputs: 'Outputs',
@@ -28,9 +26,9 @@ const PAGE_TITLES: Record<Tab, string> = {
 function App() {
   const searchString = useSearch()
   const [, navigate] = useLocation()
-  const TABS = ['studio', 'generate', 'outputs', 'datasets', 'train', 'models'] as const
+  const TABS = ['generate', 'outputs', 'datasets', 'train', 'models'] as const
   const params = new URLSearchParams(searchString)
-  const tab: Tab = TABS.find((t) => t === params.get('tab')) ?? 'studio'
+  const tab: Tab = TABS.find((t) => t === params.get('tab')) ?? 'generate'
   const setTab = (next: Tab) => navigate(`/?tab=${next}`)
 
   // Sidebar collapsed state (persisted)
@@ -84,11 +82,6 @@ function App() {
 
         {/* Scrollable content */}
         <main className="flex-1 overflow-y-auto bg-[#09090e]">
-          {/* Tab: Studio */}
-          <div className={tab === 'studio' ? 'h-full' : 'hidden'}>
-            <StudioView />
-          </div>
-
           {/* Tab: Train */}
           <div className={tab === 'train' ? 'flex h-full flex-col pb-24 pt-16 md:pb-0 md:pt-0' : 'hidden'}>
             {gpu.training_active && (

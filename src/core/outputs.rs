@@ -65,6 +65,12 @@ pub struct DeleteOutputResult {
     pub deleted_records: usize,
 }
 
+pub struct BatchDeleteResult {
+    pub deleted_files: usize,
+    pub deleted_records: usize,
+    pub errors: Vec<String>,
+}
+
 pub struct ToggleFavoriteResult {
     pub favorited: bool,
 }
@@ -229,6 +235,28 @@ fn load_output_artifact_index() -> HashMap<String, OutputArtifactInfo> {
     by_path
 }
 
+/// Remove cached thumbnails for a source image (all widths).
+fn cleanup_thumbs(source: &Path) {
+    let cache_dir = modl_root().join("cache").join("thumbs");
+    if !cache_dir.exists() {
+        return;
+    }
+    // Thumbnails are cached as <hash[..16]>.jpg where hash = sha256("path:width")
+    // We check all known thumb widths used by the UI.
+    let widths = [200u32, 320, 480];
+    for w in widths {
+        let hash_input = format!("{}:{}", source.to_string_lossy(), w);
+        let hash = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(hash_input.as_bytes());
+            format!("{:x}", h.finalize())
+        };
+        let thumb_path = cache_dir.join(format!("{}.jpg", &hash[..16]));
+        let _ = std::fs::remove_file(thumb_path);
+    }
+}
+
 fn is_within_outputs_root(path: &Path, outputs_root: &Path) -> bool {
     if path.exists() {
         let Ok(path_canon) = path.canonicalize() else {
@@ -387,6 +415,9 @@ pub fn delete_output(
         false
     };
 
+    // Clean up cached thumbnails
+    cleanup_thumbs(&target_file);
+
     // Delete any artifact records that reference this path
     let target_str = target_file.to_string_lossy().to_string();
     match db.delete_artifacts_by_path(&target_str) {
@@ -401,6 +432,37 @@ pub fn delete_output(
         deleted_file,
         deleted_records,
     })
+}
+
+/// Delete multiple outputs at once.
+pub fn batch_delete_outputs(items: Vec<(Option<String>, Option<String>)>) -> BatchDeleteResult {
+    let mut deleted_files = 0usize;
+    let mut deleted_records = 0usize;
+    let mut errors = Vec::new();
+
+    for (artifact_id, path) in items {
+        match delete_output(artifact_id.as_deref(), path.as_deref()) {
+            Ok(result) => {
+                if result.deleted_file {
+                    deleted_files += 1;
+                }
+                deleted_records += result.deleted_records;
+            }
+            Err(e) => {
+                let label = artifact_id
+                    .as_deref()
+                    .or(path.as_deref())
+                    .unwrap_or("unknown");
+                errors.push(format!("{label}: {e}"));
+            }
+        }
+    }
+
+    BatchDeleteResult {
+        deleted_files,
+        deleted_records,
+        errors,
+    }
 }
 
 /// Delete an output found by artifact ID prefix match.
