@@ -36,10 +36,6 @@ function RatingDots({ value, max = 5 }: { value: number; max?: number }) {
 export function ModelPanel({ models, families, form, setForm, autoDefaults = true }: Props) {
   const checkpoints = models.filter((m) => m.model_type === 'checkpoint' || m.model_type === 'diffusion_model')
 
-  // Find family info for the selected model
-  const selectedModel = checkpoints.find((m) => m.id === form.base_model_id)
-  const familyInfo = selectedModel ? findModelFamily(selectedModel.name, families) : null
-
   const handleChange = (modelId: string) => {
     const model = checkpoints.find((m) => m.id === modelId)
     if (!model) return
@@ -60,9 +56,6 @@ export function ModelPanel({ models, families, form, setForm, autoDefaults = tru
 
   return (
     <div className="space-y-1.5">
-      <span className="text-[11px] font-medium text-muted-foreground">
-        Checkpoint
-      </span>
       <Select
         value={form.base_model_id}
         onValueChange={handleChange}
@@ -75,63 +68,49 @@ export function ModelPanel({ models, families, form, setForm, autoDefaults = tru
           {checkpoints.map((model) => {
             const info = findModelFamily(model.name, families)
             return (
-              <SelectItem key={model.id} value={model.id}>
-                <div className="flex items-center gap-2">
-                  <span>{model.name}</span>
-                  {model.variant && (
-                    <span className="text-[10px] text-muted-foreground">({model.variant})</span>
-                  )}
-                  {info && (
-                    <span className="text-[10px] text-muted-foreground/60">
-                      {info.total_b}B
+              <SelectItem key={model.id} value={model.id} className="py-2">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{model.name}</span>
+                    {model.variant && (
+                      <span className="text-[10px] text-muted-foreground">({model.variant})</span>
+                    )}
+                    {info && (
+                      <span className="text-[10px] text-muted-foreground/60">
+                        {info.total_b}B
+                      </span>
+                    )}
+                    <span className="ml-auto text-[10px] text-muted-foreground/60">
+                      {(model.size_bytes / 1024 / 1024 / 1024).toFixed(1)}GB
                     </span>
+                  </div>
+                  {info && (
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[9px] text-muted-foreground/50">quality</span>
+                        <RatingDots value={info.quality} />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[9px] text-muted-foreground/50">speed</span>
+                        <RatingDots value={info.speed} />
+                      </div>
+                      {info.capabilities.img2img && (
+                        <span className="rounded bg-secondary/60 px-1 py-0.5 text-[8px] text-muted-foreground/60">img2img</span>
+                      )}
+                      {info.capabilities.inpaint && (
+                        <span className="rounded bg-secondary/60 px-1 py-0.5 text-[8px] text-muted-foreground/60">inpaint</span>
+                      )}
+                      {info.text_rendering && (
+                        <span className="rounded bg-primary/10 px-1 py-0.5 text-[8px] font-medium text-primary/70">text</span>
+                      )}
+                    </div>
                   )}
-                  <span className="ml-auto text-[10px] text-muted-foreground/60">
-                    {(model.size_bytes / 1024 / 1024 / 1024).toFixed(1)}GB
-                  </span>
                 </div>
               </SelectItem>
             )
           })}
         </SelectContent>
       </Select>
-
-      {/* Model info bar */}
-      {familyInfo && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-secondary/20 px-2 py-1.5">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-muted-foreground/60">quality</span>
-            <RatingDots value={familyInfo.quality} />
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-muted-foreground/60">speed</span>
-            <RatingDots value={familyInfo.speed} />
-          </div>
-          {familyInfo.text_rendering && (
-            <span className="rounded bg-primary/10 px-1 py-0.5 text-[9px] font-medium text-primary">
-              text
-            </span>
-          )}
-          {/* Capability badges */}
-          <div className="flex gap-1">
-            {familyInfo.capabilities.img2img && (
-              <span className="rounded bg-secondary/60 px-1 py-0.5 text-[9px] text-muted-foreground">
-                img2img
-              </span>
-            )}
-            {familyInfo.capabilities.inpaint && (
-              <span className="rounded bg-secondary/60 px-1 py-0.5 text-[9px] text-muted-foreground">
-                inpaint
-              </span>
-            )}
-            {familyInfo.capabilities.edit && (
-              <span className="rounded bg-secondary/60 px-1 py-0.5 text-[9px] text-muted-foreground">
-                edit
-              </span>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

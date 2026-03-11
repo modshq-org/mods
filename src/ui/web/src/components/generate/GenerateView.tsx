@@ -3,20 +3,17 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   DownloadIcon,
-  Maximize2Icon,
-  Minimize2Icon,
   PencilIcon,
   SparklesIcon,
 } from 'lucide-react'
 import { api, type EditRequest, type GeneratedImage, type GeneratedOutput, type GenerateRequest, type GpuStatus, type InstalledModel, type ModelFamily } from '../../api'
-import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { useSSE } from '../../hooks/useSSE'
 import { CollapsibleSection } from '../ui/collapsible-section'
 import { BatchPanel } from './BatchPanel'
 import { GenerateActions } from './GenerateActions'
 import { GenerateProgressBar, type GenerateProgressState } from './GenerateProgressBar'
-import { GenerationGallery } from './GenerationGallery'
-import { ImagePreview, type PreviewImage } from './ImagePreview'
+import { ImagePreview, type PreviewImage, type GeneratingContext } from './ImagePreview'
+import { SessionStrip, type SessionItem } from './SessionStrip'
 import { Img2ImgPanel } from './Img2ImgPanel'
 import { LoraPanel } from './LoraPanel'
 import { ModelPanel } from './ModelPanel'
@@ -24,30 +21,35 @@ import { PromptPanel } from './PromptPanel'
 import { SamplingPanel } from './SamplingPanel'
 import { SizePanel } from './SizePanel'
 import { EditImagesPanel } from './EditImagesPanel'
-import { createDefaultGenerateFormState, findModelFamily, modelDefaults, randomSeed, type GenerateFormState, type GenerationMode } from './generate-state'
+import { findModelFamily, modelDefaults, randomSeed, type GenerateFormState, type GenerationMode } from './generate-state'
 
 // ---------------------------------------------------------------------------
 // GenerateView — pro sidebar layout with scrollable controls + fixed canvas
 // ---------------------------------------------------------------------------
 
 type Props = {
+  /** Shared form state from App */
+  form: GenerateFormState
+  setForm: React.Dispatch<React.SetStateAction<GenerateFormState>>
   /** Navigate to a different tab */
   setTab?: (tab: string) => void
 }
 
-export function GenerateView({ setTab: _setTab }: Props) {
+export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
   const queryClient = useQueryClient()
 
   // ── State ────────────────────────────────────────────────────────────
-  const [form, setForm] = useLocalStorage<GenerateFormState>(
-    'modl:generate-form-v2',
-    createDefaultGenerateFormState,
-  )
   const [progressState, setProgressState] = useState<GenerateProgressState>({ status: 'idle' })
   const [previewImages, setPreviewImages] = useState<PreviewImage[]>([])
   const expectedCountRef = useRef(1)
-  const [canvasFit, setCanvasFit] = useState<'fit' | 'fill'>('fit')
-  const [queueCount, setQueueCount] = useState(0)
+  const [, setQueueCount] = useState(0)
+
+  // ── Session strip state ─────────────────────────────────────────────
+  const [sessionItems, setSessionItems] = useState<SessionItem[]>([])
+  // Whether user manually clicked a session card (suppresses auto-advance)
+  const userFocusedRef = useRef(false)
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const sessionIdCounter = useRef(0)
 
   // ── Queries ──────────────────────────────────────────────────────────
   const { data: gpu = { training_active: false } as GpuStatus } = useQuery({
@@ -109,6 +111,19 @@ export function GenerateView({ setTab: _setTab }: Props) {
         console.error('[generate] server error:', errMsg)
         toast.error(errMsg)
         setProgressState({ status: 'error', message: errMsg })
+        // Mark active session item as error
+        setSessionItems((prev) => {
+          const idx = prev.findIndex((s) => s.status === 'active')
+          if (idx === -1) return prev
+          const updated = [...prev]
+          updated[idx] = { ...updated[idx], status: 'error', error: errMsg }
+          // Promote next queued → active
+          const nextQueued = updated.findIndex((s) => s.status === 'queued')
+          if (nextQueued !== -1) {
+            updated[nextQueued] = { ...updated[nextQueued], status: 'active' }
+          }
+          return updated
+        })
         return
       }
 
@@ -119,14 +134,46 @@ export function GenerateView({ setTab: _setTab }: Props) {
         // Refresh outputs to find the new images
         void queryClient.invalidateQueries({ queryKey: ['outputs'] }).then(() => {
           const outputs = queryClient.getQueryData<GeneratedOutput[]>(['outputs']) ?? []
-          const allImages: Array<{ url: string; seed?: number; modified: number }> = []
+          const allImages: Array<{ url: string; seed?: number; modified: number; path?: string }> = []
           for (const group of outputs) {
             for (const img of group.images) {
-              allImages.push({ url: `/files/${img.path}`, seed: img.seed, modified: img.modified })
+              allImages.push({ url: `/files/${img.path}`, seed: img.seed, modified: img.modified, path: img.path })
             }
           }
           allImages.sort((a, b) => b.modified - a.modified)
-          setPreviewImages(allImages.slice(0, count))
+          const completedImages = allImages.slice(0, count)
+
+          // Auto-advance canvas (unless user is reviewing an older card)
+          if (!userFocusedRef.current) {
+            setPreviewImages(completedImages)
+          }
+
+          // Update the active session item → completed
+          setSessionItems((prev) => {
+            const idx = prev.findIndex((s) => s.status === 'active')
+            if (idx === -1) return prev
+            const updated = [...prev]
+            updated[idx] = {
+              ...updated[idx],
+              status: 'completed',
+              images: completedImages.map((ci) => ({
+                url: ci.url,
+                seed: ci.seed,
+                path: ci.path,
+              })),
+              step: undefined,
+              totalSteps: undefined,
+            }
+            if (!userFocusedRef.current) {
+              setActiveSessionId(updated[idx].id)
+            }
+            // Promote next queued → active
+            const nextQueued = updated.findIndex((s) => s.status === 'queued')
+            if (nextQueued !== -1) {
+              updated[nextQueued] = { ...updated[nextQueued], status: 'active' }
+            }
+            return updated
+          })
         })
 
         toast.success(`Generated ${count} image${count !== 1 ? 's' : ''}`)
@@ -148,6 +195,14 @@ export function GenerateView({ setTab: _setTab }: Props) {
           setProgressState((prev) => {
             if (prev.status !== 'streaming') return prev
             return { ...prev, step: parsed.step, totalSteps: parsed.total_steps }
+          })
+          // Update active session item progress
+          setSessionItems((prev) => {
+            const idx = prev.findIndex((s) => s.status === 'active')
+            if (idx === -1) return prev
+            const updated = [...prev]
+            updated[idx] = { ...updated[idx], step: parsed.step, totalSteps: parsed.total_steps }
+            return updated
           })
         }
       } catch {
@@ -172,10 +227,15 @@ export function GenerateView({ setTab: _setTab }: Props) {
   })
 
   // ── Mode switch ────────────────────────────────────────────────────
+  // Remember the model used before entering edit mode so we can restore it
+  const preEditModelRef = useRef<string | null>(null)
+
   const handleModeSwitch = useCallback((mode: GenerationMode) => {
     setForm((prev) => {
       const updates: Partial<GenerateFormState> = { mode }
       if (mode === 'edit') {
+        // Save current model before switching to edit
+        preEditModelRef.current = prev.base_model_id
         // Auto-select qwen-image-edit if available + apply its defaults
         const editModel = models.find(
           (m) => m.id === 'qwen-image-edit' || m.name.toLowerCase().includes('qwen-image-edit'),
@@ -187,6 +247,38 @@ export function GenerateView({ setTab: _setTab }: Props) {
           updates.steps = defaults.steps
           updates.guidance = defaults.guidance
         }
+      } else {
+        // Switching back to generate — restore previous model if current is edit-only
+        const currentInfo = findModelFamily(prev.base_model_id, families)
+        const currentSupportsTxt2img = !currentInfo || currentInfo.capabilities.txt2img
+        if (!currentSupportsTxt2img) {
+          // Try to restore the model used before entering edit
+          const savedId = preEditModelRef.current
+          const savedModel = savedId ? models.find((m) => m.id === savedId) : null
+          if (savedModel) {
+            updates.base_model_id = savedModel.id
+            const info = findModelFamily(savedModel.name, families)
+            const defaults = modelDefaults(savedModel.name, info)
+            updates.steps = defaults.steps
+            updates.guidance = defaults.guidance
+          } else {
+            // Fall back to first installed checkpoint that supports txt2img
+            const fallback = models.find((m) => {
+              if (m.model_type !== 'checkpoint' && m.model_type !== 'diffusion_model') return false
+              const info = findModelFamily(m.name, families)
+              return !info || info.capabilities.txt2img
+            })
+            if (fallback) {
+              updates.base_model_id = fallback.id
+              const info = findModelFamily(fallback.name, families)
+              const defaults = modelDefaults(fallback.name, info)
+              updates.steps = defaults.steps
+              updates.guidance = defaults.guidance
+            }
+          }
+        }
+        // Clear edit images when leaving edit mode
+        updates.edit_images = []
       }
       return { ...prev, ...updates }
     })
@@ -252,18 +344,34 @@ export function GenerateView({ setTab: _setTab }: Props) {
       guidance: form.guidance,
       seed: form.seed,
       num_images: form.batch_count,
-      loras: form.loras.map((l) => ({ id: l.id, strength: l.strength })),
+      loras: form.loras.filter((l) => l.enabled !== false).map((l) => ({ id: l.id, strength: l.strength })),
       init_image: initImagePath,
       strength: initImagePath ? form.denoise_strength : undefined,
       fast: form.fast || undefined,
     }
 
+    // Create a session item for this submission
+    const sessionId = `gen-${++sessionIdCounter.current}-${Date.now()}`
+    const isFirst = !isGenerating
+
     // If not currently generating, this is a fresh start
-    if (!isGenerating) {
+    if (isFirst) {
       expectedCountRef.current = form.batch_count
       setPreviewImages([])
       setProgressState({ status: 'submitting' })
     }
+
+    // Add to session strip
+    const newItem: SessionItem = {
+      id: sessionId,
+      status: isFirst ? 'active' : 'queued',
+      prompt: form.prompt,
+      model_id: form.base_model_id,
+      job_type: 'generate',
+      batch_count: form.batch_count,
+    }
+    setSessionItems((prev) => [...prev, newItem])
+    userFocusedRef.current = false
 
     // Ensure SSE is connected
     setSseConnected(true)
@@ -289,14 +397,18 @@ export function GenerateView({ setTab: _setTab }: Props) {
 
       if (queueLen > 0) {
         toast.info(`Enqueued — position ${queueLen}`)
-      } else if (!isGenerating) {
+      } else if (isFirst) {
         setProgressState({ status: 'streaming', lines: [] })
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error('[generate] submit failed:', message)
       toast.error(message)
-      if (!isGenerating) {
+      // Mark session item as error
+      setSessionItems((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, status: 'error' as const, error: message } : s)),
+      )
+      if (isFirst) {
         setProgressState({ status: 'error', message })
       }
     }
@@ -345,11 +457,26 @@ export function GenerateView({ setTab: _setTab }: Props) {
       num_images: form.batch_count,
     }
 
-    if (!isGenerating) {
+    const sessionId = `edit-${++sessionIdCounter.current}-${Date.now()}`
+    const isFirst = !isGenerating
+
+    if (isFirst) {
       expectedCountRef.current = form.batch_count
       setPreviewImages([])
       setProgressState({ status: 'submitting' })
     }
+
+    // Add to session strip
+    const newItem: SessionItem = {
+      id: sessionId,
+      status: isFirst ? 'active' : 'queued',
+      prompt: form.prompt,
+      model_id: form.base_model_id,
+      job_type: 'edit',
+      batch_count: form.batch_count,
+    }
+    setSessionItems((prev) => [...prev, newItem])
+    userFocusedRef.current = false
 
     setSseConnected(true)
     console.log('[edit] submitting:', req.model_id, req.prompt.slice(0, 60))
@@ -373,14 +500,17 @@ export function GenerateView({ setTab: _setTab }: Props) {
 
       if (queueLen > 0) {
         toast.info(`Enqueued — position ${queueLen}`)
-      } else if (!isGenerating) {
+      } else if (isFirst) {
         setProgressState({ status: 'streaming', lines: [] })
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error('[edit] submit failed:', message)
       toast.error(message)
-      if (!isGenerating) {
+      setSessionItems((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, status: 'error' as const, error: message } : s)),
+      )
+      if (isFirst) {
         setProgressState({ status: 'error', message })
       }
     }
@@ -389,6 +519,9 @@ export function GenerateView({ setTab: _setTab }: Props) {
   // ── Gallery click → load params ──────────────────────────────────────
   const handleGallerySelect = useCallback(
     (img: GeneratedImage) => {
+      // Mark as user-focused so auto-advance doesn't override
+      userFocusedRef.current = true
+      setActiveSessionId(null)
       // Show image in preview
       setPreviewImages([{ url: `/files/${img.path}`, seed: img.seed }])
 
@@ -455,7 +588,55 @@ export function GenerateView({ setTab: _setTab }: Props) {
     [models, families, setForm],
   )
 
+  // ── Session strip handlers ──────────────────────────────────────────
+  const handleSessionSelect = useCallback(
+    (item: SessionItem) => {
+      userFocusedRef.current = true
+      setActiveSessionId(item.id)
+      if (item.status === 'completed' && item.images && item.images.length > 0) {
+        setPreviewImages(item.images.map((img) => ({ url: img.url, seed: img.seed })))
+      }
+      if (item.status === 'error' && item.error) {
+        toast.error(item.error)
+      }
+    },
+    [],
+  )
+
+  const handleCancelQueued = useCallback(
+    async (sessionId: string) => {
+      // Find the queue index of this item (only queued items are in the server queue)
+      const queuedItems = sessionItems.filter((s) => s.status === 'queued')
+      const queueIdx = queuedItems.findIndex((s) => s.id === sessionId)
+      if (queueIdx >= 0) {
+        await api.cancelQueueItem(queueIdx)
+      }
+      setSessionItems((prev) => prev.filter((s) => s.id !== sessionId))
+    },
+    [sessionItems],
+  )
+
   const activePreviewImage = previewImages[0]
+
+  // ── Generating context for the loading card ───────────────────────────
+  const generatingContext = useMemo((): GeneratingContext | undefined => {
+    if (!isGenerating) return undefined
+    const activeSession = sessionItems.find((s) => s.status === 'active')
+    if (!activeSession) return undefined
+    // Queue position: count how many items are ahead (0 = actively generating)
+    const queuedBefore = sessionItems.filter((s) => s.status === 'queued').length
+    const selectedModel = models.find((m) => m.id === activeSession.model_id)
+    return {
+      prompt: activeSession.prompt,
+      modelName: selectedModel?.name ?? activeSession.model_id,
+      step: activeSession.step,
+      totalSteps: activeSession.totalSteps,
+      queuePosition: progressState.status === 'submitting' ? (queuedBefore > 0 ? queuedBefore : 0) : 0,
+      onCancel: () => {
+        setProgressState({ status: 'idle' })
+      },
+    }
+  }, [isGenerating, sessionItems, models, progressState.status])
 
   // ── Render ───────────────────────────────────────────────────────────
   return (
@@ -538,9 +719,9 @@ export function GenerateView({ setTab: _setTab }: Props) {
             </CollapsibleSection>
           )}
 
-          {/* ─── Img2Img (not shown in edit mode) ─── */}
+          {/* ─── Reference Image (not shown in edit mode) ─── */}
           {!isEditMode && (
-            <CollapsibleSection title="Img2Img" defaultOpen={false}>
+            <CollapsibleSection title="Reference Image" defaultOpen={false}>
               <Img2ImgPanel
                 form={form}
                 setForm={setForm}
@@ -565,7 +746,6 @@ export function GenerateView({ setTab: _setTab }: Props) {
             form={form}
             gpu={gpu}
             isGenerating={isGenerating}
-            queueCount={queueCount}
             isEditMode={isEditMode}
             onGenerate={isEditMode ? handleEdit : handleGenerate}
             onInterrupt={() => {
@@ -574,9 +754,12 @@ export function GenerateView({ setTab: _setTab }: Props) {
             onClearQueue={async () => {
               await api.clearQueue()
               setQueueCount(0)
+              // Remove queued session items
+              setSessionItems((prev) => prev.filter((s) => s.status !== 'queued'))
               toast.info('Queue cleared')
             }}
-            onToggleFast={(fast) => setForm((f) => ({ ...f, fast }))}
+            sessionItems={sessionItems}
+            onRemoveQueueItem={handleCancelQueued}
           />
           <GenerateProgressBar state={progressState} />
           <p className="mt-1 text-center text-[10px] text-muted-foreground/30">
@@ -598,25 +781,13 @@ export function GenerateView({ setTab: _setTab }: Props) {
             expectedCount={form.batch_count}
             width={form.width}
             height={form.height}
-            fitMode={canvasFit}
             onImageClick={(img) => window.open(img.url, '_blank')}
+            generating={generatingContext}
           />
 
           {/* Floating toolbar — visible when an image is shown */}
           {activePreviewImage && !isGenerating && (
             <div className="absolute right-4 top-4 flex items-center gap-1 rounded-lg border border-border/40 bg-background/80 px-1.5 py-1 shadow-lg backdrop-blur">
-              <button
-                type="button"
-                onClick={() => setCanvasFit((f) => (f === 'fit' ? 'fill' : 'fit'))}
-                className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                title={canvasFit === 'fit' ? 'View at 100%' : 'Fit to screen'}
-              >
-                {canvasFit === 'fit' ? (
-                  <Maximize2Icon className="size-3.5" />
-                ) : (
-                  <Minimize2Icon className="size-3.5" />
-                )}
-              </button>
               <button
                 type="button"
                 onClick={downloadImage}
@@ -644,11 +815,15 @@ export function GenerateView({ setTab: _setTab }: Props) {
           )}
         </div>
 
-        {/* History filmstrip (bottom of canvas) */}
+        {/* Session strip + history (bottom of canvas) */}
         <div className="shrink-0 border-t border-border/30 bg-[#0a0a14]/90 px-4 py-2 backdrop-blur">
-          <GenerationGallery
-            onSelect={handleGallerySelect}
+          <SessionStrip
+            sessionItems={sessionItems}
+            onSessionSelect={handleSessionSelect}
+            onHistorySelect={handleGallerySelect}
+            onCancelQueued={handleCancelQueued}
             activePath={previewImages[0]?.url?.replace('/files/', '') ?? null}
+            activeSessionId={activeSessionId}
           />
         </div>
       </div>

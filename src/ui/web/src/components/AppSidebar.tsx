@@ -1,4 +1,4 @@
-import { ChevronsLeft, ChevronsRight, Database, HardDrive, Images, Sparkles, Zap } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, Database, HardDrive, Images, ListIcon, Sparkles, Zap } from 'lucide-react'
 
 function ModlLogo({ size = 28 }: { size?: number }) {
   return (
@@ -10,7 +10,7 @@ function ModlLogo({ size = 28 }: { size?: number }) {
 }
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
-import { api } from '../api'
+import { api, type QueueStatus } from '../api'
 import type { Tab } from '../App'
 
 const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
@@ -42,8 +42,16 @@ export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse
     refetchInterval: 2000,
   })
 
+  const { data: queueStatus } = useQuery<QueueStatus>({
+    queryKey: ['generate-queue'],
+    queryFn: api.queueStatus,
+    refetchInterval: 2000,
+    staleTime: 1500,
+  })
+
   const activeRun = status.find((r) => r.is_running)
   const vramGB = gpu?.vram_free_mb != null ? (gpu.vram_free_mb / 1024).toFixed(1) : null
+  const queueJobCount = (queueStatus?.running ? 1 : 0) + (queueStatus?.queue?.length ?? 0)
 
   return (
     <aside
@@ -118,6 +126,39 @@ export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse
           )
         })}
       </nav>
+
+      {/* Queue pill — always visible when jobs are active */}
+      {queueJobCount > 0 && (
+        <div className="border-t border-border/40 px-2 py-2">
+          <button
+            onClick={() => onTabChange('generate')}
+            title={`${queueJobCount} in queue`}
+            className={cn(
+              'flex w-full items-center rounded-md py-2 transition-colors hover:bg-accent',
+              collapsed ? 'justify-center px-0' : 'gap-3 px-3',
+            )}
+          >
+            {collapsed ? (
+              <div className="relative">
+                <ListIcon className="h-4 w-4 text-primary" />
+                <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-primary text-[8px] font-bold text-primary-foreground">
+                  {queueJobCount}
+                </span>
+                <span className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+              </div>
+            ) : (
+              <>
+                <div className="relative">
+                  <ListIcon className="h-4 w-4 text-primary" />
+                  <span className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+                </div>
+                <span className="text-xs font-medium text-primary">{queueJobCount}</span>
+                <span className="text-xs text-muted-foreground">in queue</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
 
       {/* Collapse toggle */}
       <div className="border-t border-border/40 px-2 py-2">

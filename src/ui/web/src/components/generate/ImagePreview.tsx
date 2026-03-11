@@ -1,12 +1,11 @@
-import { LoaderCircleIcon } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { LoaderCircleIcon, SparklesIcon, XIcon } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // ImagePreview — the main preview area
 //
 // Shows:
 //   - Placeholder when idle
-//   - Spinner overlay during generation
+//   - Rich loading card during generation (with prompt, model, progress)
 //   - Single image result
 //   - Grid for multi-batch results
 // ---------------------------------------------------------------------------
@@ -17,6 +16,16 @@ export type PreviewImage = {
   index?: number
 }
 
+export type GeneratingContext = {
+  prompt: string
+  modelName: string
+  step?: number
+  totalSteps?: number
+  /** 0 = actively generating, >0 = waiting in queue at this position */
+  queuePosition: number
+  onCancel?: () => void
+}
+
 type Props = {
   images: PreviewImage[]
   isGenerating: boolean
@@ -24,9 +33,9 @@ type Props = {
   expectedCount?: number
   width: number
   height: number
-  /** 'fit' shows the full image; 'fill' shows at 100% (may overflow) */
-  fitMode?: 'fit' | 'fill'
   onImageClick?: (img: PreviewImage) => void
+  /** Context about what's being generated — shown in the loading state */
+  generating?: GeneratingContext
 }
 
 export function ImagePreview({
@@ -35,8 +44,8 @@ export function ImagePreview({
   expectedCount = 1,
   width,
   height,
-  fitMode = 'fit',
   onImageClick,
+  generating,
 }: Props) {
   const aspectRatio = width / height
   const hasImages = images.length > 0
@@ -52,8 +61,8 @@ export function ImagePreview({
           ? 3
           : 4
 
+  // ── Idle placeholder ──
   if (!hasImages && !isGenerating) {
-    // Idle placeholder
     return (
       <div
         className="relative flex w-full max-w-lg items-center justify-center rounded-lg border border-dashed border-border/40 bg-secondary/10"
@@ -70,7 +79,141 @@ export function ImagePreview({
     )
   }
 
-  // Grid or single layout
+  // ── Generating / in-queue — rich loading card ──
+  if (!hasImages && isGenerating && generating) {
+    const { prompt, modelName, step, totalSteps, queuePosition, onCancel } = generating
+    const isQueued = queuePosition > 0
+    const progressPct =
+      step != null && totalSteps != null && totalSteps > 0
+        ? Math.min(100, (step / totalSteps) * 100)
+        : undefined
+
+    return (
+      <div className="flex w-full max-w-md flex-col items-center gap-6">
+        {/* Animated card */}
+        <div
+          className="relative w-full overflow-hidden rounded-2xl border border-primary/20"
+          style={{ aspectRatio: Math.max(aspectRatio, 0.75) }}
+        >
+          {/* Animated gradient background */}
+          <div
+            className="absolute inset-0"
+            style={{
+              background: 'linear-gradient(135deg, #0e0e18 0%, #1a1030 30%, #150d25 60%, #0e0e18 100%)',
+              backgroundSize: '400% 400%',
+              animation: 'gradientShift 4s ease-in-out infinite',
+            }}
+          />
+
+          {/* Subtle shimmer overlay */}
+          <div
+            className="absolute inset-0 opacity-30"
+            style={{
+              background: 'linear-gradient(90deg, transparent 0%, rgba(167,139,250,0.08) 50%, transparent 100%)',
+              backgroundSize: '200% 100%',
+              animation: 'shimmer 2s linear infinite',
+            }}
+          />
+
+          {/* Content */}
+          <div className="relative flex h-full flex-col items-center justify-center gap-4 p-8">
+            {/* Spinner / queue indicator */}
+            {isQueued ? (
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex size-12 items-center justify-center rounded-full border border-primary/30 bg-primary/10">
+                  <span className="text-lg font-bold text-primary">{queuePosition}</span>
+                </div>
+                <span className="text-[11px] font-medium uppercase tracking-wider text-primary/60">
+                  In queue
+                </span>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                {progressPct != null ? (
+                  <svg className="size-12 -rotate-90" viewBox="0 0 48 48">
+                    <circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" strokeWidth="2" className="text-primary/10" />
+                    <circle
+                      cx="24" cy="24" r="20" fill="none" stroke="currentColor" strokeWidth="2.5"
+                      strokeDasharray={`${(progressPct / 100) * 125.7} 125.7`}
+                      strokeLinecap="round"
+                      className="text-primary transition-all duration-300"
+                    />
+                  </svg>
+                ) : (
+                  <SparklesIcon className="size-8 animate-pulse text-primary/50" />
+                )}
+                <span className="text-[11px] font-medium uppercase tracking-wider text-primary/60">
+                  {progressPct != null
+                    ? `${Math.round(progressPct)}%`
+                    : 'Generating'
+                  }
+                </span>
+              </div>
+            )}
+
+            {/* Progress bar (when actively generating) */}
+            {progressPct != null && !isQueued && (
+              <div className="w-full max-w-[200px]">
+                <div className="h-1 w-full overflow-hidden rounded-full bg-primary/10">
+                  <div
+                    className="h-full rounded-full bg-primary/60 transition-all duration-300"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+                <div className="mt-1 text-center font-mono text-[10px] text-muted-foreground/40">
+                  {step}/{totalSteps}
+                </div>
+              </div>
+            )}
+
+            {/* Prompt */}
+            <p className="max-w-[280px] text-center text-xs leading-relaxed text-muted-foreground/50">
+              &ldquo;{prompt.length > 120 ? prompt.slice(0, 120) + '\u2026' : prompt}&rdquo;
+            </p>
+          </div>
+
+          {/* Cancel button */}
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="absolute right-3 top-3 rounded-lg border border-border/30 bg-background/40 p-1.5 text-muted-foreground/40 backdrop-blur transition-colors hover:border-destructive/50 hover:text-destructive"
+              title="Cancel"
+            >
+              <XIcon className="size-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Details below card */}
+        <div className="flex items-center gap-3 text-[10px] text-muted-foreground/30">
+          <span>{modelName}</span>
+          <span>&middot;</span>
+          <span className="font-mono">{width}×{height}</span>
+          {expectedCount > 1 && (
+            <>
+              <span>&middot;</span>
+              <span>{expectedCount}x</span>
+            </>
+          )}
+        </div>
+
+        {/* CSS keyframes */}
+        <style>{`
+          @keyframes gradientShift {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+          }
+          @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+          }
+        `}</style>
+      </div>
+    )
+  }
+
+  // ── Grid or single layout ──
   if (isGrid) {
     return (
       <div
@@ -105,13 +248,13 @@ export function ImagePreview({
             return (
               <div
                 key={`skeleton-${i}`}
-                className="relative flex items-center justify-center overflow-hidden rounded-md border border-border/30 bg-secondary/15"
+                className="relative flex items-center justify-center overflow-hidden rounded-md border border-primary/10 bg-primary/5"
                 style={{ aspectRatio }}
               >
                 {isGenerating && (
-                  <LoaderCircleIcon className="size-6 animate-spin text-muted-foreground/30" />
+                  <LoaderCircleIcon className="size-6 animate-spin text-primary/20" />
                 )}
-                <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-secondary/20 to-transparent" />
+                <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-primary/5 to-transparent" />
               </div>
             )
           },
@@ -120,27 +263,26 @@ export function ImagePreview({
     )
   }
 
-  // Single image
+  // ── Single image — scales down to fit the available space without cropping ──
   const img = images[0]
+  const isTall = aspectRatio < 1
   return (
     <div
-      className={cn(
-        'relative overflow-hidden rounded-lg border border-border/40 bg-secondary/20',
-        fitMode === 'fill' && 'overflow-auto',
-      )}
+      className="group relative flex items-center justify-center"
+      style={{
+        maxHeight: '100%',
+        maxWidth: '100%',
+        width: isTall ? 'auto' : '100%',
+        height: isTall ? '100%' : 'auto',
+      }}
     >
       {img ? (
-        <div className="group relative" style={fitMode === 'fit' ? { aspectRatio } : undefined}>
+        <>
           <img
             src={img.url}
             alt="Generated"
-            className={cn(
-              'cursor-pointer transition-transform hover:scale-[1.01]',
-              fitMode === 'fit'
-                ? 'h-full w-full object-contain'
-                : 'max-w-none',
-              isGenerating && 'opacity-50',
-            )}
+            className="max-h-full max-w-full cursor-pointer rounded-lg object-contain"
+            style={{ aspectRatio }}
             onClick={() => onImageClick?.(img)}
           />
           {img.seed != null && (
@@ -148,17 +290,13 @@ export function ImagePreview({
               seed: {img.seed}
             </span>
           )}
-        </div>
+        </>
       ) : (
-        <div className="flex items-center justify-center" style={{ aspectRatio }}>
-          <LoaderCircleIcon className="size-8 animate-spin text-muted-foreground/30" />
-        </div>
-      )}
-
-      {/* Generation overlay */}
-      {isGenerating && img && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background/30 backdrop-blur-[2px]">
-          <LoaderCircleIcon className="size-8 animate-spin text-primary/70" />
+        <div
+          className="flex items-center justify-center rounded-lg border border-primary/10 bg-primary/5"
+          style={{ aspectRatio, maxHeight: '100%', maxWidth: isTall ? 'none' : 500, width: isTall ? 'auto' : '100%', height: isTall ? '100%' : 'auto' }}
+        >
+          <LoaderCircleIcon className="size-8 animate-spin text-primary/20" />
         </div>
       )}
     </div>

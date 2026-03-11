@@ -9,6 +9,7 @@ import { createDefaultGenerateFormState, type GenerateFormState } from './compon
 import { GpuBanner } from './components/GpuBanner'
 import { MobileNav } from './components/MobileNav'
 import { OutputsGallery } from './components/OutputsGallery'
+import { QueuePanel } from './components/QueuePanel'
 import { TrainingRuns } from './components/TrainingRuns'
 import { TrainingStatusBar } from './components/TrainingStatusBar'
 import { useLocalStorage } from './hooks/useLocalStorage'
@@ -37,8 +38,8 @@ function App() {
     () => false,
   )
 
-  // Form state — used by OutputsGallery "open as recipe" feature
-  const [, setForm] = useLocalStorage<GenerateFormState>(
+  // Form state — shared between GenerateView and OutputsGallery
+  const [form, setForm] = useLocalStorage<GenerateFormState>(
     'modl:generate-form-v2',
     createDefaultGenerateFormState,
   )
@@ -95,7 +96,7 @@ function App() {
 
           {/* Tab: Generate — full-bleed, no padding, no scroll (component manages its own layout) */}
           <div className={tab === 'generate' ? 'h-full' : 'hidden'}>
-            <GenerateView setTab={(t) => setTab(t as Tab)} />
+            <GenerateView form={form} setForm={setForm} setTab={(t) => setTab(t as Tab)} />
           </div>
 
           {/* Tab: Outputs */}
@@ -114,6 +115,9 @@ function App() {
           </div>
         </main>
       </div>
+
+      {/* Floating generation queue panel — hidden on Generate tab (session strip handles it) */}
+      {tab !== 'generate' && <QueuePanel />}
     </div>
   )
 }

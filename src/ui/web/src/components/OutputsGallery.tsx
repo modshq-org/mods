@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, ChevronRight, Play, Search, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, PencilIcon, Play, Search, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -9,11 +9,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { api, type GeneratedImage, type GeneratedOutput } from '../api'
+import { api, type GeneratedImage, type GeneratedOutput, type ModelFamily } from '../api'
 import { modelColor } from '@/lib/utils'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import type { GenerateFormState } from './generate'
-import { randomSeed } from './generate/generate-state'
+import { findModelFamily, modelDefaults, randomSeed } from './generate/generate-state'
 import { ImageDetail } from './ImageDetail'
 import { LazyImage } from './LazyImage'
 
@@ -82,6 +82,47 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
       void queryClient.invalidateQueries({ queryKey: ['outputs'] })
     },
   })
+
+  // Models + families (cached from other tabs, needed for send-to-edit)
+  const { data: modelsResponse } = useQuery({
+    queryKey: ['models'],
+    queryFn: api.models,
+    staleTime: 5 * 60_000,
+  })
+  const models = modelsResponse?.models ?? []
+
+  const { data: families = [] } = useQuery<ModelFamily[]>({
+    queryKey: ['model-families'],
+    queryFn: api.modelFamilies,
+    staleTime: 60 * 60_000,
+  })
+
+  const sendToEdit = useCallback((imageUrl: string, serverPath: string) => {
+    setForm((prev) => {
+      let modelId = prev.base_model_id
+      let steps = prev.steps
+      let guidance = prev.guidance
+      const editModel = models.find(
+        (m) => m.id === 'qwen-image-edit' || m.name.toLowerCase().includes('qwen-image-edit'),
+      )
+      if (editModel) {
+        modelId = editModel.id
+        const info = findModelFamily(editModel.name, families)
+        const defaults = modelDefaults(editModel.name, info)
+        steps = defaults.steps
+        guidance = defaults.guidance
+      }
+      return {
+        ...prev,
+        mode: 'edit' as const,
+        base_model_id: modelId,
+        steps,
+        guidance,
+        edit_images: [{ type: 'server' as const, preview: imageUrl, serverPath }],
+      }
+    })
+    setActiveTab('generate')
+  }, [models, families, setForm, setActiveTab])
 
   const [selected, setSelected] = useState<GeneratedImage | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<GeneratedImage | null>(null)
@@ -719,7 +760,7 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
                             ...prev,
                             prompt: image.prompt ?? '',
                             base_model_id: image.base_model_id ?? prev.base_model_id,
-                            loras: image.lora_name ? [{ id: image.lora_name, name: image.lora_name, strength: image.lora_strength ?? 1.0 }] : [],
+                            loras: image.lora_name ? [{ id: image.lora_name, name: image.lora_name, strength: image.lora_strength ?? 1.0, enabled: true }] : [],
                             seed: image.seed ?? randomSeed(),
                             steps: image.steps ?? 20,
                             guidance: image.guidance ?? 3.5,
@@ -730,6 +771,19 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
                         }}
                       >
                         <Play className="size-3" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        className="h-6 w-6 p-0"
+                        title="Send to Edit"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          sendToEdit(`/files/${image.path}`, image.path)
+                        }}
+                      >
+                        <PencilIcon className="size-3" />
                       </Button>
                       <Button
                         type="button"
@@ -768,14 +822,7 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
         allImages={allFilteredImages}
         onNavigate={setSelected}
         onToggleFavorite={(path) => favoriteMutation.mutate(path)}
-        onEditImage={(imageUrl, serverPath) => {
-          setForm((prev) => ({
-            ...prev,
-            mode: 'edit' as const,
-            edit_images: [{ type: 'server' as const, preview: imageUrl, serverPath }],
-          }))
-          setActiveTab('generate')
-        }}
+        onEditImage={sendToEdit}
         onDeleteImage={(img) => {
           setDeleteTarget(img)
           setSelected(null)

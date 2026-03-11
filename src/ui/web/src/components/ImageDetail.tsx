@@ -39,7 +39,7 @@ function openAsRecipe(
     ...prev,
     prompt: image.prompt ?? '',
     base_model_id: image.base_model_id ?? prev.base_model_id,
-    loras: image.lora_name ? [{ id: image.lora_name, name: image.lora_name, strength: image.lora_strength ?? 1.0 }] : [],
+    loras: image.lora_name ? [{ id: image.lora_name, name: image.lora_name, strength: image.lora_strength ?? 1.0, enabled: true }] : [],
     seed: image.seed ?? randomSeed(),
     steps: image.steps ?? 20,
     guidance: image.guidance ?? 3.5,
@@ -125,6 +125,12 @@ export function ImageDetail({ image, onClose, setForm, setActiveTab, allImages, 
           openAsRecipe(image, setForm, setActiveTab)
           onClose()
         }
+      } else if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault()
+        if (onEditImage) {
+          onEditImage(`/files/${image.path}`, image.path)
+          onClose()
+        }
       } else if (e.key === 'd' || e.key === 'D') {
         e.preventDefault()
         if (onDeleteImage) onDeleteImage(image)
@@ -205,7 +211,7 @@ export function ImageDetail({ image, onClose, setForm, setActiveTab, allImages, 
 
               {/* Keyboard hints */}
               <div className="absolute top-3 left-3 z-20 rounded-full bg-black/30 px-2.5 py-1 text-[10px] text-white/20 backdrop-blur">
-                ← → F R D I
+                ← → F R E D I
               </div>
 
               {/* ── Bottom toolbar — single control surface ──── */}

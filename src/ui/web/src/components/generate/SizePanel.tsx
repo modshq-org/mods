@@ -1,6 +1,4 @@
 import { useState, useRef, useEffect } from 'react'
-import { SquareIcon, RectangleHorizontalIcon, RectangleVerticalIcon } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { SIZE_PRESETS, detectSizePreset, type GenerateFormState } from './generate-state'
 
 type Props = {
@@ -57,11 +55,18 @@ function EditableSize({ value, onChange }: { value: number; onChange: (v: number
   )
 }
 
-/** Map preset aspect label to an icon */
-function presetIcon(label: string) {
-  if (label === '1:1') return <SquareIcon className="size-3" />
-  if (label === '3:4' || label === '9:16') return <RectangleVerticalIcon className="size-3" />
-  return <RectangleHorizontalIcon className="size-3" />
+/** Tiny aspect ratio preview rectangle */
+function AspectPreview({ w, h, active }: { w: number; h: number; active: boolean }) {
+  const scale = 14
+  return (
+    <div
+      className={`rounded-[2px] border-[1.5px] ${active ? 'border-primary' : 'border-muted-foreground/30'}`}
+      style={{
+        width: Math.round(scale * Math.min(w / h, 1.4)),
+        height: Math.round(scale * Math.min(h / w, 1.4)),
+      }}
+    />
+  )
 }
 
 export function SizePanel({ form, setForm }: Props) {
@@ -73,21 +78,28 @@ export function SizePanel({ form, setForm }: Props) {
 
   return (
     <div className="space-y-2.5">
-      {/* Preset buttons with icons */}
+      {/* Preset buttons with aspect ratio previews */}
       <div className="flex gap-1">
-        {SIZE_PRESETS.map((preset) => (
-          <Button
-            key={preset.label}
-            type="button"
-            size="sm"
-            variant={activePreset === preset.label ? 'secondary' : 'outline'}
-            className="h-7 flex-1 gap-1 px-1 text-[11px]"
-            onClick={() => applyPreset(preset.width, preset.height)}
-          >
-            {presetIcon(preset.label)}
-            {preset.label}
-          </Button>
-        ))}
+        {SIZE_PRESETS.map((preset) => {
+          const isActive = activePreset === preset.label
+          return (
+            <button
+              key={preset.label}
+              type="button"
+              className={`flex flex-1 flex-col items-center gap-1.5 rounded-lg border px-2 py-2 transition-colors ${
+                isActive
+                  ? 'border-primary/50 bg-primary/10'
+                  : 'border-border/40 bg-secondary/10 hover:bg-secondary/30'
+              }`}
+              onClick={() => applyPreset(preset.width, preset.height)}
+            >
+              <AspectPreview w={preset.width} h={preset.height} active={isActive} />
+              <span className={`text-[10px] ${isActive ? 'font-semibold text-primary' : 'text-muted-foreground'}`}>
+                {preset.label}
+              </span>
+            </button>
+          )
+        })}
       </div>
 
       {/* Dimensions display — click to edit */}

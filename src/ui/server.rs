@@ -27,6 +27,8 @@ pub struct UiState {
 pub struct GenerateInner {
     pub running: bool,
     pub queue: VecDeque<generate::QueuedJob>,
+    /// Summary of the currently-executing job (for queue panel display).
+    pub current_summary: Option<generate::QueuedJobSummary>,
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +79,7 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         generate_inner: Arc::new(tokio::sync::Mutex::new(GenerateInner {
             running: false,
             queue: VecDeque::new(),
+            current_summary: None,
         })),
         studio_events: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
@@ -101,6 +104,10 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         .route(
             "/api/generate/queue",
             get(generate::api_queue_status).delete(generate::api_clear_queue),
+        )
+        .route(
+            "/api/generate/queue/{index}",
+            delete(generate::api_cancel_queue_item),
         )
         .route("/api/enhance", post(generate::api_enhance_prompt))
         // Training

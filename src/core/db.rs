@@ -509,6 +509,27 @@ impl Database {
         }
     }
 
+    /// Find the most recent artifact whose file path matches (exact).
+    pub fn find_artifact_by_path(&self, path: &str) -> Result<Option<ArtifactRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT artifact_id, job_id, kind, path, sha256, size_bytes, metadata, created_at
+                 FROM artifacts WHERE path = ?1 ORDER BY created_at DESC LIMIT 1",
+            )
+            .context("Failed to prepare query")?;
+
+        let mut rows = stmt
+            .query_map(params![path], ArtifactRecord::from_row)
+            .context("Failed to query artifact by path")?;
+
+        match rows.next() {
+            Some(Ok(record)) => Ok(Some(record)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
     /// List artifacts, optionally filtered by job_id
     pub fn list_artifacts(&self, job_id: Option<&str>) -> Result<Vec<ArtifactRecord>> {
         let sql = if job_id.is_some() {

@@ -184,6 +184,19 @@ export type AnalysisResponse = {
   error?: string
 }
 
+export type QueueJobSummary = {
+  prompt: string
+  model_id: string
+  job_type: string
+}
+
+export type QueueStatus = {
+  running: boolean
+  queue_length: number
+  current?: QueueJobSummary | null
+  queue: QueueJobSummary[]
+}
+
 export type EnhanceRequest = {
   prompt: string
   model_hint?: string
@@ -351,9 +364,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image_path: imagePath }),
     }),
-  queueStatus: () => fetchJson<{ running: boolean; queue_length: number }>('/api/generate/queue'),
+  queueStatus: () => fetchJson<QueueStatus>('/api/generate/queue'),
   clearQueue: () =>
     fetchJson<{ cleared: number }>('/api/generate/queue', { method: 'DELETE' }),
+  cancelQueueItem: (index: number) =>
+    fetchJson<{ cancelled: boolean; queue_length?: number }>(`/api/generate/queue/${index}`, {
+      method: 'DELETE',
+    }),
   enhance: (req: EnhanceRequest) =>
     fetchJson<EnhanceResponse>('/api/enhance', {
       method: 'POST',

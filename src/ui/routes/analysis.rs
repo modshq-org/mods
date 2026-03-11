@@ -1,5 +1,6 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 use crate::core::db::Database;
@@ -134,6 +135,16 @@ pub async fn api_upscale(Json(req): Json<UpscaleRequest>) -> impl IntoResponse {
                     .trim_start_matches('/')
                     .to_string()
             });
+
+            // Register artifact with metadata inherited from source image
+            if let Some(out_abs) = &output_path {
+                register_derived_artifact(
+                    out_abs,
+                    &abs_path.to_string_lossy(),
+                    &format!("upscale_{}x", req.scale),
+                );
+            }
+
             Json(AnalysisResponse {
                 status: "completed".into(),
                 output_path: rel,
@@ -235,6 +246,12 @@ pub async fn api_remove_bg(Json(req): Json<RemoveBgRequest>) -> impl IntoRespons
                     .trim_start_matches('/')
                     .to_string()
             });
+
+            // Register artifact with metadata inherited from source image
+            if let Some(out_abs) = &output_path {
+                register_derived_artifact(out_abs, &abs_path.to_string_lossy(), "remove_bg");
+            }
+
             Json(AnalysisResponse {
                 status: "completed".into(),
                 output_path: rel,
@@ -266,6 +283,63 @@ pub async fn api_remove_bg(Json(req): Json<RemoveBgRequest>) -> impl IntoRespons
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Register a derived image (upscale, remove-bg) as a DB artifact,
+/// inheriting metadata from the source image's artifact record.
+fn register_derived_artifact(output_abs_path: &str, source_abs_path: &str, operation: &str) {
+    let db = match Database::open() {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("[analysis] Failed to open DB for artifact registration: {e}");
+            return;
+        }
+    };
+
+    // Look up source image's metadata
+    let source_meta = db
+        .find_artifact_by_path(source_abs_path)
+        .ok()
+        .flatten()
+        .and_then(|a| a.metadata);
+
+    // Build derived metadata: inherit source fields + add provenance
+    let mut meta = if let Some(ref raw) = source_meta {
+        serde_json::from_str::<serde_json::Value>(raw).unwrap_or_default()
+    } else {
+        serde_json::json!({})
+    };
+    if let Some(obj) = meta.as_object_mut() {
+        obj.insert(
+            "derived_from".to_string(),
+            serde_json::json!(source_abs_path),
+        );
+        obj.insert("operation".to_string(), serde_json::json!(operation));
+    }
+
+    // Compute file hash + size
+    let (sha256, size_bytes) = match std::fs::read(output_abs_path) {
+        Ok(bytes) => {
+            let hash = format!("{:x}", Sha256::digest(&bytes));
+            (hash, bytes.len() as u64)
+        }
+        Err(_) => (String::new(), 0),
+    };
+
+    let artifact_id = format!("derived:{}:{}", operation, &sha256[..16.min(sha256.len())]);
+    let meta_str = meta.to_string();
+
+    if let Err(e) = db.insert_artifact(
+        &artifact_id,
+        None,
+        "image",
+        output_abs_path,
+        &sha256,
+        size_bytes,
+        Some(&meta_str),
+    ) {
+        eprintln!("[analysis] Failed to register derived artifact: {e}");
+    }
+}
 
 /// Find the most recently modified file in a directory.
 fn find_newest_file(dir: &str) -> Option<String> {

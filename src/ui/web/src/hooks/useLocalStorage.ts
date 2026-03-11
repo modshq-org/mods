@@ -8,7 +8,18 @@ function resolveInitial<T>(initialValue: T | (() => T)): T {
  * Keys whose values cannot survive JSON round-tripping (File objects, Blobs, etc.).
  * They are stripped before writing and reset to defaults on read.
  */
-const NON_SERIALIZABLE_KEYS = new Set(['init_image_file', 'edit_images', 'init_image'])
+const NON_SERIALIZABLE_KEYS = new Set(['init_image_file', 'init_image'])
+
+/**
+ * Sanitize edit_images: keep 'server' entries (all strings, serializable),
+ * strip 'file' entries (contain File objects that can't survive JSON).
+ */
+function sanitizeEditImages(images: unknown): unknown {
+  if (!Array.isArray(images)) return []
+  return images.filter(
+    (img) => typeof img === 'object' && img !== null && (img as Record<string, unknown>).type === 'server',
+  )
+}
 
 export function useLocalStorage<T>(key: string, initialValue: T | (() => T)) {
   const [storedValue, setStoredValue] = useState<T>(() => {
@@ -47,6 +58,10 @@ export function useLocalStorage<T>(key: string, initialValue: T | (() => T)) {
         const copy = { ...storedValue } as Record<string, unknown>
         for (const k of NON_SERIALIZABLE_KEYS) {
           delete copy[k]
+        }
+        // Keep server-type edit_images, strip file-type ones
+        if ('edit_images' in copy) {
+          copy.edit_images = sanitizeEditImages(copy.edit_images)
         }
         toStore = copy
       }

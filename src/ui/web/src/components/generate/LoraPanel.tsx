@@ -52,6 +52,26 @@ function isLoraCompatible(
   return loraParent?.id === selectedParent?.id
 }
 
+/** Mini toggle switch */
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${
+        checked ? 'bg-primary' : 'bg-muted-foreground/20'
+      }`}
+      title={checked ? 'Enabled — click to disable' : 'Disabled — click to enable'}
+    >
+      <span
+        className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-[left] ${
+          checked ? 'left-[13px]' : 'left-0.5'
+        }`}
+      />
+    </button>
+  )
+}
+
 export function LoraPanel({ models, families, form, setForm }: Props) {
   const allLoras = models.filter((m) => m.model_type === 'lora')
   const selectedModel = models.find((m) => m.id === form.base_model_id)
@@ -78,7 +98,7 @@ export function LoraPanel({ models, families, form, setForm }: Props) {
     if (!first) return
     setForm((prev) => ({
       ...prev,
-      loras: [...prev.loras, { id: first.id, name: first.name, strength: 0.8 }],
+      loras: [...prev.loras, { id: first.id, name: first.name, strength: 0.8, enabled: true }],
     }))
     if (first.trigger_word) insertTriggerWord(first.trigger_word)
   }
@@ -130,14 +150,24 @@ export function LoraPanel({ models, families, form, setForm }: Props) {
           const triggerWord = loraModel?.trigger_word
           const sampleUrl = loraModel?.sample_image_url
           const { base, step } = displayName(entry.name)
+          const isEnabled = entry.enabled !== false
 
           return (
             <div
               key={`${entry.id}-${idx}`}
-              className="group rounded-md border border-border/60 bg-secondary/20 p-2"
+              className={`group rounded-md border p-2 transition-opacity ${
+                isEnabled
+                  ? 'border-border/60 bg-secondary/20'
+                  : 'border-border/30 bg-secondary/5 opacity-50'
+              }`}
             >
-              {/* Top row: selector + remove */}
+              {/* Top row: toggle + selector + remove */}
               <div className="flex items-center gap-2">
+                <Toggle
+                  checked={isEnabled}
+                  onChange={(v) => updateLora(idx, { enabled: v })}
+                />
+
                 <Select
                   value={entry.id}
                   onValueChange={(nextId) => {
@@ -211,8 +241,8 @@ export function LoraPanel({ models, families, form, setForm }: Props) {
                 </Button>
               </div>
 
-              {/* Strength slider */}
-              <div className="mt-1.5 flex items-center gap-2 pl-0.5">
+              {/* Strength slider — only interactive when enabled */}
+              <div className={`mt-1.5 flex items-center gap-2 pl-0.5 ${!isEnabled ? 'pointer-events-none' : ''}`}>
                 <Slider
                   value={[entry.strength]}
                   min={0}

@@ -6,6 +6,7 @@ export type LoraEntry = {
   id: string
   name: string
   strength: number
+  enabled: boolean
 }
 
 export type GenerationMode = 'txt2img' | 'img2img' | 'edit'

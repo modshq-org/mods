@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::{
         IntoResponse, Sse,
@@ -18,11 +18,36 @@ use crate::core::model_family;
 
 use super::super::server::UiState;
 
+/// Summary of a queued/running job for the queue panel.
+#[derive(Clone, Serialize)]
+pub struct QueuedJobSummary {
+    pub prompt: String,
+    pub model_id: String,
+    pub job_type: String,
+}
+
 /// A queued job — either a generate or an edit request.
 #[derive(Clone)]
 pub enum QueuedJob {
     Generate(GenerateRequest),
     Edit(EditRequest),
+}
+
+impl QueuedJob {
+    pub fn summary(&self) -> QueuedJobSummary {
+        match self {
+            QueuedJob::Generate(req) => QueuedJobSummary {
+                prompt: req.prompt.clone(),
+                model_id: req.model_id.clone(),
+                job_type: "generate".to_string(),
+            },
+            QueuedJob::Edit(req) => QueuedJobSummary {
+                prompt: req.prompt.clone(),
+                model_id: req.model_id.clone(),
+                job_type: "edit".to_string(),
+            },
+        }
+    }
 }
 
 #[derive(Deserialize, Clone)]
@@ -240,6 +265,10 @@ async fn generate_loop(
     inner: std::sync::Arc<tokio::sync::Mutex<super::super::server::GenerateInner>>,
     first_job: QueuedJob,
 ) {
+    {
+        let mut state = inner.lock().await;
+        state.current_summary = Some(first_job.summary());
+    }
     run_queued_job(&sender, first_job).await;
 
     loop {
@@ -247,6 +276,7 @@ async fn generate_loop(
             let mut state = inner.lock().await;
             match state.queue.pop_front() {
                 Some(job) => {
+                    state.current_summary = Some(job.summary());
                     let remaining = state.queue.len();
                     drop(state);
                     let _ = sender.send(format!("queue:{remaining}"));
@@ -254,6 +284,7 @@ async fn generate_loop(
                 }
                 None => {
                     state.running = false;
+                    state.current_summary = None;
                     drop(state);
                     let _ = sender.send("queue:empty".to_string());
                     break;
@@ -420,9 +451,13 @@ pub async fn api_edit(
 
 pub async fn api_queue_status(State(state): State<UiState>) -> impl IntoResponse {
     let inner = state.generate_inner.lock().await;
+    let current = inner.current_summary.as_ref();
+    let queue: Vec<QueuedJobSummary> = inner.queue.iter().map(|j| j.summary()).collect();
     Json(serde_json::json!({
         "running": inner.running,
         "queue_length": inner.queue.len(),
+        "current": current,
+        "queue": queue,
     }))
 }
 
@@ -434,6 +469,23 @@ pub async fn api_clear_queue(State(state): State<UiState>) -> impl IntoResponse 
     let _ = state.generate_events.send("queue:0".to_string());
     eprintln!("[generate] queue cleared ({cleared} items)");
     Json(serde_json::json!({ "cleared": cleared }))
+}
+
+pub async fn api_cancel_queue_item(
+    State(state): State<UiState>,
+    Path(index): Path<usize>,
+) -> impl IntoResponse {
+    let mut inner = state.generate_inner.lock().await;
+    if index < inner.queue.len() {
+        inner.queue.remove(index);
+        let remaining = inner.queue.len();
+        drop(inner);
+        let _ = state.generate_events.send(format!("queue:{remaining}"));
+        eprintln!("[generate] cancelled queue item {index} ({remaining} remaining)");
+        Json(serde_json::json!({ "cancelled": true, "queue_length": remaining }))
+    } else {
+        Json(serde_json::json!({ "cancelled": false, "error": "Invalid queue index" }))
+    }
 }
 
 pub async fn api_generate_stream(
