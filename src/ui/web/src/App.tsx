@@ -1,6 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
 import { useLocation, useSearch } from 'wouter'
-import { api, type GpuStatus } from './api'
+import { type GpuStatus } from './api'
 import { AppSidebar } from './components/AppSidebar'
 import { DatasetViewer } from './components/DatasetViewer'
 import { ModelsView } from './components/ModelsView'
@@ -12,6 +11,7 @@ import { OutputsGallery } from './components/OutputsGallery'
 import { QueuePanel } from './components/QueuePanel'
 import { TrainingRuns } from './components/TrainingRuns'
 import { TrainingStatusBar } from './components/TrainingStatusBar'
+import { useGpuStatus } from './hooks/useGpuStatus'
 import { useLocalStorage } from './hooks/useLocalStorage'
 
 export type Tab = 'train' | 'generate' | 'outputs' | 'datasets' | 'models'
@@ -44,12 +44,7 @@ function App() {
     createDefaultGenerateFormState,
   )
 
-  const { data: gpu = { training_active: false } as GpuStatus } = useQuery({
-    queryKey: ['gpu'],
-    queryFn: api.gpu,
-    refetchInterval: 5000,
-    staleTime: 4_000,
-  })
+  const { data: gpu = { training_active: false } as GpuStatus } = useGpuStatus()
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">

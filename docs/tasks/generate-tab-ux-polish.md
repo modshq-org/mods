@@ -4,15 +4,15 @@ Feedback from design review + code review findings. Ordered by impact.
 
 ## Code Health (from code review)
 
-- [ ] **Extract `submitJob()` helper** — handleGenerate and handleEdit share ~100 lines of identical logic (seed randomization, session item creation, SSE, error handling, toasts). Dedupe into a single function that takes request-building as a param.
-- [ ] **Fix re-render cascade** — `handleCancelQueued` depends on `[sessionItems]`, re-creating on every progress tick and cascading re-renders to SessionStrip + GenerateActions. Use a ref for sessionItems in callbacks. Same issue with `handleGenerate`/`handleEdit` depending on `[form]` (re-created on every keystroke).
-- [ ] **Close SSE on completion** — `setSseConnected(false)` is never called on successful generation. EventSource leaks an open connection indefinitely after first generation.
-- [ ] **Fix keyboard shortcut useEffect** — Missing dependency array on Ctrl+Enter handler (line 291). Re-registers listener every render.
-- [ ] **Stop mutating `form.seed` directly** — Lines 316, 426 bypass React immutability. Use the `newSeed` variable in request construction instead.
-- [ ] **Move keyframe animations to CSS** — `@keyframes gradientShift` and `shimmer` are in an inline `<style>` tag inside ImagePreview. Move to index.css.
-- [ ] **Fix collapsed training indicator position** — AppSidebar line 123: `absolute` dot inside button without `relative`. Dot renders in wrong position.
-- [ ] **Extract `useGpuStatus()` hook** — GPU query duplicated in App.tsx, AppSidebar.tsx, GenerateView.tsx with identical config.
-- [ ] **Guard division by zero** — GenerateProgressBar.tsx line 58: `totalSteps` could be 0, producing `Infinity%` CSS width.
+- [x] **Extract `submitJob()` helper** — handleGenerate and handleEdit share ~100 lines of identical logic (seed randomization, session item creation, SSE, error handling, toasts). Dedupe into a single function that takes request-building as a param.
+- [x] **Fix re-render cascade** — `handleCancelQueued` depends on `[sessionItems]`, re-creating on every progress tick and cascading re-renders to SessionStrip + GenerateActions. Use a ref for sessionItems in callbacks. Same issue with `handleGenerate`/`handleEdit` depending on `[form]` (re-created on every keystroke).
+- [x] **Close SSE on completion** — `setSseConnected(false)` is never called on successful generation. EventSource leaks an open connection indefinitely after first generation.
+- [x] **Fix keyboard shortcut useEffect** — Missing dependency array on Ctrl+Enter handler (line 291). Re-registers listener every render.
+- [x] **Stop mutating `form.seed` directly** — Lines 316, 426 bypass React immutability. Use the `newSeed` variable in request construction instead.
+- [x] **Move keyframe animations to CSS** — `@keyframes gradientShift` and `shimmer` are in an inline `<style>` tag inside ImagePreview. Move to index.css.
+- [x] **Fix collapsed training indicator position** — AppSidebar line 123: `absolute` dot inside button without `relative`. Dot renders in wrong position.
+- [x] **Extract `useGpuStatus()` hook** — GPU query duplicated in App.tsx, AppSidebar.tsx, GenerateView.tsx with identical config.
+- [x] **Guard division by zero** — GenerateProgressBar.tsx line 58: `totalSteps` could be 0, producing `Infinity%` CSS width.
 
 ## Prompt Area
 
@@ -39,7 +39,7 @@ Feedback from design review + code review findings. Ordered by impact.
 
 ## Generation Preview (Right Canvas)
 
-- [ ] **Show step progress in loading state** — The sparkle + "GENERATING" has a lot of empty space. Show step count or percentage more prominently. The circular progress ring exists but needs to be more visible.
+- [ ] **Show progress in loading state** — The circular progress ring exists but needs to be more visible.
 - [ ] **Differentiate prompt echo styling** — Prompt text below the loading card uses similar styling to the editable prompt. Use italics, quotes, or smaller/dimmer text so it reads as reference not input.
 - [ ] **Clarify X button behavior** — The close button on the generating card is ambiguous (cancel? dismiss? hide?). Either label it "Cancel" or remove it during active generation and only show it for queue items.
 

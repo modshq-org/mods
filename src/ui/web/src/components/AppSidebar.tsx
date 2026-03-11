@@ -11,6 +11,7 @@ function ModlLogo({ size = 28 }: { size?: number }) {
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { api, type QueueStatus } from '../api'
+import { useGpuStatus } from '../hooks/useGpuStatus'
 import type { Tab } from '../App'
 
 const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
@@ -29,12 +30,7 @@ type Props = {
 }
 
 export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse }: Props) {
-  const { data: gpu } = useQuery({
-    queryKey: ['gpu'],
-    queryFn: api.gpu,
-    refetchInterval: 5000,
-    staleTime: 4_000,
-  })
+  const { data: gpu } = useGpuStatus()
 
   const { data: status = [] } = useQuery({
     queryKey: ['status'],
@@ -104,7 +100,7 @@ export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse
               onClick={() => onTabChange(id)}
               title={collapsed ? label : undefined}
               className={cn(
-                'flex w-full items-center rounded-md text-sm font-medium transition-colors',
+                'relative flex w-full items-center rounded-md text-sm font-medium transition-colors',
                 collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2',
                 isActive
                   ? 'bg-primary/12 text-primary'
@@ -120,7 +116,7 @@ export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse
                 <span className="ml-auto flex h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
               )}
               {collapsed && id === 'train' && activeRun && (
-                <span className="absolute right-1.5 top-1.5 flex h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+                <span className="absolute right-0.5 top-0.5 flex h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
               )}
             </button>
           )

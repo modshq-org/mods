@@ -49,7 +49,7 @@ export function GenerateProgressBar({ state }: Props) {
             <span className="text-xs text-muted-foreground">
               {state.lines.length > 0 ? state.lines[state.lines.length - 1] : 'Generating...'}
             </span>
-            {state.step != null && state.totalSteps != null && (
+            {state.step != null && state.totalSteps != null && state.totalSteps > 0 && (
               <div className="flex items-center gap-1.5">
                 <div className="h-1 w-20 overflow-hidden rounded-full bg-secondary">
                   <div

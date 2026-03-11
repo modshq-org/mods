@@ -7,6 +7,7 @@ import {
   SparklesIcon,
 } from 'lucide-react'
 import { api, type EditRequest, type GeneratedImage, type GeneratedOutput, type GenerateRequest, type GpuStatus, type InstalledModel, type ModelFamily } from '../../api'
+import { useGpuStatus } from '../../hooks/useGpuStatus'
 import { useSSE } from '../../hooks/useSSE'
 import { CollapsibleSection } from '../ui/collapsible-section'
 import { BatchPanel } from './BatchPanel'
@@ -51,13 +52,18 @@ export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const sessionIdCounter = useRef(0)
 
+  // ── Refs for stable callbacks (fix re-render cascade) ─────────────
+  const formRef = useRef(form)
+  formRef.current = form
+  const sessionItemsRef = useRef(sessionItems)
+  sessionItemsRef.current = sessionItems
+
+  const isGenerating = progressState.status === 'submitting' || progressState.status === 'streaming'
+  const isGeneratingRef = useRef(isGenerating)
+  isGeneratingRef.current = isGenerating
+
   // ── Queries ──────────────────────────────────────────────────────────
-  const { data: gpu = { training_active: false } as GpuStatus } = useQuery({
-    queryKey: ['gpu'],
-    queryFn: api.gpu,
-    refetchInterval: 5000,
-    staleTime: 4_000,
-  })
+  const { data: gpu = { training_active: false } as GpuStatus } = useGpuStatus()
 
   const { data: modelsResponse } = useQuery({
     queryKey: ['models'],
@@ -81,8 +87,6 @@ export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
       }
     }
   }, [models, form.base_model_id, setForm])
-
-  const isGenerating = progressState.status === 'submitting' || progressState.status === 'streaming'
 
   // SSE connection — controlled by sseConnected state
   const [sseConnected, setSseConnected] = useState(false)
@@ -121,6 +125,9 @@ export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
           const nextQueued = updated.findIndex((s) => s.status === 'queued')
           if (nextQueued !== -1) {
             updated[nextQueued] = { ...updated[nextQueued], status: 'active' }
+          } else {
+            // No more queued items — close SSE
+            setSseConnected(false)
           }
           return updated
         })
@@ -171,6 +178,9 @@ export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
             const nextQueued = updated.findIndex((s) => s.status === 'queued')
             if (nextQueued !== -1) {
               updated[nextQueued] = { ...updated[nextQueued], status: 'active' }
+            } else {
+              // No more queued items — close SSE
+              setSseConnected(false)
             }
             return updated
           })
@@ -287,88 +297,48 @@ export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
   // Top-level mode for the view (generate vs edit)
   const isEditMode = form.mode === 'edit'
 
-  // ── Keyboard shortcut: Ctrl/Cmd + Enter ──────────────────────────────
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault()
-        if (form.prompt.trim() && form.base_model_id) {
-          if (isEditMode) {
-            handleEdit()
-          } else {
-            handleGenerate()
-          }
-        }
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  })
+  // ── Submit job helper (shared by generate + edit) ──────────────────
+  type SubmitJobParams = {
+    prefix: string
+    jobType: 'generate' | 'edit'
+    /** Build the request. Receives the resolved seed. Return null to abort. */
+    buildRequest: (currentForm: GenerateFormState, seed: number) => Promise<Record<string, unknown> | null>
+    /** API call to submit */
+    submit: (req: never) => Promise<Response>
+  }
 
-  // ── Submit generation (supports enqueue) ─────────────────────────────
-  const handleGenerate = useCallback(async () => {
-    if (!form.prompt.trim() || !form.base_model_id) return
+  const submitJob = useCallback(async ({ prefix, jobType, buildRequest, submit }: SubmitJobParams) => {
+    const currentForm = formRef.current
+    if (!currentForm.prompt.trim() || !currentForm.base_model_id) return
 
     // Randomize seed if not locked
-    if (!form.seed_locked) {
-      const newSeed = randomSeed()
-      setForm((prev) => ({ ...prev, seed: newSeed }))
-      form.seed = newSeed // use in this request too
+    let seed = currentForm.seed
+    if (!currentForm.seed_locked) {
+      seed = randomSeed()
+      setForm((prev) => ({ ...prev, seed }))
     }
 
-    // Upload init image if in img2img mode
-    let initImagePath: string | undefined
-    if (form.mode === 'img2img' && form.init_image_file) {
-      if (!(form.init_image_file instanceof File)) {
-        toast.error('Image reference expired — please re-add the image')
-        return
-      }
-      try {
-        const uploaded = await api.upload(form.init_image_file)
-        initImagePath = uploaded.path
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        toast.error(`Image upload failed: ${message}`)
-        return
-      }
-    }
+    // Build request (may abort by returning null)
+    const req = await buildRequest(currentForm, seed)
+    if (!req) return
 
-    // Build the request
-    const req: GenerateRequest = {
-      prompt: form.prompt,
-      negative_prompt: form.negative_prompt.trim() || undefined,
-      model_id: form.base_model_id,
-      width: form.width,
-      height: form.height,
-      steps: form.steps,
-      guidance: form.guidance,
-      seed: form.seed,
-      num_images: form.batch_count,
-      loras: form.loras.filter((l) => l.enabled !== false).map((l) => ({ id: l.id, strength: l.strength })),
-      init_image: initImagePath,
-      strength: initImagePath ? form.denoise_strength : undefined,
-      fast: form.fast || undefined,
-    }
+    // Session management
+    const sessionId = `${prefix}-${++sessionIdCounter.current}-${Date.now()}`
+    const isFirst = !isGeneratingRef.current
 
-    // Create a session item for this submission
-    const sessionId = `gen-${++sessionIdCounter.current}-${Date.now()}`
-    const isFirst = !isGenerating
-
-    // If not currently generating, this is a fresh start
     if (isFirst) {
-      expectedCountRef.current = form.batch_count
+      expectedCountRef.current = currentForm.batch_count
       setPreviewImages([])
       setProgressState({ status: 'submitting' })
     }
 
-    // Add to session strip
     const newItem: SessionItem = {
       id: sessionId,
       status: isFirst ? 'active' : 'queued',
-      prompt: form.prompt,
-      model_id: form.base_model_id,
-      job_type: 'generate',
-      batch_count: form.batch_count,
+      prompt: currentForm.prompt,
+      model_id: currentForm.base_model_id,
+      job_type: jobType,
+      batch_count: currentForm.batch_count,
     }
     setSessionItems((prev) => [...prev, newItem])
     userFocusedRef.current = false
@@ -376,10 +346,10 @@ export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
     // Ensure SSE is connected
     setSseConnected(true)
 
-    console.log('[generate] submitting:', req.model_id, req.prompt.slice(0, 60))
+    console.log(`[${jobType}] submitting:`, currentForm.base_model_id, currentForm.prompt.slice(0, 60))
 
     try {
-      const res = await api.generate(req)
+      const res = await submit(req as never)
       if (!res.ok) {
         let message = `HTTP ${res.status}`
         try {
@@ -402,9 +372,8 @@ export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      console.error('[generate] submit failed:', message)
+      console.error(`[${jobType}] submit failed:`, message)
       toast.error(message)
-      // Mark session item as error
       setSessionItems((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, status: 'error' as const, error: message } : s)),
       )
@@ -412,109 +381,114 @@ export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
         setProgressState({ status: 'error', message })
       }
     }
-  }, [form, isGenerating])
+  }, [setForm])
+
+  // ── Submit generation (supports enqueue) ─────────────────────────────
+  const handleGenerate = useCallback(() => submitJob({
+    prefix: 'gen',
+    jobType: 'generate',
+    buildRequest: async (f, seed) => {
+      // Upload init image if in img2img mode
+      let initImagePath: string | undefined
+      if (f.mode === 'img2img' && f.init_image_file) {
+        if (!(f.init_image_file instanceof File)) {
+          toast.error('Image reference expired — please re-add the image')
+          return null
+        }
+        try {
+          const uploaded = await api.upload(f.init_image_file)
+          initImagePath = uploaded.path
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          toast.error(`Image upload failed: ${message}`)
+          return null
+        }
+      }
+
+      return {
+        prompt: f.prompt,
+        negative_prompt: f.negative_prompt.trim() || undefined,
+        model_id: f.base_model_id,
+        width: f.width,
+        height: f.height,
+        steps: f.steps,
+        guidance: f.guidance,
+        seed,
+        num_images: f.batch_count,
+        loras: f.loras.filter((l) => l.enabled !== false).map((l) => ({ id: l.id, strength: l.strength })),
+        init_image: initImagePath,
+        strength: initImagePath ? f.denoise_strength : undefined,
+        fast: f.fast || undefined,
+      } satisfies GenerateRequest
+    },
+    submit: api.generate,
+  }), [submitJob])
 
   // ── Submit edit ────────────────────────────────────────────────────
-  const handleEdit = useCallback(async () => {
-    const editImages = form.edit_images ?? []
-    if (!form.prompt.trim() || !form.base_model_id || editImages.length === 0) return
+  const handleEdit = useCallback(() => submitJob({
+    prefix: 'edit',
+    jobType: 'edit',
+    buildRequest: async (f, seed) => {
+      const editImages = f.edit_images ?? []
+      if (editImages.length === 0) return null
 
-    // Randomize seed if not locked
-    if (!form.seed_locked) {
-      const newSeed = randomSeed()
-      setForm((prev) => ({ ...prev, seed: newSeed }))
-      form.seed = newSeed
-    }
-
-    // Resolve all edit images to server-side paths
-    const uploadedPaths: string[] = []
-    try {
-      for (const img of editImages) {
-        if (img.type === 'server') {
-          uploadedPaths.push(img.serverPath)
-        } else {
-          if (!(img.file instanceof File)) {
-            toast.error('Image reference expired — please re-add the image')
-            return
+      // Resolve all edit images to server-side paths
+      const uploadedPaths: string[] = []
+      try {
+        for (const img of editImages) {
+          if (img.type === 'server') {
+            uploadedPaths.push(img.serverPath)
+          } else {
+            if (!(img.file instanceof File)) {
+              toast.error('Image reference expired — please re-add the image')
+              return null
+            }
+            const uploaded = await api.upload(img.file)
+            uploadedPaths.push(uploaded.path)
           }
-          const uploaded = await api.upload(img.file)
-          uploadedPaths.push(uploaded.path)
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        toast.error(`Image upload failed: ${message}`)
+        return null
+      }
+
+      return {
+        prompt: f.prompt,
+        model_id: f.base_model_id,
+        images: uploadedPaths,
+        steps: f.steps,
+        guidance: f.guidance,
+        seed,
+        num_images: f.batch_count,
+      } satisfies EditRequest
+    },
+    submit: api.edit,
+  }), [submitJob])
+
+  // ── Keyboard shortcut: Ctrl/Cmd + Enter ──────────────────────────────
+  const handleGenerateRef = useRef(handleGenerate)
+  handleGenerateRef.current = handleGenerate
+  const handleEditRef = useRef(handleEdit)
+  handleEditRef.current = handleEdit
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault()
+        const f = formRef.current
+        if (f.prompt.trim() && f.base_model_id) {
+          if (f.mode === 'edit') {
+            handleEditRef.current()
+          } else {
+            handleGenerateRef.current()
+          }
         }
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      toast.error(`Image upload failed: ${message}`)
-      return
     }
-
-    const req: EditRequest = {
-      prompt: form.prompt,
-      model_id: form.base_model_id,
-      images: uploadedPaths,
-      steps: form.steps,
-      guidance: form.guidance,
-      seed: form.seed,
-      num_images: form.batch_count,
-    }
-
-    const sessionId = `edit-${++sessionIdCounter.current}-${Date.now()}`
-    const isFirst = !isGenerating
-
-    if (isFirst) {
-      expectedCountRef.current = form.batch_count
-      setPreviewImages([])
-      setProgressState({ status: 'submitting' })
-    }
-
-    // Add to session strip
-    const newItem: SessionItem = {
-      id: sessionId,
-      status: isFirst ? 'active' : 'queued',
-      prompt: form.prompt,
-      model_id: form.base_model_id,
-      job_type: 'edit',
-      batch_count: form.batch_count,
-    }
-    setSessionItems((prev) => [...prev, newItem])
-    userFocusedRef.current = false
-
-    setSseConnected(true)
-    console.log('[edit] submitting:', req.model_id, req.prompt.slice(0, 60))
-
-    try {
-      const res = await api.edit(req)
-      if (!res.ok) {
-        let message = `HTTP ${res.status}`
-        try {
-          const body = await res.json()
-          if (body.error) message = body.error
-        } catch {
-          const text = await res.text()
-          if (text) message = text
-        }
-        throw new Error(message)
-      }
-      const body = await res.json()
-      const queueLen = body.queue_length ?? 0
-      setQueueCount(queueLen)
-
-      if (queueLen > 0) {
-        toast.info(`Enqueued — position ${queueLen}`)
-      } else if (isFirst) {
-        setProgressState({ status: 'streaming', lines: [] })
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error('[edit] submit failed:', message)
-      toast.error(message)
-      setSessionItems((prev) =>
-        prev.map((s) => (s.id === sessionId ? { ...s, status: 'error' as const, error: message } : s)),
-      )
-      if (isFirst) {
-        setProgressState({ status: 'error', message })
-      }
-    }
-  }, [form, isGenerating])
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   // ── Gallery click → load params ──────────────────────────────────────
   const handleGallerySelect = useCallback(
@@ -605,15 +579,16 @@ export function GenerateView({ form, setForm, setTab: _setTab }: Props) {
 
   const handleCancelQueued = useCallback(
     async (sessionId: string) => {
-      // Find the queue index of this item (only queued items are in the server queue)
-      const queuedItems = sessionItems.filter((s) => s.status === 'queued')
+      // Read from ref to avoid depending on sessionItems (re-render cascade)
+      const items = sessionItemsRef.current
+      const queuedItems = items.filter((s) => s.status === 'queued')
       const queueIdx = queuedItems.findIndex((s) => s.id === sessionId)
       if (queueIdx >= 0) {
         await api.cancelQueueItem(queueIdx)
       }
       setSessionItems((prev) => prev.filter((s) => s.id !== sessionId))
     },
-    [sessionItems],
+    [],
   )
 
   const activePreviewImage = previewImages[0]
