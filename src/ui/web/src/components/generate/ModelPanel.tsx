@@ -54,6 +54,14 @@ export function ModelPanel({ models, families, form, setForm, autoDefaults = tru
     })
   }
 
+  // Compact trigger label — always a single line regardless of model info
+  const selectedCheckpoint = checkpoints.find((m) => m.id === form.base_model_id)
+  const selectedInfo = selectedCheckpoint ? findModelFamily(selectedCheckpoint.name, families) : null
+  const triggerLabel = selectedCheckpoint
+    ? [selectedCheckpoint.name, selectedCheckpoint.variant, selectedInfo ? `${selectedInfo.total_b}B` : null]
+        .filter(Boolean).join(' · ')
+    : undefined
+
   return (
     <div className="space-y-1.5">
       <Select
@@ -62,7 +70,9 @@ export function ModelPanel({ models, families, form, setForm, autoDefaults = tru
         disabled={checkpoints.length === 0}
       >
         <SelectTrigger className="w-full bg-background/60">
-          <SelectValue placeholder={checkpoints.length === 0 ? 'No checkpoints installed' : 'Select a model'} />
+          <SelectValue placeholder={checkpoints.length === 0 ? 'No checkpoints installed' : 'Select a model'}>
+            {triggerLabel}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {checkpoints.map((model) => {
