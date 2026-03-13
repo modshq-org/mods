@@ -75,18 +75,31 @@ def read_original_intervals(checkpoint_path: str) -> tuple[int | None, int | Non
 # Sample prompts
 # ---------------------------------------------------------------------------
 
-def build_sample_prompts(trigger_word: str, lora_type: str, arch_key: str) -> list[str]:
+def build_sample_prompts(
+    trigger_word: str,
+    lora_type: str,
+    arch_key: str,
+    class_word: str | None = None,
+) -> list[str]:
     """Auto-generate sample prompts for visual feedback during training.
 
     For Qwen-Image style LoRAs, prompts are literal (no trigger word) because
     the style is learned as the default output mode via literal captioning.
     For all other cases, the trigger word is embedded in the prompts.
+
+    ``class_word`` (e.g. "man", "woman", "dog") anchors the trigger to a
+    category, dramatically improving convergence for character LoRAs.
+    Without it, the model has to learn both identity AND category from the
+    trigger alone, which leads to inconsistent results.
     """
     # For style LoRAs on models that learn style implicitly (Qwen, Z-Image Turbo),
     # use literal prompts without trigger word — the LoRA IS the style.
     # Per Ostris: "I'm not mentioning it's child drawing... I'm just acting like
     # this is the new normal."
     no_trigger_style = arch_key in ("qwen_image", "zimage_turbo") and lora_type == "style"
+
+    # Build the subject token: "OHWX man" or just "OHWX" if no class word
+    subject = f"{trigger_word} {class_word}" if class_word else trigger_word
 
     if lora_type == "style":
         if no_trigger_style:
@@ -104,15 +117,30 @@ def build_sample_prompts(trigger_word: str, lora_type: str, arch_key: str) -> li
         ]
     elif lora_type == "character":
         return [
-            f"a photo of {trigger_word}",
-            f"a portrait of {trigger_word} smiling",
-            f"{trigger_word} in a park",
+            # Identity prompts — does the LoRA capture likeness?
+            f"a photo of {subject}",
+            f"a portrait of {subject} smiling",
+            f"{subject} standing in a park, natural daylight",
+            f"a close-up photo of {subject}, dramatic lighting",
+            # Generalization — does it work in novel settings?
+            f"{subject} wearing a red jacket, city street background",
+            f"{subject} at the beach, sunset lighting",
+            # Style diversity — does the LoRA overfit to photorealism?
+            f"a watercolor painting of {subject}",
+            f"a pencil sketch of {subject}",
+            f"an illustration of {subject} in a cartoon style",
+            # Bleed/overfit check — does the LoRA contaminate non-trigger prompts?
+            "a portrait of a woman smiling",
+            "a golden retriever in a garden",
         ]
     else:  # object
         return [
-            f"a photo of {trigger_word}",
-            f"a {trigger_word} on a table",
-            f"a {trigger_word} in a natural setting",
+            f"a photo of {subject}",
+            f"a {subject} on a table",
+            f"a {subject} in a natural setting",
+            # Style diversity — detect overfitting to photorealism
+            f"a watercolor painting of a {subject}",
+            f"an illustration of a {subject}",
         ]
 
 
@@ -134,11 +162,30 @@ def build_train_block(arch_key: str, params: dict, lora_type: str, resume_step: 
         bs = 2 if (is_style and not is_zimage) else 1
 
     lr = params.get("learning_rate", 1e-4)
+    is_klein = arch_key.startswith("flux2_klein")
 
     # Z-Image: LR must not exceed 1e-4 — higher values break the distillation
     if is_zimage and lr > 1e-4:
         print(f"[modl] WARNING: Clamping LR from {lr} to 1e-4 for Z-Image (higher LR breaks distillation)")
         lr = 1e-4
+
+    # Klein: community-tested defaults for character LoRAs.
+    # 4B is very sensitive to LR — body horror / face collapse above 5e-5.
+    # 9B is more forgiving, 1e-4 works but 5e-5 is safer.
+    # Both: train on base model, generate with distilled (LoRAs transfer well).
+    # Aim for 50-120 repeats per image (higher dataset => fewer repeats).
+    if is_klein:
+        is_4b = arch_key == "flux2_klein_4b"
+        if is_4b and lr > 5e-5:
+            print(f"[modl] WARNING: Clamping LR from {lr} to 5e-5 for Klein 4B (higher LR causes body horror / face collapse)")
+            lr = 5e-5
+        elif not is_4b and lr > 1e-4:
+            print(f"[modl] WARNING: Clamping LR from {lr} to 1e-4 for Klein 9B")
+            lr = 1e-4
+        if lora_type == "character":
+            if steps < 2000:
+                print(f"[modl] NOTE: Klein character LoRAs usually need 2000+ steps (current: {steps})")
+            print(f"[modl] NOTE: Klein tip — train on base, generate with distilled for best likeness")
 
     # Qwen-Image guidance notes
     if is_qwen:
@@ -224,7 +271,8 @@ def build_sample_block(
         "width": resolution,
         "height": resolution,
         "prompts": build_sample_prompts(
-            params.get("trigger_word", "OHWX"), lora_type, arch_key
+            params.get("trigger_word", "OHWX"), lora_type, arch_key,
+            class_word=params.get("class_word"),
         ),
         "neg": sample_cfg["neg"],
         "seed": params.get("seed") or 42,
@@ -260,10 +308,19 @@ def spec_to_aitoolkit_config(spec: dict, train_overrides: dict | None = None) ->
     arch_key = detect_arch(base_model_id)
     arch = ARCH_CONFIGS[arch_key]
 
-    # Resolve HuggingFace hub path
-    model_path = resolve_model_path(base_model_id)
-    if model_path == base_model_id and model.get("base_model_path"):
-        model_path = model["base_model_path"]
+    # Resolve model path: prefer local base_model_path if available,
+    # fall back to HuggingFace hub path from MODEL_REGISTRY.
+    # NOTE: modl stores models as single safetensors files, but ai-toolkit
+    # expects HF-style directories. If the store path is a file (not a dir),
+    # fall back to HF hub path so ai-toolkit downloads the diffusers layout.
+    import os
+    local_path = model.get("base_model_path")
+    if local_path and os.path.isdir(local_path):
+        model_path = local_path
+    else:
+        if local_path:
+            print(f"[modl] NOTE: Store path is a single file, falling back to HF hub for training")
+        model_path = resolve_model_path(base_model_id)
 
     # -- Model config from the arch table --
     model_config = {"name_or_path": model_path}
@@ -296,9 +353,18 @@ def spec_to_aitoolkit_config(spec: dict, train_overrides: dict | None = None) ->
     # Network config
     rank = params.get("rank", 16)
     is_style = lora_type == "style"
-    # alpha = rank for z-image-turbo style (single-phase high denoise needs
-    # stronger signal); alpha = 1 (ai-toolkit default) for everything else.
-    alpha = rank if (arch_key == "zimage_turbo" and is_style) else 1
+    # alpha controls LoRA scaling: effective_scale = alpha / rank.
+    # alpha=rank → scale 1.0 (no scaling, standard for character/object identity).
+    # alpha=1   → scale 1/rank (dampened, prevents style from being too strong).
+    # Character/object LoRAs need full signal to learn identity.
+    # Style LoRAs use alpha=1 to avoid overpowering, except Z-Image Turbo
+    # which needs alpha=rank for its single-phase high-denoise training.
+    if lora_type in ("character", "object"):
+        alpha = rank
+    elif arch_key == "zimage_turbo" and is_style:
+        alpha = rank
+    else:
+        alpha = 1
     network_config = {
         "type": "lora",
         "linear": rank,
@@ -351,12 +417,10 @@ def spec_to_aitoolkit_config(spec: dict, train_overrides: dict | None = None) ->
                     "network": network_config,
                     "save": {
                         "dtype": "float16",
-                        "save_every": original_save_every or (
-                            max(params.get("steps", 2000) // 10, 500)
-                            if is_style
-                            else params.get("steps", 2000)
+                        "save_every": original_save_every or max(
+                            params.get("steps", 2000) // 10, 100
                         ),
-                        "max_step_saves_to_keep": 10 if is_style else 1,
+                        "max_step_saves_to_keep": 10,
                     },
                     "datasets": [
                         {
@@ -364,7 +428,7 @@ def spec_to_aitoolkit_config(spec: dict, train_overrides: dict | None = None) ->
                             "caption_ext": "txt",
                             "caption_dropout_rate": caption_dropout,
                             "shuffle_tokens": False,
-                            "cache_text_embeddings": arch_key in ("qwen_image", "zimage_turbo"),
+                            "cache_text_embeddings": arch_key in ("qwen_image", "zimage_turbo", "zimage") or arch_key.startswith("flux2_klein"),
                             "resolution": dataset_resolution,
                             "cache_latents_to_disk": True,
                             "default_caption": _resolve_trigger_word(params, arch_key, lora_type),

@@ -29,10 +29,7 @@ fn try_analysis_via_socket(
     use std::io::Write;
     use std::os::unix::net::UnixStream;
 
-    let sock_path = dirs::home_dir()
-        .expect("home dir")
-        .join(".modl")
-        .join("worker.sock");
+    let sock_path = crate::core::paths::modl_root().join("worker.sock");
 
     // Try to connect — if socket doesn't exist or daemon isn't running, return None
     let mut stream = match UnixStream::connect(&sock_path) {
@@ -91,10 +88,7 @@ pub async fn spawn_analysis_worker(
     spec_yaml: &str,
     quiet: bool,
 ) -> Result<AnalysisResult> {
-    let runtime_root = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-        .join("runtime");
+    let runtime_root = crate::core::paths::modl_root().join("runtime");
     let jobs_dir = runtime_root.join("jobs");
     std::fs::create_dir_all(&jobs_dir)
         .with_context(|| format!("Failed to create jobs dir: {}", jobs_dir.display()))?;

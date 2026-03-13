@@ -174,9 +174,30 @@ class ModelCache:
             if len(self._cache) >= self._max_models:
                 self._evict_lru(emitter)
 
-            # Load fresh pipeline (always load txt2img base first)
+            # Load fresh pipeline
             emitter.info(f"Model cache MISS: loading {base_model_id}...")
             cls_name = _resolve_pipeline_class(base_model_id)
+
+            # Check if the base pipeline IS a native inpaint pipeline
+            # (e.g. FluxFillPipeline). These don't have a separate txt2img
+            # base — store directly under the requested mode key.
+            is_native_inpaint = "Fill" in cls_name
+
+            if is_native_inpaint:
+                pipe = load_pipeline(base_model_id, base_model_path, cls_name, emitter)
+                now = time.time()
+                cached = CachedPipeline(
+                    pipeline=pipe,
+                    cls_name=cls_name,
+                    loaded_at=now,
+                    last_used=now,
+                    vram_estimate_mb=self._estimate_vram(pipe),
+                )
+                self._cache[key] = cached
+                self._apply_lora(cached, spec, emitter)
+                return pipe, cls_name
+
+            # Standard model: load txt2img base first, then switch if needed
             pipe = load_pipeline(base_model_id, base_model_path, cls_name, emitter)
             now = time.time()
 
@@ -245,6 +266,7 @@ class ModelCache:
 
     def evict_all(self, emitter: EventEmitter | None = None) -> None:
         """Evict all cached models (diffusion + utility) and free VRAM."""
+        import gc
         import torch
         with self._lock:
             for key in list(self._cache.keys()):
@@ -255,6 +277,7 @@ class ModelCache:
                 if emitter:
                     emitter.info(f"Evicting {len(self._utility_cache)} utility model(s)")
                 self._utility_cache.clear()
+            gc.collect()
             torch.cuda.empty_cache()
 
     def _reconcile_lora(self, cached: CachedPipeline, spec: dict, emitter: EventEmitter) -> None:
@@ -292,13 +315,14 @@ class ModelCache:
 
         if lora_path and os.path.exists(lora_path):
             emitter.info(f"Loading LoRA: {lora_name} (weight={lora_weight})")
-            cached.pipeline.load_lora_weights(lora_path)
-            cached.pipeline.fuse_lora(lora_scale=lora_weight)
-            cached.lora_id = lora_path
-            cached.lora_weight = lora_weight
+            from modl_worker.adapters.lora_utils import load_lora_with_conversion
+            if load_lora_with_conversion(cached.pipeline, lora_path, lora_weight, emitter):
+                cached.lora_id = lora_path
+                cached.lora_weight = lora_weight
 
     def _evict_lru(self, emitter: EventEmitter) -> None:
         """Remove the least-recently-used model from the cache."""
+        import gc
         import torch
         if not self._cache:
             return
@@ -306,6 +330,7 @@ class ModelCache:
         lru_key = min(self._cache, key=lambda k: self._cache[k].last_used)
         emitter.info(f"Evicting LRU model: {lru_key.model_id}")
         del self._cache[lru_key]
+        gc.collect()
         torch.cuda.empty_cache()
 
     @staticmethod
@@ -419,6 +444,8 @@ class WorkerDaemon:
 
         if action == "generate":
             self._handle_generate(conn, request)
+        elif action == "edit":
+            self._handle_edit(conn, request)
         elif action == "status":
             self._handle_status(conn)
         elif action == "shutdown":
@@ -462,6 +489,32 @@ class WorkerDaemon:
             emitter.error(
                 "WORKER_GENERATE_ERROR",
                 f"Generation failed: {exc}",
+                recoverable=False,
+            )
+
+    def _handle_edit(self, conn: socket.socket, request: dict) -> None:
+        """Run image editing with a cached pipeline."""
+        job_id = request.get("job_id", "edit-worker")
+        spec = request.get("spec", {})
+
+        emitter = SocketEventEmitter(conn, job_id=job_id)
+        emitter.job_accepted(worker_pid=os.getpid())
+
+        try:
+            # Get or load pipeline from cache (edit uses its own pipeline class)
+            pipeline, cls_name = self.cache.get_or_load(spec, emitter)
+
+            from modl_worker.adapters.edit_adapter import run_edit_with_pipeline
+            exit_code = run_edit_with_pipeline(spec, emitter, pipeline)
+
+            self._jobs_served += 1
+            if exit_code != 0:
+                emitter.info(f"Edit finished with exit code {exit_code}")
+
+        except Exception as exc:
+            emitter.error(
+                "WORKER_EDIT_ERROR",
+                f"Edit failed: {exc}",
                 recoverable=False,
             )
 

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { api, type DatasetImage } from '../api'
+import { STALE_MODERATE } from '@/lib/query-keys'
 import { LazyImage } from './LazyImage'
 
 const PAGE_SIZE = 50
@@ -47,13 +48,15 @@ export function DatasetViewer() {
   } = useQuery({
     queryKey: ['datasets'],
     queryFn: api.datasets,
-    staleTime: 60_000,
+    staleTime: STALE_MODERATE,
   })
 
+  const datasetNames = datasets.map((d) => typeof d === 'string' ? d : d.name)
+
   const current =
-    selectedDataset && datasets.includes(selectedDataset)
+    selectedDataset && datasetNames.includes(selectedDataset)
       ? selectedDataset
-      : (datasets[0] ?? null)
+      : (datasetNames[0] ?? null)
 
   const {
     data: overview,
@@ -63,7 +66,7 @@ export function DatasetViewer() {
     queryKey: ['dataset', current, page],
     queryFn: () => api.dataset(current as string, PAGE_SIZE, page * PAGE_SIZE),
     enabled: Boolean(current),
-    staleTime: 60_000,
+    staleTime: STALE_MODERATE,
     placeholderData: (previousData) => previousData,
   })
 
@@ -80,9 +83,9 @@ export function DatasetViewer() {
             <span className="text-xs text-muted-foreground">Loading…</span>
           ) : datasetsError ? (
             <span className="text-xs text-destructive">Failed to load</span>
-          ) : datasets.length === 0 ? (
+          ) : datasetNames.length === 0 ? (
             <span className="text-xs text-muted-foreground">No datasets found</span>
-          ) : datasets.map((name) => (
+          ) : datasetNames.map((name) => (
             <Button
               key={name}
               type="button"

@@ -1,32 +1,36 @@
 # modl
 
-**Local-first AI image generation toolkit.** Pull models, train LoRAs, generate images. One CLI, no glue code.
+**The easiest way to generate images and train LoRAs on your own GPU.**
+
+One command to install, one command to generate, one command to train. No Python environments, no dependency hell, no 2-hour YouTube tutorials.
 
 ```bash
-modl pull flux-schnell          # download model + all dependencies
-modl generate "a cat on mars"   # generate an image
-modl train --dataset ./photos --base flux-schnell --name my-v1   # train a LoRA
+curl -fsSL https://modl.run/install.sh | sh
+modl pull flux-schnell
+modl generate "a cat on mars"
 ```
 
 **[Website](https://modl.run)** · **[Docs](https://modl.run/docs)** · **[Model Registry](https://github.com/modl-org/modl-registry)** · **[Issues](https://github.com/modl-org/modl/issues)**
 
-## Install
+---
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/modl-org/modl/main/install.sh | sh
-```
+## Why modl?
 
-Or build from source:
+**No glue code.** One binary handles model downloads, dependency resolution, image generation, LoRA training, and output management. No separate tools to install, no configs to write.
 
-```bash
-git clone https://github.com/modl-org/modl && cd modl && cargo install --path .
-```
+**Smart model management.** Models are stored once in a content-addressed store. ComfyUI, A1111, and other tools see symlinks — no duplicate 24GB files.
+
+**GPU-aware.** Automatically picks the right model variant (fp16, fp8, quantized) for your VRAM. A 4090 gets full quality. An 8GB card still works.
+
+**Train LoRAs in one command.** Point it at a folder of images, pick a base model, and go. Auto-captioning, dataset prep, and sensible defaults included.
+
+---
 
 ## Quick Start
 
 ```bash
-# First-time setup (auto-detects ComfyUI, A1111, etc.)
-modl init
+# Install
+curl -fsSL https://modl.run/install.sh | sh
 
 # Pull a model (auto-selects variant for your GPU)
 modl pull flux-dev
@@ -35,34 +39,71 @@ modl pull flux-dev
 modl generate "a photo of a mountain lake at sunset" --base flux-dev
 ```
 
-## The Full Journey
+Or do everything at once:
 
 ```bash
-# 1. Pull a base model
-modl pull flux-schnell
+curl -fsSL https://modl.run/install.sh | sh -s -- --quick
+```
 
-# 2. Prepare a training dataset
-modl dataset create products --from ~/photos/my-products/
+This installs modl, pulls a starter model, and launches the web UI.
 
-# 3. Train a LoRA
-modl train --dataset products --base flux-schnell --name product-v1 --lora-type object
+---
 
-# 4. Generate with your LoRA
+## Train a LoRA
+
+```bash
+# Prepare dataset (auto-captions your images)
+modl dataset prepare my-product --from ~/photos/product-shots/
+
+# Train
+modl train --dataset my-product --base flux-dev --name product-v1 --lora-type object
+
+# Generate with your LoRA
 modl generate "a photo of OHWX on marble countertop" --lora product-v1
 ```
 
-## How It Works
+---
 
-Modl keeps **one copy** of every model in a content-addressed store (`~/modl/store/`). Your tools see symlinks that point into the store.
+## Web UI
 
-```
-~/modl/store/checkpoint/a1b2c3.../flux1-dev.safetensors   ← single file on disk
-    ↑                       ↑
-    │                       └── ~/A1111/models/Stable-diffusion/flux1-dev.safetensors (symlink)
-    └── ~/ComfyUI/models/checkpoints/flux1-dev.safetensors (symlink)
+```bash
+modl serve
 ```
 
-Install once, use everywhere. No duplicate 24GB files across tools.
+Full generation, training, and output management in the browser at `http://localhost:3333`. Same engine as the CLI.
+
+Install as a system service (starts on boot):
+
+```bash
+modl serve --install-service
+```
+
+---
+
+## Supported Models
+
+| Family | Model | Params | VRAM (fp8) | Generate | Edit | Train |
+|--------|-------|--------|------------|:--------:|:----:|:-----:|
+| **Flux 1** | Flux Dev | 12B | 16 GB | yes | | yes |
+| | Flux Schnell | 12B | 16 GB | yes | | yes |
+| **Flux 2** | Flux 2 Dev | 24B | 24 GB | yes | yes | |
+| | Klein 4B | 4B | 10 GB | yes | yes | yes |
+| | Klein 9B | 9B | 16 GB | yes | yes | yes |
+| **Z-Image** | Z-Image | 6B | 12 GB | yes | | yes |
+| | Z-Image Turbo | 6B | 12 GB | yes | | yes |
+| **Qwen Image** | Qwen Image | 20B | 20 GB | yes | | yes |
+| | Qwen Image Edit | 20B | 20 GB | | yes | |
+| **Legacy** | SDXL | 3.5B | 5 GB | yes | | yes |
+
+**Generate** = text-to-image. **Edit** = instruction-based image editing (`modl edit "make it blue" --image photo.jpg`). **Train** = LoRA fine-tuning.
+
+```bash
+modl pull flux-schnell     # fast, 4-step generation
+modl pull flux-dev         # high quality, best for training
+modl pull z-image-turbo    # lightweight, fast
+```
+
+---
 
 ## Already Have Models?
 
@@ -71,77 +112,39 @@ modl link --comfyui ~/ComfyUI
 modl link --a1111 ~/stable-diffusion-webui
 ```
 
-Modl scans your model folders, hashes each file, and moves recognized models into the store — replacing them with symlinks. Your tools keep working, nothing breaks. Unrecognized files are left untouched.
+Modl scans your model folders, hashes files, and moves recognized models into the store — replacing them with symlinks. Your tools keep working, nothing breaks.
 
-## Commands
+---
 
-<!-- BEGIN AUTO-GENERATED (scripts/generate-cli-reference.sh) -->
+## Image Tools
 
-Run `modl <command> --help` for full usage details.
+```bash
+modl edit "make the sky purple" --image photo.jpg    # AI image editing
+modl upscale photo.jpg                                # 4x upscale
+modl remove-bg photo.jpg                              # transparent PNG
+modl face-restore photo.jpg                           # fix faces
+modl score photo.jpg                                  # aesthetic quality
+```
 
-| Command | Description |
-|---------|-------------|
-| `modl pull <id>` | Download a model, LoRA, VAE, or other asset |
-| `modl rm <id>` | Remove an installed model |
-| `modl ls` | List installed models |
-| `modl info <id>` | Show detailed info about a model |
-| `modl search [query]` | Search the registry |
-| `modl update` | Fetch latest registry index |
-| `modl link [path]` | Link a tool's model folder (ComfyUI, A1111) |
-| `modl gc` | Remove unreferenced files from the store |
-| `modl generate <prompt>` | Generate images using diffusers |
-| `modl train` | Train a LoRA with managed runtime |
-| `modl train status [name]` | Show live training progress |
-| `modl train ls` | List training runs |
-| `modl dataset create <name>` | Create a managed dataset from images |
-| `modl dataset caption <name>` | Auto-caption images using a VL model |
-| `modl dataset prepare <name>` | Full pipeline: create, resize, caption |
-| `modl dataset ls` | List all managed datasets |
-| `modl outputs ls` | List recent generation outputs |
-| `modl outputs search <query>` | Search outputs by prompt, model, or LoRA |
-| `modl score <paths>` | Score image aesthetic quality |
-| `modl detect <paths>` | Detect faces in images |
-| `modl segment <image>` | Generate segmentation mask for inpainting |
-| `modl face-restore <paths>` | Restore faces using CodeFormer |
-| `modl upscale <paths>` | Upscale images using Real-ESRGAN |
-| `modl remove-bg <paths>` | Remove image background (transparent PNG) |
-| `modl enhance <prompt>` | AI-enhanced prompt expansion |
-| `modl doctor` | Check for broken symlinks, missing deps, corrupt files |
-| `modl serve` | Launch the web UI |
-| `modl worker start/stop/status` | Manage persistent GPU worker |
-| `modl upgrade` | Update modl CLI to the latest release |
+---
 
-Full reference: `modl --help` or run `scripts/generate-cli-reference.sh` to regenerate this table.
+## Docker
 
-<!-- END AUTO-GENERATED -->
+```bash
+docker run --gpus all -p 3333:3333 -v modl-data:/workspace ghcr.io/modl-org/modl:latest
+```
 
-## Variant Selection
+Set `MODEL=flux-schnell` to auto-pull a model on first boot. Models persist on the volume across restarts.
 
-Models come in multiple variants. Modl picks the best one for your GPU:
-
-| VRAM | Variant | Notes |
-|------|---------|-------|
-| 24GB+ | fp16 | Full quality |
-| 12-23GB | fp8 | Slight quality reduction |
-| 8-11GB | gguf-q4 | Quantized |
-| <8GB | gguf-q2 | Lower quality, functional |
-
-Override: `modl pull flux-dev --variant fp8`
+---
 
 ## Architecture
 
-Rust CLI for speed and single-binary distribution. Managed Python runtime for GPU compute. SQLite tracks everything.
+Single Rust binary for speed and distribution. Managed Python runtime for GPU compute. No external dependencies to install.
 
-```
-modl (Rust binary)          Python Worker
-├── CLI commands            ├── Inference (diffusers)
-├── Web UI (axum)           ├── Training (ai-toolkit)
-├── Model registry          ├── Analysis (CLIP, SAM, etc.)
-├── Content store           └── VRAM management
-└── SQLite DB
-```
+Full CLI reference: **[modl.run/docs](https://modl.run/docs)**
 
-See [CLAUDE.md](CLAUDE.md) for full architecture docs.
+---
 
 ## License
 

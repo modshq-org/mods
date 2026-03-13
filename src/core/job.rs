@@ -89,6 +89,23 @@ fn default_resize_method() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaceCropJobSpec {
+    pub dataset_path: String,
+    #[serde(default = "default_resize_resolution")]
+    pub resolution: u32,
+    #[serde(default = "default_face_crop_padding")]
+    pub padding: f32,
+    #[serde(default)]
+    pub trigger_word: String,
+    #[serde(default)]
+    pub class_word: String,
+}
+
+fn default_face_crop_padding() -> f32 {
+    1.8
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoreJobSpec {
     pub image_paths: Vec<String>,
     #[serde(default = "default_score_model")]
@@ -212,6 +229,31 @@ pub struct RemoveBgJobSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditJobSpec {
+    pub prompt: String,
+    pub model: ModelRef,
+    #[serde(default)]
+    pub lora: Option<LoraRef>,
+    pub output: GenerateOutputRef,
+    pub params: EditParams,
+    pub runtime: RuntimeRef,
+    pub target: ExecutionTarget,
+    #[serde(default)]
+    pub labels: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditParams {
+    /// Source image paths (1 or more, already resolved to local files)
+    pub image_paths: Vec<String>,
+    pub steps: u32,
+    pub guidance: f32,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoraRef {
     pub name: String,
     pub path: String,
@@ -298,6 +340,10 @@ pub struct TrainingParams {
     /// Resume training from a checkpoint .safetensors file
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_from: Option<String>,
+    /// Class word for character/object LoRAs (e.g. "man", "woman", "dog").
+    /// Used in sample prompts alongside trigger word for better convergence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_word: Option<String>,
 }
 
 fn default_batch_size() -> u32 {
@@ -545,6 +591,7 @@ mod tests {
                 num_repeats: 0,
                 caption_dropout_rate: -1.0,
                 resume_from: None,
+                class_word: None,
             },
             runtime: RuntimeRef {
                 profile: "trainer-cu124".into(),

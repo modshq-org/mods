@@ -60,6 +60,9 @@ axum = { version = "0.8", features = ["multipart"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 open = "5"
 
+# Image processing (thumbnails)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+
 # Misc
 chrono = { version = "0.4", features = ["serde"] }
 shellexpand = "3"

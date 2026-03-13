@@ -93,10 +93,14 @@ pub fn resolve_params(
     let vram_mb = gpu.map(|g| g.vram_mb).unwrap_or(0);
     let img_count = dataset.image_count;
 
+    let is_zimage = matches!(family, BaseModelFamily::ZImage);
+    let is_sdxl = matches!(family, BaseModelFamily::Sdxl);
+    let is_schnell = matches!(family, BaseModelFamily::FluxSchnell);
+    let is_flux2 = matches!(family, BaseModelFamily::Flux2);
+
     // Z-Image only needs ~17GB without quantization (per Ostris).
     // On 24GB+ cards, skip quantization for much faster iteration (~1.3s vs ~4s).
     // Other models (Flux at 12B+) still need quantization under 40GB.
-    let is_zimage = matches!(family, BaseModelFamily::ZImage);
     let quantize = if is_zimage {
         vram_mb > 0 && vram_mb < 20_000
     } else {
@@ -171,6 +175,12 @@ pub fn resolve_params(
         }
 
         // --- Character / Object presets ---
+        // Model-specific step scaling based on convergence experiments:
+        //   SDXL: mature, reliable. Sweet spot ~1600-2200 steps.
+        //   Schnell: converges fast, overfits fast (~400 steps for dogs).
+        //   Flux2 (Klein): similar to Schnell — fast convergence.
+        //   Z-Image: inconsistent for character, moderate speed.
+        //   Generic (Flux dev, Chroma): standard speed.
         (Preset::Quick, _) if is_zimage => {
             let steps = compute_steps(img_count, 100, 1000, 1500);
             (steps, 8, 1e-4)
@@ -185,6 +195,40 @@ pub fn resolve_params(
             let rank = if img_count < 20 { 16 } else { 32 };
             (steps, rank, 1e-4)
         }
+
+        // SDXL: deprioritized, cap at ~1800 steps
+        (Preset::Quick, _) if is_sdxl => {
+            let steps = compute_steps(img_count, 80, 800, 1200);
+            (steps, 8, 1e-4)
+        }
+        (Preset::Standard, _) if is_sdxl => {
+            let steps = compute_steps(img_count, 130, 1200, 1800);
+            let rank = if img_count < 20 { 16 } else { 32 };
+            let lr = if img_count < 10 { 5e-5 } else { 1e-4 };
+            (steps, rank, lr)
+        }
+        (Preset::Advanced, _) if is_sdxl => {
+            let steps = compute_steps(img_count, 150, 1500, 2500);
+            (steps, 16, 1e-4)
+        }
+
+        // Schnell + Flux2 (Klein): fast convergence, overfit quickly
+        (Preset::Quick, _) if is_schnell || is_flux2 => {
+            let steps = compute_steps(img_count, 50, 300, 800);
+            (steps, 8, 1e-4)
+        }
+        (Preset::Standard, _) if is_schnell || is_flux2 => {
+            let steps = compute_steps(img_count, 80, 500, 1500);
+            let rank = if img_count < 20 { 16 } else { 32 };
+            let lr = if img_count < 10 { 5e-5 } else { 1e-4 };
+            (steps, rank, lr)
+        }
+        (Preset::Advanced, _) if is_schnell || is_flux2 => {
+            let steps = compute_steps(img_count, 100, 600, 1500);
+            (steps, 16, 1e-4)
+        }
+
+        // Generic (Flux dev, Chroma, etc.)
         (Preset::Quick, _) => {
             let steps = compute_steps(img_count, 150, 1000, 1500);
             (steps, 8, 1e-4)
@@ -216,6 +260,7 @@ pub fn resolve_params(
         num_repeats: 0,             // 0 = let adapter choose per lora_type
         caption_dropout_rate: -1.0, // negative = let adapter choose
         resume_from: None,
+        class_word: None,
     })
 }
 
@@ -259,7 +304,7 @@ mod tests {
     // --- Quick preset ---
 
     #[test]
-    fn quick_min_steps() {
+    fn quick_min_steps_schnell() {
         let p = resolve(
             Preset::Quick,
             LoraType::Character,
@@ -268,14 +313,14 @@ mod tests {
             "flux-schnell",
             "OHWX",
         );
-        // 3 * 150 = 450, clamped to min 1000
-        assert_eq!(p.steps, 1000);
+        // Schnell: 3 * 50 = 150, clamped to min 300
+        assert_eq!(p.steps, 300);
         assert_eq!(p.rank, 8);
         assert!((p.learning_rate - 1e-4).abs() < 1e-10);
     }
 
     #[test]
-    fn quick_max_steps() {
+    fn quick_max_steps_schnell() {
         let p = resolve(
             Preset::Quick,
             LoraType::Character,
@@ -284,12 +329,12 @@ mod tests {
             "flux-schnell",
             "OHWX",
         );
-        // 50 * 150 = 7500, clamped to max 1500
-        assert_eq!(p.steps, 1500);
+        // Schnell: 50 * 50 = 2500, clamped to max 800
+        assert_eq!(p.steps, 800);
     }
 
     #[test]
-    fn quick_normal_scaling() {
+    fn quick_normal_scaling_schnell() {
         let p = resolve(
             Preset::Quick,
             LoraType::Character,
@@ -298,8 +343,23 @@ mod tests {
             "flux-schnell",
             "OHWX",
         );
-        // 8 * 150 = 1200
+        // Schnell: 8 * 50 = 400
+        assert_eq!(p.steps, 400);
+    }
+
+    #[test]
+    fn quick_generic_model() {
+        let p = resolve(
+            Preset::Quick,
+            LoraType::Character,
+            &dataset(8),
+            Some(&gpu(24576)),
+            "flux-dev",
+            "OHWX",
+        );
+        // Generic: 8 * 150 = 1200
         assert_eq!(p.steps, 1200);
+        assert_eq!(p.rank, 8);
     }
 
     // --- Standard preset ---
@@ -352,6 +412,53 @@ mod tests {
         assert!((p.learning_rate - 1e-4).abs() < 1e-10); // >= 10
     }
 
+    // --- Model-specific step scaling ---
+
+    #[test]
+    fn standard_sdxl_character() {
+        let p = resolve(
+            Preset::Standard,
+            LoraType::Character,
+            &dataset(14),
+            Some(&gpu(24576)),
+            "sdxl-base-1.0",
+            "OHWX",
+        );
+        // SDXL: 14 * 130 = 1820, capped to 1800
+        assert_eq!(p.steps, 1800);
+        assert_eq!(p.rank, 16);
+    }
+
+    #[test]
+    fn standard_schnell_character() {
+        let p = resolve(
+            Preset::Standard,
+            LoraType::Character,
+            &dataset(14),
+            Some(&gpu(24576)),
+            "flux-schnell",
+            "OHWX",
+        );
+        // Schnell: 14 * 80 = 1120
+        assert_eq!(p.steps, 1120);
+        assert_eq!(p.rank, 16);
+    }
+
+    #[test]
+    fn standard_schnell_dog() {
+        let p = resolve(
+            Preset::Standard,
+            LoraType::Character,
+            &dataset(24),
+            Some(&gpu(24576)),
+            "flux-schnell",
+            "OHWX",
+        );
+        // Schnell: 24 * 80 = 1920, capped to 1500
+        assert_eq!(p.steps, 1500);
+        assert_eq!(p.rank, 32); // >= 20 images
+    }
+
     // --- Advanced preset ---
 
     #[test]
@@ -364,6 +471,8 @@ mod tests {
             "flux-schnell",
             "OHWX",
         );
+        // Schnell advanced: 10 * 100 = 1000
+        assert_eq!(p.steps, 1000);
         assert_eq!(p.rank, 16);
         assert!((p.learning_rate - 1e-4).abs() < 1e-10);
     }

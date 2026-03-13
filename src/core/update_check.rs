@@ -29,10 +29,7 @@ struct UpdateCache {
 }
 
 fn cache_path() -> PathBuf {
-    dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-        .join("update-check.json")
+    super::paths::modl_root().join("update-check.json")
 }
 
 fn now_unix() -> u64 {

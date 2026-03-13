@@ -1,26 +1,18 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Trash2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { api, type GeneratedImage, type GeneratedOutput } from '../api'
-import type { GenerateFormState } from './generate'
+import { ChevronDown, ChevronRight } from 'lucide-react'
+import { api, type GeneratedImage, type GeneratedOutput, type ModelFamily } from '../api'
+import { modelColor } from '@/lib/utils'
+import { STALE_FAST, STALE_SLOW, STALE_STATIC } from '@/lib/query-keys'
+import { useLocalStorage } from '../hooks/useLocalStorage'
+import { useForm, useAppNav } from '../contexts/FormContext'
+import { buildSendToEdit } from './generate/generate-state'
 import { ImageDetail } from './ImageDetail'
-import { LazyImage } from './LazyImage'
+import { GalleryFilterBar, ImageGridItem } from './gallery'
 
-type Props = {
-  setForm: React.Dispatch<React.SetStateAction<GenerateFormState>>
-  setActiveTab: (tab: 'train' | 'generate' | 'outputs' | 'datasets') => void
-}
-
-export function OutputsGallery({ setForm, setActiveTab }: Props) {
+export function OutputsGallery() {
+  const { setForm } = useForm()
+  const { navigateToTab, useAsRecipe } = useAppNav()
   const queryClient = useQueryClient()
 
   const {
@@ -32,13 +24,22 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
   } = useQuery({
     queryKey: ['outputs'],
     queryFn: api.outputs,
-    staleTime: 30_000,
+    staleTime: STALE_FAST,
   })
 
   const deleteMutation = useMutation({
     mutationFn: api.deleteOutput,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['outputs'] })
+    },
+  })
+
+  const batchDeleteMutation = useMutation({
+    mutationFn: api.batchDeleteOutputs,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['outputs'] })
+      setSelectedPaths(new Set())
+      setSelectMode(false)
     },
   })
 
@@ -67,19 +68,64 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
     },
   })
 
+  // Models + families (cached from other tabs, needed for send-to-edit)
+  const { data: modelsResponse } = useQuery({
+    queryKey: ['models'],
+    queryFn: api.models,
+    staleTime: STALE_SLOW,
+  })
+  const models = modelsResponse?.models ?? []
+
+  const { data: families = [] } = useQuery<ModelFamily[]>({
+    queryKey: ['model-families'],
+    queryFn: api.modelFamilies,
+    staleTime: STALE_STATIC,
+  })
+
+  const sendToEdit = useCallback((imageUrl: string, serverPath: string) => {
+    setForm(buildSendToEdit(imageUrl, serverPath, models, families))
+    navigateToTab('generate')
+  }, [models, families, setForm, navigateToTab])
+
   const [selected, setSelected] = useState<GeneratedImage | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<GeneratedImage | null>(null)
   const [modelFilter, setModelFilter] = useState<string | null>(null)
   const [dateFilter, setDateFilter] = useState<string | null>(null)
-  const [sortNewestFirst, setSortNewestFirst] = useState(true)
-  const [gridSize, setGridSize] = useState<'s' | 'm' | 'l'>('m')
+  const [sortNewestFirst, setSortNewestFirst] = useLocalStorage('modl:outputs-sort', true)
+  const [gridSize, setGridSize] = useLocalStorage<'s' | 'm' | 'l'>('modl:outputs-grid', 'm')
   const [favoriteFilter, setFavoriteFilter] = useState(false)
+  const [groupBy, setGroupBy] = useLocalStorage<'date' | 'model' | 'none'>('modl:outputs-group', 'date')
+  const [searchQuery, setSearchQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  // Batch selection
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false)
+
+  // Track cursor index for shift+click and shift+arrow range select
+  const lastClickedRef = useRef<number>(-1)
+  const [cursorIndex, setCursorIndex] = useState(-1)
+
+  // Collapsed groups
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const toggleCollapsed = useCallback((key: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
 
   const gridClass = {
     s: 'grid-cols-3 gap-1.5 md:grid-cols-5 lg:grid-cols-7 xl:grid-cols-9',
     m: 'grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6',
     l: 'grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
   }[gridSize]
+
+  // Thumbnail width based on grid size
+  const thumbWidth = { s: 200, m: 320, l: 480 }[gridSize]
 
   const modelOptions = useMemo(() => {
     const models = new Set<string>()
@@ -97,133 +143,231 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
     return groups.map((group) => group.date)
   }, [groups])
 
+  const searchLower = searchQuery.toLowerCase().trim()
+
   const filteredGroups = useMemo(() => {
-    const next: GeneratedOutput[] = []
-
+    // 1. Flatten all images, apply filters + search
+    const allImages: (GeneratedImage & { date: string })[] = []
     for (const group of groups) {
-      if (dateFilter && group.date !== dateFilter) {
-        continue
-      }
-
-      const filteredImages = group.images
-        .filter(
-          (image) =>
-            (modelFilter ? image.base_model_id === modelFilter : true) &&
-            (!favoriteFilter || image.favorited),
-        )
-        .sort((a, b) => {
-          const left = a.modified ?? 0
-          const right = b.modified ?? 0
-          return sortNewestFirst ? right - left : left - right
-        })
-
-      if (filteredImages.length > 0) {
-        next.push({ ...group, images: filteredImages })
+      if (dateFilter && group.date !== dateFilter) continue
+      for (const image of group.images) {
+        if (modelFilter && image.base_model_id !== modelFilter) continue
+        if (favoriteFilter && !image.favorited) continue
+        if (searchLower && !(
+          image.prompt?.toLowerCase().includes(searchLower) ||
+          image.filename.toLowerCase().includes(searchLower) ||
+          image.base_model_id?.toLowerCase().includes(searchLower) ||
+          image.lora_name?.toLowerCase().includes(searchLower)
+        )) continue
+        allImages.push({ ...image, date: group.date })
       }
     }
 
-    next.sort((a, b) => (sortNewestFirst ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date)))
-    return next
-  }, [groups, dateFilter, modelFilter, sortNewestFirst, favoriteFilter])
+    // 2. Sort
+    allImages.sort((a, b) => {
+      const left = a.modified ?? 0
+      const right = b.modified ?? 0
+      return sortNewestFirst ? right - left : left - right
+    })
+
+    // 3. Group
+    const grouped = new Map<string, GeneratedImage[]>()
+    for (const img of allImages) {
+      const key = groupBy === 'model'
+        ? (img.base_model_id ?? 'Unknown model')
+        : groupBy === 'date'
+          ? img.date
+          : 'All images'
+      if (!grouped.has(key)) grouped.set(key, [])
+      grouped.get(key)!.push(img)
+    }
+
+    // 4. Sort groups
+    const result: GeneratedOutput[] = []
+    for (const [key, images] of grouped) {
+      result.push({ date: key, images })
+    }
+    if (groupBy !== 'none') {
+      result.sort((a, b) => sortNewestFirst ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date))
+    }
+    return result
+  }, [groups, dateFilter, modelFilter, sortNewestFirst, favoriteFilter, groupBy, searchLower])
 
   const allFilteredImages = useMemo(() => {
     return filteredGroups.flatMap((g) => g.images)
   }, [filteredGroups])
+
+  const totalImageCount = useMemo(() => {
+    return groups.reduce((sum, g) => sum + g.images.length, 0)
+  }, [groups])
+
+  const isFiltered = modelFilter !== null || dateFilter !== null || favoriteFilter || searchLower !== ''
+
+  // Stats bar data
+  const [statsOpen, setStatsOpen] = useLocalStorage('modl:outputs-stats', true)
+
+  const stats = useMemo(() => {
+    const images = allFilteredImages
+    const total = images.length
+    const today = new Date().toISOString().slice(0, 10)
+
+    const byModel = new Map<string, { count: number; stars: number }>()
+    let todayCount = 0
+
+    for (const img of images) {
+      const mid = img.base_model_id ?? 'unknown'
+      const entry = byModel.get(mid) ?? { count: 0, stars: 0 }
+      entry.count++
+      if (img.favorited) entry.stars++
+      byModel.set(mid, entry)
+
+      if (img.path?.includes(today)) todayCount++
+    }
+
+    const modelChips = [...byModel.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+
+    return { total, todayCount, modelChips }
+  }, [allFilteredImages])
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault()
+        searchRef.current?.focus()
+        return
+      }
+      if (!selectMode || selected) return
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+      e.preventDefault()
+      const total = allFilteredImages.length
+      if (total === 0) return
+      setCursorIndex((prev) => {
+        const cur = prev < 0 ? 0 : prev
+        let next = cur
+        if (e.key === 'ArrowRight') next = Math.min(cur + 1, total - 1)
+        else if (e.key === 'ArrowLeft') next = Math.max(cur - 1, 0)
+        else if (e.key === 'ArrowDown') next = Math.min(cur + 4, total - 1)
+        else if (e.key === 'ArrowUp') next = Math.max(cur - 4, 0)
+        if (e.shiftKey) {
+          const anchor = lastClickedRef.current >= 0 ? lastClickedRef.current : 0
+          const start = Math.min(anchor, next)
+          const end = Math.max(anchor, next)
+          setSelectedPaths((prevSet) => {
+            const s = new Set(prevSet)
+            for (let i = start; i <= end; i++) s.add(allFilteredImages[i].path)
+            return s
+          })
+        }
+        return next
+      })
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [selectMode, selected, allFilteredImages])
+
+  const togglePathSelection = useCallback((path: string, shiftKey = false) => {
+    const clickedIndex = allFilteredImages.findIndex((img) => img.path === path)
+    if (shiftKey && lastClickedRef.current >= 0 && clickedIndex >= 0) {
+      const start = Math.min(lastClickedRef.current, clickedIndex)
+      const end = Math.max(lastClickedRef.current, clickedIndex)
+      setSelectedPaths((prev) => {
+        const next = new Set(prev)
+        for (let i = start; i <= end; i++) {
+          next.add(allFilteredImages[i].path)
+        }
+        return next
+      })
+    } else {
+      setSelectedPaths((prev) => {
+        const next = new Set(prev)
+        if (next.has(path)) {
+          next.delete(path)
+        } else {
+          next.add(path)
+        }
+        return next
+      })
+    }
+    lastClickedRef.current = clickedIndex
+    setCursorIndex(clickedIndex)
+  }, [allFilteredImages])
+
+  const selectAllVisible = useCallback(() => {
+    setSelectedPaths(new Set(allFilteredImages.map((img) => img.path)))
+  }, [allFilteredImages])
+
+  const deselectAll = useCallback(() => {
+    setSelectedPaths(new Set())
+  }, [])
 
   const onDelete = async (image: GeneratedImage) => {
     await deleteMutation.mutateAsync({ artifact_id: image.artifact_id, path: image.path })
     setDeleteTarget(null)
   }
 
-  const combinedError = error ?? deleteMutation.error ?? favoriteMutation.error
+  const onBatchDelete = async () => {
+    const items = allFilteredImages
+      .filter((img) => selectedPaths.has(img.path))
+      .map((img) => ({ artifact_id: img.artifact_id, path: img.path }))
+    if (items.length === 0) return
+    await batchDeleteMutation.mutateAsync(items)
+    setConfirmBatchDelete(false)
+  }
+
+  const handleSelectModeChange = useCallback((mode: boolean) => {
+    setSelectMode(mode)
+    if (!mode) {
+      setSelectedPaths(new Set())
+      setConfirmBatchDelete(false)
+      setCursorIndex(-1)
+      lastClickedRef.current = -1
+    }
+  }, [])
+
+  const combinedError = error ?? deleteMutation.error ?? favoriteMutation.error ?? batchDeleteMutation.error
 
   return (
-    <div className="space-y-6">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Model</span>
-          <Button
-            type="button"
-            size="sm"
-            variant={modelFilter === null ? 'secondary' : 'ghost'}
-            className="h-7 px-2.5 text-xs"
-            onClick={() => setModelFilter(null)}
-          >
-            All
-          </Button>
-          {modelOptions.map((model) => (
-            <Button
-              key={model}
-              type="button"
-              size="sm"
-              variant={modelFilter === model ? 'secondary' : 'ghost'}
-              className="h-7 px-2.5 text-xs"
-              onClick={() => setModelFilter(model)}
-            >
-              {model}
-            </Button>
-          ))}
-          <div className="mx-1 h-4 w-px bg-border/50" />
-          <Button
-            type="button"
-            size="sm"
-            variant={favoriteFilter ? 'secondary' : 'ghost'}
-            className={`h-7 px-2.5 text-xs ${favoriteFilter ? 'text-yellow-400' : ''}`}
-            onClick={() => setFavoriteFilter((prev) => !prev)}
-          >
-            ⭐ Starred
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <div className="flex flex-wrap gap-1">
-            <Button
-              type="button"
-              size="sm"
-              variant={dateFilter === null ? 'secondary' : 'ghost'}
-              className="h-7 px-2.5 text-xs"
-              onClick={() => setDateFilter(null)}
-            >
-              All dates
-            </Button>
-            {dateOptions.map((date) => (
-              <Button
-                key={date}
-                type="button"
-                size="sm"
-                variant={dateFilter === date ? 'secondary' : 'ghost'}
-                className="h-7 px-2.5 text-xs"
-                onClick={() => setDateFilter(date)}
-              >
-                {date}
-              </Button>
-            ))}
-          </div>
-          <Button type="button" size="sm" variant="ghost" className="h-7 px-2.5 text-xs text-muted-foreground" onClick={() => setSortNewestFirst((prev) => !prev)}>
-            {sortNewestFirst ? '↓ Newest' : '↑ Oldest'}
-          </Button>
-          <Button type="button" size="sm" variant="ghost" className="h-7 px-2.5 text-xs text-muted-foreground" onClick={() => void refetch()}>
-            {isFetching ? 'Refreshing…' : 'Refresh'}
-          </Button>
-          <div className="flex items-center rounded-md border border-border/50">
-            {(['s', 'm', 'l'] as const).map((size) => (
-              <button
-                key={size}
-                type="button"
-                onClick={() => setGridSize(size)}
-                className={`h-7 w-7 text-[10px] font-semibold uppercase transition-colors first:rounded-l-md last:rounded-r-md ${
-                  gridSize === size
-                    ? 'bg-secondary text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {size}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+    <div className="space-y-4">
+      <GalleryFilterBar
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        searchRef={searchRef}
+        modelFilter={modelFilter}
+        onModelFilterChange={setModelFilter}
+        modelOptions={modelOptions}
+        dateFilter={dateFilter}
+        onDateFilterChange={setDateFilter}
+        dateOptions={dateOptions}
+        favoriteFilter={favoriteFilter}
+        onFavoriteFilterChange={setFavoriteFilter}
+        sortNewestFirst={sortNewestFirst}
+        onSortChange={setSortNewestFirst}
+        groupBy={groupBy}
+        onGroupByChange={setGroupBy}
+        selectMode={selectMode}
+        onSelectModeChange={handleSelectModeChange}
+        gridSize={gridSize}
+        onGridSizeChange={setGridSize}
+        isFetching={isFetching}
+        onRefresh={() => void refetch()}
+        selectedCount={selectedPaths.size}
+        filteredCount={allFilteredImages.length}
+        onSelectAll={selectAllVisible}
+        onDeselectAll={deselectAll}
+        confirmBatchDelete={confirmBatchDelete}
+        onConfirmBatchDelete={setConfirmBatchDelete}
+        onBatchDelete={() => void onBatchDelete()}
+        batchDeletePending={batchDeleteMutation.isPending}
+        isLoading={isLoading}
+        stats={stats}
+        statsOpen={statsOpen}
+        onStatsOpenChange={setStatsOpen}
+        isFiltered={isFiltered}
+        totalImageCount={totalImageCount}
+      />
 
       {combinedError ? (
         <p className="text-sm text-destructive">Failed to load outputs: {String(combinedError)}</p>
@@ -241,96 +385,83 @@ export function OutputsGallery({ setForm, setActiveTab }: Props) {
         <p className="py-8 text-center text-sm text-muted-foreground">No generated images for the selected filters.</p>
       ) : null}
 
-      {filteredGroups.map((group) => (
-        <section key={group.date} className="space-y-2">
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{group.date}</div>
-          <div className={`grid ${gridClass}`}>
-            {group.images.map((image) => (
-              <article key={image.path} className="group relative overflow-hidden rounded-lg">
-                <LazyImage
-                  src={`/files/${image.path}`}
-                  alt={image.filename}
-                  className="aspect-square"
-                  onClick={() => setSelected(image)}
-                />
-                {/* Hover overlay */}
-                <div className="pointer-events-none absolute inset-0 bg-black/0 transition-colors group-hover:bg-black/30" />
-                <div className="absolute inset-x-0 bottom-0 translate-y-full px-2 pb-2 pt-6 opacity-0 transition-all group-hover:translate-y-0 group-hover:opacity-100" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)' }}>
-                  <p className="truncate font-mono text-[10px] text-white/70">{image.filename}</p>
-                </div>
-                <button
-                  type="button"
-                  className={`absolute top-1.5 left-1.5 text-base leading-none drop-shadow transition-opacity ${
-                    image.favorited
-                      ? 'opacity-100'
-                      : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100'
-                  }`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    favoriteMutation.mutate(image.path)
-                  }}
-                >
-                  {image.favorited ? '⭐' : '☆'}
-                </button>
-                <div className="pointer-events-none absolute top-1.5 right-1.5 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    className="h-6 px-2 text-[10px]"
-                    onClick={() => setSelected(image)}
-                  >
-                    Info
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="destructive"
-                    className="h-6 w-6 p-0"
-                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(image) }}
-                    disabled={deleteMutation.isPending}
-                  >
-                    <Trash2 className="size-3" />
-                  </Button>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      ))}
-
-      <Dialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
-        <DialogContent className="max-w-sm" showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Delete image?</DialogTitle>
-            <DialogDescription className="break-all">
-              {deleteTarget?.filename} will be permanently deleted.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="gap-2">
-            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={deleteMutation.isPending}
-              onClick={() => deleteTarget && void onDelete(deleteTarget)}
+      {filteredGroups.map((group) => {
+        const isCollapsed = collapsedGroups.has(group.date)
+        return (
+        <section key={group.date} className="space-y-2" style={!isCollapsed ? { contentVisibility: 'auto', containIntrinsicSize: 'auto 400px' } : undefined}>
+          {groupBy !== 'none' && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-1.5 text-left"
+              onClick={() => toggleCollapsed(group.date)}
             >
-              <Trash2 className="mr-1.5 size-4" />
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              {isCollapsed
+                ? <ChevronRight className="size-3.5 text-muted-foreground/60" />
+                : <ChevronDown className="size-3.5 text-muted-foreground/60" />
+              }
+              {groupBy === 'model' && (
+                <span
+                  className="inline-block size-2 rounded-full"
+                  style={{ backgroundColor: modelColor(group.date) }}
+                />
+              )}
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{group.date}</span>
+              <span className="text-[10px] text-muted-foreground/50">{group.images.length}</span>
+            </button>
+          )}
+          {!isCollapsed && <div className={`grid ${gridClass}`}>
+            {group.images.map((image) => {
+              const isSelected = selectedPaths.has(image.path)
+              const isDeleting = deleteTarget?.path === image.path
+              const isCursor = selectMode && cursorIndex >= 0 && allFilteredImages[cursorIndex]?.path === image.path
+
+              return (
+                <ImageGridItem
+                  key={image.path}
+                  image={image}
+                  isSelected={isSelected}
+                  isCursor={isCursor}
+                  isDeleting={isDeleting}
+                  selectMode={selectMode}
+                  thumbWidth={thumbWidth}
+                  deletePending={deleteMutation.isPending}
+                  onImageClick={(e) => {
+                    if (selectMode) {
+                      togglePathSelection(image.path, e.shiftKey)
+                    } else {
+                      setSelected(image)
+                    }
+                  }}
+                  onToggleSelection={(e) => {
+                    e.stopPropagation()
+                    togglePathSelection(image.path, e.shiftKey)
+                  }}
+                  onFavorite={() => favoriteMutation.mutate(image.path)}
+                  onOpenAsRecipe={() => useAsRecipe(image)}
+                  onSendToEdit={() => sendToEdit(`/files/${image.path}`, image.path)}
+                  onOpenDetail={() => setSelected(image)}
+                  onRequestDelete={() => setDeleteTarget(image)}
+                  onConfirmDelete={() => void onDelete(image)}
+                  onCancelDelete={() => setDeleteTarget(null)}
+                />
+              )
+            })}
+          </div>}
+        </section>
+        )
+      })}
 
       <ImageDetail
         image={selected}
         onClose={() => setSelected(null)}
-        setForm={setForm}
-        setActiveTab={setActiveTab}
         allImages={allFilteredImages}
         onNavigate={setSelected}
         onToggleFavorite={(path) => favoriteMutation.mutate(path)}
+        onEditImage={sendToEdit}
+        onDeleteImage={(img) => {
+          setDeleteTarget(img)
+          setSelected(null)
+        }}
       />
     </div>
   )

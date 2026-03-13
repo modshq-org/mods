@@ -65,19 +65,13 @@ pub async fn auto_spawn_if_needed() -> bool {
 #[cfg(unix)]
 /// Path to the worker Unix socket.
 fn socket_path() -> PathBuf {
-    dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-        .join("worker.sock")
+    crate::core::paths::modl_root().join("worker.sock")
 }
 
 #[cfg(unix)]
 /// Path to the worker PID file.
 fn pid_path() -> PathBuf {
-    dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-        .join("worker.pid")
+    crate::core::paths::modl_root().join("worker.pid")
 }
 
 #[cfg(unix)]
@@ -161,9 +155,7 @@ pub async fn start(timeout: u32) -> Result<()> {
 
     // Redirect worker stderr to a log file so diffusers/torch can write
     // freely without hitting a broken pipe when the parent process exits.
-    let modl_dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl");
+    let modl_dir = crate::core::paths::modl_root();
     let log_path = modl_dir.join("worker.log");
     let log_file = std::fs::File::create(&log_path)
         .with_context(|| format!("Failed to create worker log: {}", log_path.display()))?;
@@ -177,8 +169,14 @@ pub async fn start(timeout: u32) -> Result<()> {
         .arg("--timeout")
         .arg(timeout.to_string())
         .env("PYTHONPATH", py_path)
-        .stdout(std::process::Stdio::null())
-        .stderr(log_file);
+        .env("HF_HUB_OFFLINE", "1");
+
+    // Pass through MODL_MAX_MODELS if set (default: 2)
+    if let Ok(max_models) = std::env::var("MODL_MAX_MODELS") {
+        command.arg("--max-models").arg(&max_models);
+    }
+
+    command.stdout(std::process::Stdio::null()).stderr(log_file);
 
     // Detach from parent process group so it survives terminal close
     #[cfg(unix)]

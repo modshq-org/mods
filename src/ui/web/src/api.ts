@@ -83,15 +83,34 @@ export type SampleGroup = {
   images: string[]
 }
 
+export type RunSummary = {
+  name: string
+  status: string
+  base_model?: string
+  trigger_word?: string
+  created_at?: string
+  has_lora: boolean
+  total_steps?: number
+}
+
+export type CheckpointInfo = {
+  step: number
+  path: string
+  size_bytes: number
+  promoted: boolean
+}
+
 export type TrainingRun = {
   name: string
   config?: Record<string, unknown>
   samples: SampleGroup[]
   lora_path?: string
   lora_size?: number
+  lora_promoted?: boolean
   lineage?: TrainingLineage
   total_steps?: number
   sample_every?: number
+  checkpoints: CheckpointInfo[]
 }
 
 export type TrainingStatusRun = {
@@ -136,9 +155,68 @@ export type SearchResult = {
   requires_auth: boolean
 }
 
+export type LibraryLora = {
+  id: string
+  name: string
+  trigger_word?: string
+  base_model?: string
+  lora_path: string
+  thumbnail?: string
+  step?: number
+  training_run?: string
+  config_json?: string
+  tags?: string
+  notes?: string
+  size_bytes: number
+  created_at: string
+}
+
+export type PromoteLoraRequest = {
+  name: string
+  trigger_word?: string
+  base_model?: string
+  lora_path: string
+  thumbnail?: string
+  step?: number
+  training_run?: string
+  config_json?: string
+  tags?: string
+}
+
 export type LossPoint = {
   step: number
   loss: number
+}
+
+export type DatasetSummary = {
+  name: string
+  image_count: number
+  captioned_count: number
+  coverage: number
+}
+
+export type StartTrainingRequest = {
+  dataset: string
+  base_model: string
+  name: string
+  trigger_word: string
+  lora_type: string
+  preset?: string
+  steps?: number
+  rank?: number
+  lr?: number
+  optimizer?: string
+  seed?: number
+  class_word?: string
+}
+
+export type TrainingQueueItem = {
+  id: number
+  position: number
+  name: string
+  spec: Record<string, unknown>
+  status: string
+  created_at: string
 }
 
 export type DeleteOutputRequest = {
@@ -165,6 +243,36 @@ export type GenerateRequest = {
   init_image?: string  // server-side path to init image for img2img
   mask?: string        // server-side path to mask image for inpainting
   strength?: number    // denoising strength (0.0-1.0)
+  fast?: boolean       // use Lightning distillation LoRA
+}
+
+export type EditRequest = {
+  prompt: string
+  model_id: string
+  images: string[] // server-side paths (uploaded via /api/upload)
+  steps: number
+  guidance: number
+  seed?: number
+  num_images: number
+}
+
+export type AnalysisResponse = {
+  status: string
+  output_path?: string
+  error?: string
+}
+
+export type QueueJobSummary = {
+  prompt: string
+  model_id: string
+  job_type: string
+}
+
+export type QueueStatus = {
+  running: boolean
+  queue_length: number
+  current?: QueueJobSummary | null
+  queue: QueueJobSummary[]
 }
 
 export type EnhanceRequest = {
@@ -205,6 +313,47 @@ export type AgentEvent = {
   images?: string[]
 }
 
+// ---------------------------------------------------------------------------
+// Model family types (from /api/model-families)
+// ---------------------------------------------------------------------------
+
+export type ModelCapabilities = {
+  txt2img: boolean
+  img2img: boolean
+  inpaint: boolean
+  edit: boolean
+  lora: boolean
+  training: boolean
+}
+
+export type ModelFamilyInfo = {
+  id: string
+  name: string
+  arch_key: string
+  transformer_b: number
+  text_encoder_name: string
+  text_encoder_b: number
+  total_b: number
+  vram_bf16_gb: number
+  vram_fp8_gb: number
+  capabilities: ModelCapabilities
+  default_steps: number
+  default_guidance: number
+  default_resolution: number
+  quality: number
+  speed: number
+  text_rendering: boolean
+  description: string
+}
+
+export type ModelFamily = {
+  id: string
+  name: string
+  vendor: string
+  year: number
+  models: ModelFamilyInfo[]
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   if (!res.ok) {
@@ -224,16 +373,40 @@ export const api = {
     }
     return raw
   },
+  modelFamilies: () => fetchJson<ModelFamily[]>('/api/model-families'),
   deleteModel: (id: string) =>
     fetchJson<{ deleted: string }>(`/api/models/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
-  runs: () => fetchJson<string[]>('/api/runs'),
+  runs: async (): Promise<RunSummary[]> => {
+    const raw = await fetchJson<RunSummary[] | string[]>('/api/runs')
+    // Handle old API format (plain string array) gracefully
+    if (raw.length > 0 && typeof raw[0] === 'string') {
+      return (raw as string[]).map((name) => ({
+        name,
+        status: 'unknown',
+        has_lora: false,
+      }))
+    }
+    return raw as RunSummary[]
+  },
   run: (name: string) => fetchJson<TrainingRun>(`/api/runs/${encodeURIComponent(name)}`),
   status: () => fetchJson<TrainingStatusRun[]>('/api/status'),
   statusSingle: (name: string) =>
     fetchJson<TrainingStatusRun>(`/api/status/${encodeURIComponent(name)}`),
-  datasets: () => fetchJson<string[]>('/api/datasets'),
+  datasets: async (): Promise<DatasetSummary[]> => {
+    const raw = await fetchJson<DatasetSummary[] | string[]>('/api/datasets')
+    // Handle old API format (plain string array) gracefully
+    if (raw.length > 0 && typeof raw[0] === 'string') {
+      return (raw as string[]).map((name) => ({
+        name,
+        image_count: 0,
+        captioned_count: 0,
+        coverage: 0,
+      }))
+    }
+    return raw as DatasetSummary[]
+  },
   dataset: (name: string, limit = 50, offset = 0) =>
     fetchJson<DatasetOverview>(
       `/api/datasets/${encodeURIComponent(name)}?limit=${limit}&offset=${offset}`,
@@ -244,6 +417,12 @@ export const api = {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
+    }),
+  batchDeleteOutputs: (items: Array<{ artifact_id?: string; path?: string }>) =>
+    fetchJson<{ deleted_files: number; deleted_records: number; errors: string[] }>('/api/outputs/batch-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(items),
     }),
   favoriteOutput: (path: string) =>
     fetchJson<{ favorited: boolean }>('/api/outputs/favorite', {
@@ -268,9 +447,31 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     }),
-  queueStatus: () => fetchJson<{ running: boolean; queue_length: number }>('/api/generate/queue'),
+  edit: (req: EditRequest) =>
+    fetch('/api/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+  upscale: (imagePath: string, scale = 4) =>
+    fetchJson<AnalysisResponse>('/api/analysis/upscale', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_path: imagePath, scale }),
+    }),
+  removeBg: (imagePath: string) =>
+    fetchJson<AnalysisResponse>('/api/analysis/remove-bg', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_path: imagePath }),
+    }),
+  queueStatus: () => fetchJson<QueueStatus>('/api/generate/queue'),
   clearQueue: () =>
     fetchJson<{ cleared: number }>('/api/generate/queue', { method: 'DELETE' }),
+  cancelQueueItem: (index: number) =>
+    fetchJson<{ cancelled: boolean; queue_length?: number }>(`/api/generate/queue/${index}`, {
+      method: 'DELETE',
+    }),
   enhance: (req: EnhanceRequest) =>
     fetchJson<EnhanceResponse>('/api/enhance', {
       method: 'POST',
@@ -319,6 +520,48 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
+  // Start new training run
+  startTraining: (req: StartTrainingRequest) =>
+    fetchJson<{ started: string }>('/api/runs/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+
+  // Training queue
+  trainingQueue: () => fetchJson<TrainingQueueItem[]>('/api/train/queue'),
+  addToTrainingQueue: (req: StartTrainingRequest) =>
+    fetchJson<{ id: number; name: string }>('/api/train/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+  removeFromTrainingQueue: (id: number) =>
+    fetch(`/api/train/queue/${id}`, { method: 'DELETE' }),
+  reorderTrainingQueue: (id: number, position: number) =>
+    fetch(`/api/train/queue/${id}/position`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position }),
+    }),
+
+  // LoRA Library
+  libraryLoras: () => fetchJson<LibraryLora[]>('/api/library/loras'),
+  promoteLora: (req: PromoteLoraRequest) =>
+    fetchJson<{ id: string }>('/api/library/loras', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+  updateLibraryLora: (id: string, req: { name: string; tags?: string; notes?: string }) =>
+    fetch(`/api/library/loras/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+  deleteLibraryLora: (id: string) =>
+    fetch(`/api/library/loras/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   // Studio
   studioSessions: () => fetchJson<StudioSession[]>('/api/studio/sessions'),
   studioSession: (id: string) =>
@@ -349,4 +592,5 @@ export const api = {
       `/api/studio/sessions/${encodeURIComponent(sessionId)}`,
       { method: 'DELETE' },
     ),
+
 }

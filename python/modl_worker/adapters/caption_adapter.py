@@ -73,7 +73,9 @@ def _caption_florence2(
     import torch
     from PIL import Image
 
-    image = Image.open(image_path).convert("RGB")
+    from modl_worker.image_util import load_image
+
+    image = load_image(image_path)
 
     # <CAPTION> gives shorter factual descriptions (good for style LoRAs)
     # <DETAILED_CAPTION> gives richer descriptions including style/medium
@@ -136,7 +138,9 @@ def _caption_blip(
     import torch
     from PIL import Image
 
-    image = Image.open(image_path).convert("RGB")
+    from modl_worker.image_util import load_image
+
+    image = load_image(image_path)
 
     if style_mode:
         # Prompt BLIP-2 to focus on content, not visual style

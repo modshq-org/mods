@@ -91,11 +91,7 @@ async fn tool_create_dataset(args: &serde_json::Value, session: &AgentSession) -
         .unwrap_or(&session.id);
 
     // Create the dataset directory
-    let datasets_dir = dirs::home_dir()
-        .context("Could not determine home directory")?
-        .join(".modl")
-        .join("datasets")
-        .join(name);
+    let datasets_dir = super::paths::modl_root().join("datasets").join(name);
 
     std::fs::create_dir_all(&datasets_dir)
         .with_context(|| format!("Failed to create dataset dir: {}", datasets_dir.display()))?;

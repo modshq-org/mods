@@ -24,10 +24,7 @@ pub struct DatasetInfo {
 
 /// Root directory for managed datasets
 fn datasets_root() -> PathBuf {
-    dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-        .join("datasets")
+    super::paths::modl_root().join("datasets")
 }
 
 /// Resolve a name or path to a dataset directory.

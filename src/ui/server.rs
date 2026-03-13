@@ -4,12 +4,13 @@ use axum::routing::{delete, get, post};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
-use super::routes::{datasets, files, generate, models, outputs, studio, training};
+use super::routes::{
+    analysis, civitai, datasets, files, generate, models, outputs, studio, training,
+};
 
 // ---------------------------------------------------------------------------
 // Shared state
@@ -26,18 +27,14 @@ pub struct UiState {
 /// Internal generation state protected by a Mutex.
 pub struct GenerateInner {
     pub running: bool,
-    pub queue: VecDeque<generate::GenerateRequest>,
+    pub queue: VecDeque<generate::QueuedJob>,
+    /// Summary of the currently-executing job (for queue panel display).
+    pub current_summary: Option<generate::QueuedJobSummary>,
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-pub fn modl_root() -> PathBuf {
-    dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-}
 
 /// Kill any existing process **listening** on the given port (best-effort).
 ///
@@ -77,9 +74,13 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         generate_inner: Arc::new(tokio::sync::Mutex::new(GenerateInner {
             running: false,
             queue: VecDeque::new(),
+            current_summary: None,
         })),
         studio_events: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
+
+    // Background task: auto-advance training queue
+    tokio::spawn(training_queue_loop());
 
     let app = Router::new()
         // Static / index
@@ -89,9 +90,13 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
         // Models & GPU
         .route("/api/gpu", get(models::api_gpu_status))
         .route("/api/models", get(models::api_list_models))
+        .route("/api/model-families", get(models::api_model_families))
         .route("/api/models/{id}", delete(models::api_delete_model))
         .route("/api/registry/search", get(models::api_search_registry))
         .route("/api/models/install", post(models::api_install_model))
+        // CivitAI LoRA browsing
+        .route("/api/civitai/loras", get(civitai::api_search_loras))
+        .route("/api/civitai/install", post(civitai::api_install_lora))
         // File upload (img2img init images, masks)
         .route("/api/upload", post(files::api_upload))
         // Generation
@@ -101,18 +106,46 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
             "/api/generate/queue",
             get(generate::api_queue_status).delete(generate::api_clear_queue),
         )
+        .route(
+            "/api/generate/queue/{index}",
+            delete(generate::api_cancel_queue_item),
+        )
         .route("/api/enhance", post(generate::api_enhance_prompt))
         // Training
         .route("/api/runs", get(training::api_list_runs))
         .route("/api/runs/{name}", get(training::api_get_run))
         .route("/api/runs/{name}/loss", get(training::api_loss_history))
         .route("/api/runs/resume", post(training::api_resume_training))
+        .route("/api/runs/start", post(training::api_start_training))
         .route("/api/runs/cancel", post(training::api_cancel_training))
         .route("/api/runs/delete", post(training::api_delete_run))
+        // Training queue
+        .route(
+            "/api/train/queue",
+            get(training::api_list_training_queue).post(training::api_add_to_training_queue),
+        )
+        .route(
+            "/api/train/queue/{id}",
+            delete(training::api_remove_from_training_queue),
+        )
+        .route(
+            "/api/train/queue/{id}/position",
+            axum::routing::put(training::api_reorder_training_queue),
+        )
         .route("/api/status", get(training::api_training_status))
         .route(
             "/api/status/{name}",
             get(training::api_training_status_single),
+        )
+        // LoRA Library
+        .route(
+            "/api/library/loras",
+            get(training::api_list_library_loras).post(training::api_promote_lora),
+        )
+        .route(
+            "/api/library/loras/{id}",
+            axum::routing::put(training::api_update_library_lora)
+                .delete(training::api_delete_library_lora),
         )
         // Datasets
         .route("/api/datasets", get(datasets::api_list_datasets))
@@ -122,7 +155,16 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
             "/api/outputs",
             get(outputs::api_list_outputs).delete(outputs::api_delete_output),
         )
+        .route(
+            "/api/outputs/batch-delete",
+            post(outputs::api_batch_delete_outputs),
+        )
         .route("/api/outputs/favorite", post(outputs::api_toggle_favorite))
+        // Edit (shares generate queue + SSE stream)
+        .route("/api/edit", post(generate::api_edit))
+        // Analysis (upscale, remove-bg)
+        .route("/api/analysis/upscale", post(analysis::api_upscale))
+        .route("/api/analysis/remove-bg", post(analysis::api_remove_bg))
         // Studio
         .route(
             "/api/studio/sessions",
@@ -163,4 +205,88 @@ pub async fn start(port: u16, open_browser: bool) -> Result<()> {
     axum::serve(listener, app).await.context("Server error")?;
 
     Ok(())
+}
+
+/// Background loop: every 30 seconds, check if any training is running.
+/// If not, pop the next item from the training queue and start it.
+async fn training_queue_loop() {
+    use crate::core::db::Database;
+    use crate::core::training_status;
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+
+        // Check if any training is currently running
+        let is_training = tokio::task::spawn_blocking(|| {
+            training_status::get_all_status(false)
+                .map(|runs| runs.iter().any(|r| r.is_running))
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(true); // Assume busy on error
+
+        if is_training {
+            continue;
+        }
+
+        // Pop next queue item and start it
+        let item = tokio::task::spawn_blocking(|| {
+            Database::open()
+                .ok()
+                .and_then(|db| db.pop_training_queue().ok().flatten())
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(item) = item {
+            let spec: serde_json::Value = serde_json::from_str(&item.spec_json).unwrap_or_default();
+
+            let modl_bin = std::env::current_exe().unwrap_or_else(|_| "modl".into());
+
+            let _ = tokio::task::spawn_blocking(move || {
+                let mut args = vec![
+                    "train".to_string(),
+                    "--dataset".to_string(),
+                    spec["dataset"].as_str().unwrap_or("").to_string(),
+                    "--base".to_string(),
+                    spec["base_model"].as_str().unwrap_or("").to_string(),
+                    "--name".to_string(),
+                    spec["name"].as_str().unwrap_or(&item.name).to_string(),
+                    "--trigger".to_string(),
+                    spec["trigger_word"].as_str().unwrap_or("OHWX").to_string(),
+                    "--lora-type".to_string(),
+                    spec["lora_type"]
+                        .as_str()
+                        .unwrap_or("character")
+                        .to_string(),
+                ];
+
+                if let Some(preset) = spec["preset"].as_str() {
+                    args.push("--preset".to_string());
+                    args.push(preset.to_string());
+                }
+                if let Some(steps) = spec["steps"].as_u64() {
+                    args.push("--steps".to_string());
+                    args.push(steps.to_string());
+                }
+                if let Some(rank) = spec["rank"].as_u64() {
+                    args.push("--rank".to_string());
+                    args.push(rank.to_string());
+                }
+                if let Some(lr) = spec["lr"].as_f64() {
+                    args.push("--lr".to_string());
+                    args.push(lr.to_string());
+                }
+
+                let _ = std::process::Command::new(&modl_bin)
+                    .args(&args)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            })
+            .await;
+        }
+    }
 }

@@ -1,4 +1,4 @@
-import { Camera, Database, HardDrive, Images, Menu, Sparkles, X, Zap } from 'lucide-react'
+import { Menu, X } from 'lucide-react'
 
 function ModlLogo({ size = 24 }: { size?: number }) {
   return (
@@ -11,16 +11,7 @@ function ModlLogo({ size = 24 }: { size?: number }) {
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import type { Tab } from '../App'
-import { AppSidebar } from './AppSidebar'
-
-const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: 'studio', label: 'Studio', icon: Camera },
-  { id: 'generate', label: 'Generate', icon: Sparkles },
-  { id: 'outputs', label: 'Outputs', icon: Images },
-  { id: 'datasets', label: 'Datasets', icon: Database },
-  { id: 'train', label: 'Train', icon: Zap },
-  { id: 'models', label: 'Models', icon: HardDrive },
-]
+import { AppSidebar, NAV_ITEMS } from './AppSidebar'
 
 type Props = {
   activeTab: Tab
@@ -99,7 +90,7 @@ export function MobileNav({ activeTab, onTabChange }: Props) {
                 isActive ? 'text-primary' : 'text-muted-foreground',
               )}
             >
-              <Icon className="h-4.5 w-4.5" strokeWidth={isActive ? 2.5 : 2} />
+              <Icon className="size-[18px]" strokeWidth={isActive ? 2.5 : 2} />
               {label}
             </button>
           )

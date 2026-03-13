@@ -2,15 +2,11 @@ import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog'
 import { Download, Loader2, Search, X } from 'lucide-react'
 import { api, type InstalledModel, type FeatureDep, type SearchResult } from '../api'
+import { formatBytes } from '@/lib/utils'
+import { STALE_FAST, STALE_MODERATE } from '@/lib/query-keys'
 
 type TypeGroup = {
   type: string
@@ -45,17 +41,6 @@ const TYPE_LABELS: Record<string, string> = {
   llm: 'LLMs',
 }
 
-function formatSize(bytes: number | null | undefined): string {
-  if (!bytes || bytes <= 0) return '—'
-  if (bytes >= 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
-  }
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(0)} MB`
-  }
-  return `${(bytes / 1024).toFixed(0)} KB`
-}
-
 function sourceLabel(id: string): string {
   if (id.startsWith('train:')) return 'Trained'
   if (id.startsWith('hf:')) return 'HuggingFace'
@@ -82,14 +67,14 @@ export function ModelsView() {
   const { data: response, isLoading } = useQuery({
     queryKey: ['models'],
     queryFn: api.models,
-    staleTime: 30_000,
+    staleTime: STALE_FAST,
   })
 
   const { data: searchResults = [], isFetching: searching } = useQuery({
     queryKey: ['registry-search', searchQuery],
     queryFn: () => api.searchRegistry(searchQuery),
     enabled: searchQuery.length >= 2,
-    staleTime: 60_000,
+    staleTime: STALE_MODERATE,
   })
 
   const models = response?.models ?? []
@@ -206,7 +191,7 @@ export function ModelsView() {
                     </div>
                     <div className="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
                       {r.author && <span>{r.author}</span>}
-                      <span className="font-mono">{formatSize(r.size_bytes)}</span>
+                      <span className="font-mono">{formatBytes(r.size_bytes)}</span>
                       {r.variants.length > 1 && (
                         <span>{r.variants.length} variants</span>
                       )}
@@ -254,7 +239,7 @@ export function ModelsView() {
               {models.length} models installed
             </p>
             <p className="text-xs text-muted-foreground">
-              {formatSize(totalSize)} total on disk
+              {formatBytes(totalSize)} total on disk
             </p>
           </div>
           <div className="ml-auto flex flex-wrap gap-2">
@@ -301,7 +286,7 @@ export function ModelsView() {
                 {group.label}
               </h3>
               <span className="text-xs text-muted-foreground/60">
-                {formatSize(group.totalSize)}
+                {formatBytes(group.totalSize)}
               </span>
             </div>
 
@@ -330,7 +315,7 @@ export function ModelsView() {
                       </Badge>
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                      <span className="font-mono">{formatSize(m.size_bytes)}</span>
+                      <span className="font-mono">{formatBytes(m.size_bytes)}</span>
                       <span className="truncate opacity-60" title={m.id}>{m.id}</span>
                       {m.trigger_word && (
                         <span>
@@ -405,48 +390,30 @@ export function ModelsView() {
       </div>
 
       {/* Delete confirmation */}
-      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <DialogContent className="sm:max-w-md">
-          {deleteTarget && (
-            <>
-              <DialogHeader>
-                <DialogTitle>Remove {deleteTarget.name}?</DialogTitle>
-                <DialogDescription>
-                  This will uninstall the model and remove its symlinks.
-                  {deleteTarget.model_type !== 'lora' && (
-                    <> The store file is kept until you run <code>modl gc</code>.</>
-                  )}
-                  {deleteTarget.model_type === 'lora' && deleteTarget.id.startsWith('train:') && (
-                    <> This will also delete training output (samples, logs, config).</>
-                  )}
-                </DialogDescription>
-              </DialogHeader>
-
-              {hasDependents(deleteTarget) && (
-                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-300">
-                  Warning: this model is required by{' '}
-                  <strong>{deleteTarget.depended_on_by!.join(', ')}</strong>.
-                  Removing it may break those models.
-                </div>
-              )}
-
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(null)}>
-                  Cancel
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  disabled={deleting}
-                  onClick={() => void handleDelete()}
-                >
-                  {deleting ? 'Removing...' : 'Remove'}
-                </Button>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      <DeleteConfirmDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Remove ${deleteTarget?.name}?`}
+        description={
+          <>
+            This will uninstall the model and remove its symlinks.
+            {deleteTarget?.model_type !== 'lora' && (
+              <> The store file is kept until you run <code>modl gc</code>.</>
+            )}
+            {deleteTarget?.model_type === 'lora' && deleteTarget?.id.startsWith('train:') && (
+              <> This will also delete training output (samples, logs, config).</>
+            )}
+          </>
+        }
+        warning={
+          deleteTarget && deleteTarget.depended_on_by && deleteTarget.depended_on_by.length > 0
+            ? <>Warning: this model is required by <strong>{deleteTarget.depended_on_by.join(', ')}</strong>. Removing it may break those models.</>
+            : undefined
+        }
+        loading={deleting}
+        onConfirm={() => void handleDelete()}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </>
   )
 }

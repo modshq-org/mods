@@ -5,7 +5,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 
 use crate::core::dataset;
-use crate::core::job::{CaptionJobSpec, ResizeJobSpec, TagJobSpec};
+use crate::core::job::{CaptionJobSpec, FaceCropJobSpec, ResizeJobSpec, TagJobSpec};
 use crate::core::registry::RegistryIndex;
 
 #[derive(clap::Subcommand)]
@@ -66,6 +66,23 @@ pub enum DatasetCommands {
         #[arg(long)]
         style: bool,
     },
+    /// Detect faces and create close-up crops for character LoRA training
+    FaceCrop {
+        /// Dataset name or path
+        name_or_path: String,
+        /// Trigger word used in captions
+        #[arg(long, default_value = "")]
+        trigger: String,
+        /// Class word (e.g. "man", "woman", "dog")
+        #[arg(long, default_value = "")]
+        class_word: String,
+        /// Bbox expansion multiplier (1.0=tight face, 1.8=head+shoulders, 2.5=upper body)
+        #[arg(long, default_value = "1.8")]
+        padding: f32,
+        /// Target resolution for crops
+        #[arg(long, default_value = "1024")]
+        resolution: u32,
+    },
     /// Full pipeline: create → resize → tag/caption
     Prepare {
         /// Name for the dataset
@@ -113,6 +130,13 @@ pub async fn run(command: DatasetCommands) -> Result<()> {
             overwrite,
             style,
         } => run_caption(&name_or_path, &model, overwrite, style).await,
+        DatasetCommands::FaceCrop {
+            name_or_path,
+            trigger,
+            class_word,
+            padding,
+            resolution,
+        } => run_face_crop(&name_or_path, &trigger, &class_word, padding, resolution).await,
         DatasetCommands::Prepare {
             name,
             from,
@@ -427,10 +451,7 @@ async fn spawn_dataset_worker(
     use crate::core::runtime;
     use crate::core::training::resolve_worker_python_root;
 
-    let runtime_root = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-        .join("runtime");
+    let runtime_root = crate::core::paths::modl_root().join("runtime");
     let jobs_dir = runtime_root.join("jobs");
     std::fs::create_dir_all(&jobs_dir)
         .with_context(|| format!("Failed to create jobs dir: {}", jobs_dir.display()))?;
@@ -680,6 +701,76 @@ async fn run_tag(name_or_path: &str, model: &str, overwrite: bool) -> Result<()>
 
     if !result.success {
         anyhow::bail!("Tag worker exited with errors");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Face crop
+// ---------------------------------------------------------------------------
+
+async fn run_face_crop(
+    name_or_path: &str,
+    trigger: &str,
+    class_word: &str,
+    padding: f32,
+    resolution: u32,
+) -> Result<()> {
+    let path = resolve_dataset_path(name_or_path);
+
+    let info = dataset::validate(&path)
+        .with_context(|| format!("Could not load dataset '{name_or_path}'"))?;
+
+    println!(
+        "{} Detecting faces and creating crops in '{}' ({} images, {:.1}x padding, {}px)",
+        style("→").cyan(),
+        style(&info.name).bold(),
+        info.image_count,
+        padding,
+        resolution,
+    );
+
+    let spec = FaceCropJobSpec {
+        dataset_path: path.to_string_lossy().to_string(),
+        resolution,
+        padding,
+        trigger_word: trigger.to_string(),
+        class_word: class_word.to_string(),
+    };
+    let yaml = serde_yaml::to_string(&spec).context("Failed to serialize face-crop spec")?;
+
+    let result =
+        spawn_dataset_worker("face-crop", &yaml, info.image_count, "cropping faces...").await?;
+
+    if !result.output_lines.is_empty() {
+        println!("\n{}", style("Created crops:").bold().underlined());
+        for (filename, detail) in &result.output_lines {
+            println!("  {} {}", style(format!("{filename}:")).cyan(), detail);
+        }
+    }
+
+    // Delete latent cache since dataset changed
+    let cache_dir = path.join("_latent_cache");
+    if cache_dir.exists() {
+        let count = std::fs::read_dir(&cache_dir)
+            .map(|rd| rd.count())
+            .unwrap_or(0);
+        std::fs::remove_dir_all(&cache_dir).ok();
+        println!(
+            "{} Cleared latent cache ({} files) — will be rebuilt on next training run",
+            style("ℹ").dim(),
+            count,
+        );
+    }
+
+    if let Ok(updated) = dataset::scan(&path) {
+        println!();
+        print_dataset_summary(&updated);
+    }
+
+    if !result.success {
+        anyhow::bail!("Face crop worker exited with errors");
     }
 
     Ok(())

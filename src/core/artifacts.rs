@@ -120,10 +120,7 @@ fn create_lora_symlinks(
     let mut links = Vec::new();
 
     // Symlink with friendly name in the modl loras dir
-    let modl_lora_dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-        .join("loras");
+    let modl_lora_dir = super::paths::modl_root().join("loras");
 
     if let Err(e) = std::fs::create_dir_all(&modl_lora_dir) {
         eprintln!(

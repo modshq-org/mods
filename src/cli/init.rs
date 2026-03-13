@@ -1,13 +1,61 @@
 use anyhow::{Context, Result};
 use console::style;
 use dialoguer::{Confirm, MultiSelect, Select};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::compat::{check_windows_dev_mode, detect_tools};
 use crate::core::config::{Config, GpuOverride, StorageConfig, TargetConfig, ToolType};
 use crate::core::gpu;
 
-pub async fn run() -> Result<()> {
+/// Starter models offered during interactive setup.
+/// Hardcoded top picks — sorted by VRAM fit at display time.
+struct StarterModel {
+    id: &'static str,
+    label: &'static str,
+    description: &'static str,
+    /// Approximate total download size in bytes (model + dependencies)
+    size_bytes: u64,
+    /// Minimum VRAM in MB to run this model
+    vram_min: u64,
+}
+
+const STARTER_MODELS: &[StarterModel] = &[
+    StarterModel {
+        id: "flux-schnell",
+        label: "flux-schnell",
+        description: "4-step, fastest",
+        size_bytes: 4_600_000_000,
+        vram_min: 8_000,
+    },
+    StarterModel {
+        id: "flux-dev",
+        label: "flux-dev",
+        description: "28-step, highest quality",
+        size_bytes: 12_000_000_000,
+        vram_min: 12_000,
+    },
+    StarterModel {
+        id: "z-image-turbo",
+        label: "z-image-turbo",
+        description: "1-step, real-time",
+        size_bytes: 8_500_000_000,
+        vram_min: 12_000,
+    },
+    StarterModel {
+        id: "sdxl-base-1.0",
+        label: "sdxl",
+        description: "Classic, wide LoRA ecosystem",
+        size_bytes: 6_500_000_000,
+        vram_min: 8_000,
+    },
+];
+
+fn format_size(bytes: u64) -> String {
+    let gb = bytes as f64 / 1_000_000_000.0;
+    format!("{:.1} GB", gb)
+}
+
+pub async fn run(defaults: bool, root_override: Option<&str>) -> Result<()> {
     println!(
         "{}",
         style("modl init — setting up your environment")
@@ -16,52 +64,27 @@ pub async fn run() -> Result<()> {
     );
     println!();
 
-    // Check if config already exists
-    let config_path = Config::default_path();
-    if config_path.exists() {
-        let overwrite = Confirm::new()
-            .with_prompt("Config already exists at ~/.modl/config.yaml. Overwrite?")
-            .default(false)
-            .interact()?;
-        if !overwrite {
-            println!("Keeping existing config.");
-            return Ok(());
-        }
-    }
-
-    // 1. Storage root
+    // Determine storage root
     let default_root = dirs::home_dir()
         .expect("Could not determine home directory")
         .join("modl");
-    let root_display = default_root.display().to_string();
 
-    println!("{} Where should modl store model files?", style("→").cyan());
-    println!("  Default: {}", style(&root_display).dim());
-
-    let use_default = Confirm::new()
-        .with_prompt(format!("Use {}?", root_display))
-        .default(true)
-        .interact()?;
-
-    let storage_root = if use_default {
-        default_root
+    let storage_root = if let Some(r) = root_override {
+        PathBuf::from(shellexpand::tilde(r).to_string())
+    } else if defaults {
+        default_root.clone()
     } else {
-        let custom: String = dialoguer::Input::new()
-            .with_prompt("Storage path")
-            .interact_text()?;
-        PathBuf::from(shellexpand::tilde(&custom).to_string())
+        pick_storage_root(&default_root)?
     };
 
-    // Create store directory
     std::fs::create_dir_all(&storage_root).context("Failed to create storage directory")?;
-
     println!(
         "  {} Storage: {}",
         style("✓").green(),
         storage_root.display()
     );
 
-    // Windows: check Developer Mode for symlink support
+    // Windows Developer Mode check
     if let Some(dev_mode_enabled) = check_windows_dev_mode() {
         if !dev_mode_enabled {
             println!();
@@ -87,7 +110,112 @@ pub async fn run() -> Result<()> {
         }
     }
 
-    // 2. Detect tools
+    // Tool detection (skip in defaults mode)
+    let targets = if defaults {
+        Vec::new()
+    } else {
+        detect_tool_targets()?
+    };
+
+    // GPU detection
+    println!();
+    println!("{} Detecting GPU...", style("→").cyan());
+    let gpu_info = gpu::detect();
+    let gpu_override = match &gpu_info {
+        Some(info) => {
+            println!(
+                "  {} {} — {} MB VRAM",
+                style("✓").green(),
+                info.name,
+                info.vram_mb
+            );
+            Some(GpuOverride {
+                vram_mb: info.vram_mb,
+            })
+        }
+        None => {
+            println!(
+                "  {} No NVIDIA GPU detected. Variant auto-selection will default to smallest.",
+                style("!").yellow()
+            );
+            None
+        }
+    };
+
+    // Save config
+    let config = Config {
+        storage: StorageConfig {
+            root: storage_root.clone(),
+        },
+        targets,
+        gpu: gpu_override,
+        cloud: None,
+    };
+    config.save().context("Failed to save config")?;
+
+    println!();
+    println!(
+        "{} Config saved to {}",
+        style("✓").green().bold(),
+        Config::default_path().display()
+    );
+
+    // Model download offer
+    if !defaults {
+        offer_starter_model(&gpu_info).await?;
+    }
+
+    // Service install offer
+    if !defaults {
+        offer_service_install().await?;
+    }
+
+    println!();
+    println!("Next steps:");
+    println!("  {} Fetch the model registry", style("modl update").cyan());
+    println!(
+        "  {} Install a model",
+        style("modl pull flux-schnell").cyan()
+    );
+    println!("  {} Launch the web UI", style("modl serve").cyan());
+
+    Ok(())
+}
+
+fn pick_storage_root(default_root: &Path) -> Result<PathBuf> {
+    // Check if config already exists
+    let config_path = Config::default_path();
+    if config_path.exists() {
+        let overwrite = Confirm::new()
+            .with_prompt("Config already exists at ~/.modl/config.yaml. Overwrite?")
+            .default(false)
+            .interact()?;
+        if !overwrite {
+            println!("Keeping existing config.");
+            std::process::exit(0);
+        }
+    }
+
+    let root_display = default_root.display().to_string();
+    println!("{} Where should modl store model files?", style("→").cyan());
+    println!("  Default: {}", style(&root_display).dim());
+
+    let use_default = Confirm::new()
+        .with_prompt(format!("Use {}?", root_display))
+        .default(true)
+        .interact()?;
+
+    if use_default {
+        Ok(default_root.to_path_buf())
+    } else {
+        let custom: String = dialoguer::Input::new()
+            .with_prompt("Storage path")
+            .interact_text()?;
+        Ok(PathBuf::from(shellexpand::tilde(&custom).to_string()))
+    }
+}
+
+fn detect_tool_targets() -> Result<Vec<TargetConfig>> {
     println!();
     println!(
         "{} Scanning for AI image generation tools...",
@@ -169,54 +297,124 @@ pub async fn run() -> Result<()> {
         });
     }
 
-    // 3. GPU detection
-    println!();
-    println!("{} Detecting GPU...", style("→").cyan());
+    Ok(targets)
+}
 
-    let gpu_override = match gpu::detect() {
-        Some(info) => {
+async fn offer_starter_model(gpu_info: &Option<gpu::GpuInfo>) -> Result<()> {
+    println!();
+    let download = Confirm::new()
+        .with_prompt("Would you like to download a starter model?")
+        .default(true)
+        .interact()?;
+
+    if !download {
+        return Ok(());
+    }
+
+    let vram_mb = gpu_info.as_ref().map(|g| g.vram_mb).unwrap_or(0);
+
+    // Build menu items, marking which fit the GPU
+    let mut items: Vec<String> = Vec::new();
+    let mut recommended_idx: Option<usize> = None;
+
+    for model in STARTER_MODELS {
+        let fits = vram_mb == 0 || vram_mb >= model.vram_min;
+        let size = format_size(model.size_bytes);
+        let mut label = format!("{:<18} {} ({})", model.label, model.description, size);
+        if fits && recommended_idx.is_none() && vram_mb > 0 {
+            label.push_str("  ← recommended for your GPU");
+            recommended_idx = Some(items.len());
+        } else if !fits {
+            label.push_str("  (may not fit your VRAM)");
+        }
+        items.push(label);
+    }
+    items.push("Skip".to_string());
+
+    let default_idx = recommended_idx.unwrap_or(0);
+    let selected = Select::new()
+        .with_prompt("Select a model")
+        .items(&items)
+        .default(default_idx)
+        .interact()?;
+
+    if selected >= STARTER_MODELS.len() {
+        // User chose "Skip"
+        return Ok(());
+    }
+
+    let model_id = STARTER_MODELS[selected].id;
+    println!();
+    println!(
+        "{} Downloading {}...",
+        style("→").cyan(),
+        style(model_id).bold()
+    );
+
+    // Ensure registry is available
+    let index = crate::core::registry::RegistryIndex::load_or_fetch().await?;
+    let db = crate::core::db::Database::open()?;
+    let config = Config::load()?;
+    let store = crate::core::store::Store::new(config.store_root());
+    let auth_store = crate::auth::AuthStore::load().unwrap_or_default();
+
+    let (plan, vram) = crate::core::install::resolve_plan(model_id, None, &index, &db)?;
+
+    for item in &plan.items {
+        if item.already_installed {
             println!(
-                "  {} {} — {} MB VRAM",
+                "  {} {} already installed",
                 style("✓").green(),
-                info.name,
-                info.vram_mb
+                item.manifest.name
             );
-            Some(GpuOverride {
-                vram_mb: info.vram_mb,
-            })
+            continue;
         }
-        None => {
-            println!(
-                "  {} No NVIDIA GPU detected. Variant auto-selection will default to smallest.",
-                style("!").yellow()
-            );
-            None
-        }
-    };
 
-    // 4. Write config
-    let config = Config {
-        storage: StorageConfig { root: storage_root },
-        targets,
-        gpu: gpu_override,
-        cloud: None,
-    };
+        let effective_variant = item.variant_id.as_deref();
+        let info = crate::core::install::resolve_file_info(&item.manifest, effective_variant, vram);
 
-    config.save().context("Failed to save config")?;
+        println!(
+            "  {} {} ({})",
+            style("↓").cyan(),
+            item.manifest.name,
+            format_size(info.size)
+        );
 
-    println!();
+        crate::core::install::install_item(
+            &item.manifest,
+            effective_variant,
+            vram,
+            &config,
+            &store,
+            &auth_store,
+            &db,
+            false,
+        )
+        .await?;
+
+        println!("  {} {}", style("✓").green(), item.manifest.name);
+    }
+
     println!(
-        "{} Config saved to {}",
+        "\n  {} {} is ready to use!",
         style("✓").green().bold(),
-        Config::default_path().display()
-    );
-    println!();
-    println!("Next steps:");
-    println!("  {} Fetch the model registry", style("modl update").cyan());
-    println!(
-        "  {} Install your first model",
-        style("modl install flux-dev").cyan()
+        model_id
     );
 
+    Ok(())
+}
+
+async fn offer_service_install() -> Result<()> {
+    println!();
+    let install = Confirm::new()
+        .with_prompt("Install the web UI as a background service? (starts on boot)")
+        .default(false)
+        .interact()?;
+
+    if !install {
+        return Ok(());
+    }
+
+    super::serve::install_service(3333).await?;
     Ok(())
 }

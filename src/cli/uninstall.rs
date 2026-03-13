@@ -98,10 +98,7 @@ fn remove_trained_artifact(
     );
 
     // Remove the LoRA symlink from ~/.modl/loras/
-    let loras_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".modl")
-        .join("loras");
+    let loras_dir = crate::core::paths::modl_root().join("loras");
     let symlink_path = loras_dir.join(format!("{}.safetensors", lora_name));
     if symlink_path.is_symlink() {
         std::fs::remove_file(&symlink_path).ok();
@@ -129,9 +126,7 @@ fn remove_trained_artifact(
     }
 
     // Remove training output directory (samples, logs, config)
-    let training_output_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".modl")
+    let training_output_dir = crate::core::paths::modl_root()
         .join("training_output")
         .join(lora_name);
     if training_output_dir.is_dir() {

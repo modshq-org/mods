@@ -1,4 +1,6 @@
-import { Camera, ChevronsLeft, ChevronsRight, Database, HardDrive, Images, Sparkles, Zap } from 'lucide-react'
+import { BookMarked, ChevronsLeft, ChevronsRight, Database, HardDrive, Images, ListIcon, Sparkles, Zap } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { STALE_REALTIME } from '@/lib/query-keys'
 
 function ModlLogo({ size = 28 }: { size?: number }) {
   return (
@@ -10,15 +12,16 @@ function ModlLogo({ size = 28 }: { size?: number }) {
 }
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
-import { api } from '../api'
+import { api, type QueueStatus } from '../api'
+import { useGpuStatus } from '../hooks/useGpuStatus'
 import type { Tab } from '../App'
 
-const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: 'studio', label: 'Studio', icon: Camera },
+export const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'generate', label: 'Generate', icon: Sparkles },
   { id: 'outputs', label: 'Outputs', icon: Images },
   { id: 'datasets', label: 'Datasets', icon: Database },
   { id: 'train', label: 'Train', icon: Zap },
+  { id: 'library', label: 'Library', icon: BookMarked },
   { id: 'models', label: 'Models', icon: HardDrive },
 ]
 
@@ -30,12 +33,7 @@ type Props = {
 }
 
 export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse }: Props) {
-  const { data: gpu } = useQuery({
-    queryKey: ['gpu'],
-    queryFn: api.gpu,
-    refetchInterval: 5000,
-    staleTime: 4_000,
-  })
+  const { data: gpu } = useGpuStatus()
 
   const { data: status = [] } = useQuery({
     queryKey: ['status'],
@@ -43,8 +41,16 @@ export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse
     refetchInterval: 2000,
   })
 
+  const { data: queueStatus } = useQuery<QueueStatus>({
+    queryKey: ['generate-queue'],
+    queryFn: api.queueStatus,
+    refetchInterval: 2000,
+    staleTime: STALE_REALTIME,
+  })
+
   const activeRun = status.find((r) => r.is_running)
   const vramGB = gpu?.vram_free_mb != null ? (gpu.vram_free_mb / 1024).toFixed(1) : null
+  const queueJobCount = (queueStatus?.running ? 1 : 0) + (queueStatus?.queue?.length ?? 0)
 
   return (
     <aside
@@ -91,13 +97,12 @@ export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse
         )}
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
           const isActive = activeTab === id
-          return (
+          const btn = (
             <button
               key={id}
               onClick={() => onTabChange(id)}
-              title={collapsed ? label : undefined}
               className={cn(
-                'flex w-full items-center rounded-md text-sm font-medium transition-colors',
+                'relative flex w-full items-center rounded-md text-sm font-medium transition-colors',
                 collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2',
                 isActive
                   ? 'bg-primary/12 text-primary'
@@ -113,45 +118,103 @@ export function AppSidebar({ activeTab, onTabChange, collapsed, onToggleCollapse
                 <span className="ml-auto flex h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
               )}
               {collapsed && id === 'train' && activeRun && (
-                <span className="absolute right-1.5 top-1.5 flex h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+                <span className="absolute right-0.5 top-0.5 flex h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
               )}
             </button>
           )
+          if (collapsed) {
+            return (
+              <Tooltip key={id}>
+                <TooltipTrigger asChild>{btn}</TooltipTrigger>
+                <TooltipContent side="right" sideOffset={8}>{label}</TooltipContent>
+              </Tooltip>
+            )
+          }
+          return btn
         })}
       </nav>
 
+      {/* Queue pill — always visible when jobs are active */}
+      {queueJobCount > 0 && (
+        <div className="border-t border-border/40 px-2 py-2">
+          {collapsed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => onTabChange('generate')}
+                  className="flex w-full items-center justify-center rounded-md py-2 transition-colors hover:bg-accent"
+                >
+                  <div className="relative">
+                    <ListIcon className="h-4 w-4 text-primary" />
+                    <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-primary text-[8px] font-bold text-primary-foreground">
+                      {queueJobCount}
+                    </span>
+                    <span className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+                  </div>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8}>{queueJobCount} in queue</TooltipContent>
+            </Tooltip>
+          ) : (
+            <button
+              onClick={() => onTabChange('generate')}
+              className="flex w-full items-center gap-3 rounded-md px-3 py-2 transition-colors hover:bg-accent"
+            >
+              <div className="relative">
+                <ListIcon className="h-4 w-4 text-primary" />
+                <span className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+              </div>
+              <span className="text-xs font-medium text-primary">{queueJobCount}</span>
+              <span className="text-xs text-muted-foreground">in queue</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Collapse toggle */}
       <div className="border-t border-border/40 px-2 py-2">
-        <button
-          onClick={onToggleCollapse}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className={cn(
-            'flex w-full items-center rounded-md py-2 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground',
-            collapsed ? 'justify-center px-0' : 'gap-3 px-3',
-          )}
-        >
-          {collapsed ? (
-            <ChevronsRight className="h-4 w-4" />
-          ) : (
-            <>
-              <ChevronsLeft className="h-4 w-4" />
-              <span className="text-xs">Collapse</span>
-            </>
-          )}
-        </button>
+        {collapsed ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={onToggleCollapse}
+                className="flex w-full items-center justify-center rounded-md py-2 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <ChevronsRight className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>Expand</TooltipContent>
+          </Tooltip>
+        ) : (
+          <button
+            onClick={onToggleCollapse}
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ChevronsLeft className="h-4 w-4" />
+            <span className="text-xs">Collapse</span>
+          </button>
+        )}
       </div>
 
       {/* GPU status footer */}
       <div className="border-t border-border px-2 py-3">
         {collapsed ? (
-          <div className="flex justify-center" title={gpu?.training_active ? 'Training active' : `GPU idle${vramGB ? ` • ${vramGB} GB free` : ''}`}>
-            <span
-              className={cn(
-                'h-2 w-2 shrink-0 rounded-full',
-                gpu?.training_active ? 'animate-pulse bg-amber-400' : 'bg-emerald-500',
-              )}
-            />
-          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex justify-center">
+                <span
+                  className={cn(
+                    'h-2 w-2 shrink-0 rounded-full',
+                    gpu?.training_active ? 'animate-pulse bg-amber-400' : 'bg-emerald-500',
+                  )}
+                />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>
+              {gpu?.training_active ? 'Training active' : 'GPU idle'}
+              {vramGB && ` • ${vramGB} GB free`}
+            </TooltipContent>
+          </Tooltip>
         ) : gpu?.training_active ? (
           <div className="flex items-center gap-2 px-2 text-xs text-amber-300">
             <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-400" />

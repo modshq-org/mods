@@ -134,11 +134,7 @@ pub struct LocalLlmBackend {
 impl LocalLlmBackend {
     /// Load a GGUF model from the store. Keeps it resident for reuse.
     pub fn load(model_id: &str, prefer_gpu: bool) -> Result<Self> {
-        let store_dir = dirs::home_dir()
-            .context("Could not determine home directory")?
-            .join(".modl")
-            .join("store")
-            .join("llm");
+        let store_dir = super::paths::modl_root().join("store").join("llm");
 
         // Look for the model in the store
         let model_path = find_model_in_store(&store_dir, model_id)?;
@@ -246,10 +242,7 @@ pub struct CloudLlmBackend {
 impl CloudLlmBackend {
     /// Create from ~/.modl/auth.yaml cloud config.
     pub fn from_config() -> Result<Self> {
-        let auth_path = dirs::home_dir()
-            .context("Could not determine home directory")?
-            .join(".modl")
-            .join("auth.yaml");
+        let auth_path = super::paths::modl_root().join("auth.yaml");
 
         if !auth_path.exists() {
             bail!(

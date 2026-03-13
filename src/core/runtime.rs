@@ -319,8 +319,7 @@ pub fn reset(purge_cache: bool) -> Result<()> {
 }
 
 fn runtime_root() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-    Ok(home.join(".modl").join("runtime"))
+    Ok(crate::core::paths::modl_root().join("runtime"))
 }
 
 fn ensure_layout(root: &Path) -> Result<()> {

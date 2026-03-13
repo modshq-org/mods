@@ -1,0 +1,197 @@
+mod artifacts;
+mod favorites;
+mod jobs;
+mod lora_library;
+mod models;
+mod sessions;
+mod training_queue;
+
+pub use artifacts::ArtifactRecord;
+pub use jobs::JobRecord;
+pub use lora_library::LibraryLoraRecord;
+pub use models::InstalledModelRecord;
+
+use anyhow::{Context, Result};
+use rusqlite::Connection;
+use std::path::PathBuf;
+
+/// Local database for tracking installed models
+pub struct Database {
+    conn: Connection,
+}
+
+impl Database {
+    /// Open (or create) the database at ~/.modl/state.db
+    pub fn open() -> Result<Self> {
+        let path = Self::default_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).context("Failed to create database directory")?;
+        }
+        let conn = Connection::open(&path).context("Failed to open database")?;
+        let db = Self { conn };
+        db.migrate()?;
+        Ok(db)
+    }
+
+    #[allow(dead_code)]
+    pub fn open_at(path: &std::path::Path) -> Result<Self> {
+        let conn = Connection::open(path).context("Failed to open database")?;
+        let db = Self { conn };
+        db.migrate()?;
+        Ok(db)
+    }
+
+    fn default_path() -> PathBuf {
+        super::paths::modl_root().join("state.db")
+    }
+
+    fn migrate(&self) -> Result<()> {
+        self.conn
+            .execute_batch(
+                "
+            CREATE TABLE IF NOT EXISTS installed (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                asset_type  TEXT NOT NULL,
+                variant     TEXT,
+                sha256      TEXT NOT NULL,
+                size        INTEGER NOT NULL,
+                file_name   TEXT NOT NULL,
+                store_path  TEXT NOT NULL,
+                installed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS symlinks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id    TEXT NOT NULL REFERENCES installed(id),
+                link_path   TEXT NOT NULL,
+                target_path TEXT NOT NULL,
+                UNIQUE(link_path)
+            );
+
+            CREATE TABLE IF NOT EXISTS dependencies (
+                parent_id   TEXT NOT NULL REFERENCES installed(id),
+                child_id    TEXT NOT NULL REFERENCES installed(id),
+                PRIMARY KEY (parent_id, child_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_id       TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL DEFAULT 'train',
+                status       TEXT NOT NULL DEFAULT 'queued',
+                spec_json    TEXT NOT NULL,
+                target       TEXT NOT NULL DEFAULT 'local',
+                provider     TEXT,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                started_at   TEXT,
+                completed_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS job_events (
+                job_id    TEXT NOT NULL REFERENCES jobs(job_id),
+                sequence  INTEGER NOT NULL,
+                event_json TEXT NOT NULL,
+                timestamp  TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(job_id, sequence)
+            );
+
+            CREATE TABLE IF NOT EXISTS artifacts (
+                artifact_id TEXT PRIMARY KEY,
+                job_id      TEXT REFERENCES jobs(job_id),
+                kind        TEXT NOT NULL,
+                path        TEXT NOT NULL,
+                sha256      TEXT NOT NULL,
+                size_bytes  INTEGER NOT NULL,
+                metadata    TEXT,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS favorites (
+                path       TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS studio_sessions (
+                id           TEXT PRIMARY KEY,
+                intent       TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS session_events (
+                session_id TEXT NOT NULL REFERENCES studio_sessions(id),
+                sequence   INTEGER NOT NULL,
+                event_json TEXT NOT NULL,
+                timestamp  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS session_images (
+                session_id TEXT NOT NULL REFERENCES studio_sessions(id),
+                image_path TEXT NOT NULL,
+                role       TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS lora_library (
+                id            TEXT PRIMARY KEY,
+                name          TEXT NOT NULL,
+                trigger_word  TEXT,
+                base_model    TEXT,
+                lora_path     TEXT NOT NULL,
+                thumbnail     TEXT,
+                step          INTEGER,
+                training_run  TEXT,
+                config_json   TEXT,
+                tags          TEXT,
+                notes         TEXT,
+                size_bytes    INTEGER NOT NULL DEFAULT 0,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS training_queue (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                position   INTEGER NOT NULL,
+                name       TEXT NOT NULL,
+                spec_json  TEXT NOT NULL,
+                status     TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            ",
+            )
+            .context("Failed to run database migrations")?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_database_roundtrip() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let db = Database::open_at(tmp.path()).unwrap();
+
+        db.insert_installed(&InstalledModelRecord {
+            id: "test-model",
+            name: "Test Model",
+            asset_type: "checkpoint",
+            variant: Some("fp16"),
+            sha256: "abcdef1234567890",
+            size: 1024,
+            file_name: "test.safetensors",
+            store_path: "/store/checkpoints/abcdef/test.safetensors",
+        })
+        .unwrap();
+
+        assert!(db.is_installed("test-model").unwrap());
+        assert!(!db.is_installed("nonexistent").unwrap());
+
+        let models = db.list_installed(None).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "test-model");
+
+        db.remove_installed("test-model").unwrap();
+        assert!(!db.is_installed("test-model").unwrap());
+    }
+}

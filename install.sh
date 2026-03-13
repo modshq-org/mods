@@ -1,11 +1,30 @@
 #!/bin/sh
 # modl installer — downloads the latest release binary for your platform
-# Usage: curl -fsSL https://raw.githubusercontent.com/modl-org/modl/main/install.sh | sh
+# Usage: curl -fsSL https://modl.run/install.sh | sh
+#
+# Options:
+#   --quick              Non-interactive: init + pull model + install service
+#   --model <id>         Model to pull (default: flux-schnell, used with --quick)
+#   --no-service         Skip service installation (used with --quick)
+#   MODL_INSTALL_DIR     Override binary install path (default: /usr/local/bin)
 
 set -e
 
 REPO="modl-org/modl"
 INSTALL_DIR="${MODL_INSTALL_DIR:-/usr/local/bin}"
+QUICK=0
+MODEL="flux-schnell"
+NO_SERVICE=0
+
+# Parse flags
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --quick)    QUICK=1; shift ;;
+        --model)    MODEL="$2"; shift 2 ;;
+        --no-service) NO_SERVICE=1; shift ;;
+        *)          echo "Unknown option: $1"; exit 1 ;;
+    esac
+done
 
 # Check for required tools
 for cmd in curl tar; do
@@ -104,10 +123,36 @@ chmod +x "$INSTALL_DIR/modl"
 
 echo ""
 echo "modl ${LATEST} installed to ${INSTALL_DIR}/modl"
-echo ""
-echo "Get started:"
-echo "  modl init              # Configure your setup"
-echo "  modl pull flux-dev     # Install a model"
-echo ""
-echo "Docs: https://modl.run/docs"
-echo ""
+
+# Quick install mode: init + pull + service
+if [ "$QUICK" = "1" ]; then
+    echo ""
+    echo "Running quick setup..."
+
+    # Non-interactive init
+    "$INSTALL_DIR/modl" init --defaults
+
+    # Pull the specified model
+    echo ""
+    echo "Pulling model: ${MODEL}"
+    "$INSTALL_DIR/modl" pull "$MODEL"
+
+    # Install service (unless --no-service)
+    if [ "$NO_SERVICE" = "0" ]; then
+        echo ""
+        "$INSTALL_DIR/modl" serve --install-service
+    fi
+
+    echo ""
+    echo "Quick setup complete!"
+    echo "  Web UI: http://localhost:3333"
+    echo "  Model:  ${MODEL}"
+else
+    echo ""
+    echo "Get started:"
+    echo "  modl init              # Configure your setup"
+    echo "  modl pull flux-dev     # Install a model"
+    echo ""
+    echo "Docs: https://modl.run/docs"
+    echo ""
+fi

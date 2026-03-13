@@ -15,7 +15,8 @@ use tokio::sync::broadcast;
 
 use crate::core::db::Database;
 
-use super::super::server::{UiState, modl_root};
+use super::super::server::UiState;
+use crate::core::paths::modl_root;
 
 #[derive(Deserialize)]
 pub struct CreateSessionRequest {

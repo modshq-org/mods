@@ -292,10 +292,7 @@ fn show_trained_artifact(db: &Database, query: &str) -> Result<()> {
     println!("    Created:       {}", &artifact.created_at);
 
     // Symlink info
-    let loras_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".modl")
-        .join("loras");
+    let loras_dir = crate::core::paths::modl_root().join("loras");
     let symlink_path = loras_dir.join(format!("{}.safetensors", lora_name));
     if symlink_path.exists() {
         println!("    Symlink:       {}", style(symlink_path.display()).dim());

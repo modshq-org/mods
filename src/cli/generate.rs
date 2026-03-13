@@ -7,6 +7,7 @@ use crate::core::cloud::{CloudExecutor, CloudProvider};
 use crate::core::db::Database;
 use crate::core::executor::{Executor, LocalExecutor};
 use crate::core::job::*;
+use crate::core::model_family;
 use crate::core::preflight;
 
 /// Size presets: aspect ratio → (width, height)
@@ -74,48 +75,12 @@ fn resolve_lora(name: &str, weight: f32, db: &Database) -> Result<Option<LoraRef
 
 /// Default inference steps based on model type.
 fn default_steps(base_model: &str) -> u32 {
-    let lower = base_model.to_lowercase();
-    if lower.contains("z-image-turbo") || lower.contains("z_image_turbo") {
-        8
-    } else if lower.contains("klein") || lower.contains("schnell") || lower.contains("lightning") {
-        4
-    } else if lower.contains("flux2") || lower.contains("flux.2") || lower.contains("flux-2") {
-        28
-    } else if lower.contains("chroma") || lower.contains("qwen") {
-        25
-    } else if lower.contains("turbo") {
-        4
-    } else if lower.contains("sdxl") || lower.contains("sd-1.5") || lower.contains("sd15") {
-        30
-    } else {
-        28
-    }
+    model_family::model_defaults(base_model).0
 }
 
 /// Default guidance scale based on model type.
 fn default_guidance(base_model: &str) -> f32 {
-    let lower = base_model.to_lowercase();
-    if lower.contains("z-image-turbo")
-        || lower.contains("z_image_turbo")
-        || lower.contains("klein")
-        || lower.contains("schnell")
-        || lower.contains("turbo")
-        || lower.contains("lightning")
-    {
-        1.0
-    } else if lower.contains("flux2")
-        || lower.contains("flux.2")
-        || lower.contains("flux-2")
-        || lower.contains("chroma")
-    {
-        4.0
-    } else if lower.contains("sdxl") {
-        7.5
-    } else if lower.contains("qwen") {
-        3.0
-    } else {
-        3.5
-    }
+    model_family::model_defaults(base_model).1
 }
 
 /// Resolve base model path from installed models (match by ID or display name).
@@ -129,6 +94,54 @@ fn resolve_base_model_path(base_model: &str, db: &Database) -> Option<String> {
         }
     }
     None
+}
+
+/// Check if a model ID is installed in the DB.
+fn is_model_installed(model_id: &str, db: &Database) -> bool {
+    db.list_installed(None)
+        .ok()
+        .map(|models| {
+            models.iter().any(|m| {
+                (m.id == model_id || m.name == model_id)
+                    && (m.asset_type == "checkpoint" || m.asset_type == "diffusion_model")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Smart inpaint routing: prefer dedicated fill models over generic Flux inpainting.
+///
+/// When the user requests inpainting with a regular Flux 1 model (flux-dev,
+/// flux-schnell), auto-route to the best installed Flux Fill model. Fill models
+/// have 384 input channels and produce much cleaner inpainting results.
+fn resolve_inpaint_model(base_model: &str, db: &Database) -> (String, Option<String>) {
+    let info = model_family::resolve_model(base_model);
+    let is_flux1 = info.is_some_and(|m| m.arch_key == "flux" || m.arch_key == "flux_schnell");
+    if !is_flux1 {
+        return (
+            base_model.to_string(),
+            resolve_base_model_path(base_model, db),
+        );
+    }
+
+    for candidate in ["flux-fill-dev-onereward", "flux-fill-dev"] {
+        if is_model_installed(candidate, db) {
+            println!(
+                "  {} Using {} for inpainting",
+                style("↳").dim(),
+                style(candidate).bold()
+            );
+            return (
+                candidate.to_string(),
+                resolve_base_model_path(candidate, db),
+            );
+        }
+    }
+
+    (
+        base_model.to_string(),
+        resolve_base_model_path(base_model, db),
+    )
 }
 
 /// All arguments for `modl generate`, used by both CLI and web UI.
@@ -145,6 +158,7 @@ pub struct GenerateArgs<'a> {
     pub init_image: Option<&'a str>,
     pub mask: Option<&'a str>,
     pub strength: Option<f32>,
+    pub fast: bool,
     pub cloud: bool,
     pub provider: Option<CloudProvider>,
     pub no_worker: bool,
@@ -168,6 +182,7 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         init_image,
         mask,
         strength,
+        fast,
         cloud,
         provider,
         no_worker,
@@ -194,17 +209,57 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     let (width, height) = resolve_size(size)?;
 
     // -------------------------------------------------------------------
-    // Resolve LoRA
+    // Resolve --fast (Lightning LoRA)
     // -------------------------------------------------------------------
-    let lora_ref = match lora {
-        Some(name) => {
-            Some(resolve_lora(name, lora_strength, &db)?.context("LoRA resolution returned None")?)
+    let (fast_lora, fast_steps, fast_guidance) = if fast {
+        if lora.is_some() {
+            anyhow::bail!(
+                "--fast and --lora cannot be used together. \
+                 The --fast flag auto-applies a Lightning distillation LoRA."
+            );
         }
-        None => None,
+
+        let lightning = model_family::lightning_config(&base_model).with_context(|| {
+            let supported: Vec<&str> = model_family::LIGHTNING_CONFIGS
+                .iter()
+                .map(|c| c.base_model_id)
+                .collect();
+            format!(
+                "--fast is not yet supported for '{}'. Supported: {}",
+                base_model,
+                supported.join(", ")
+            )
+        })?;
+
+        let lora_ref = resolve_lora(lightning.lora_registry_id, 1.0, &db).with_context(|| {
+            format!(
+                "Lightning LoRA '{}' is not installed.\n\n  \
+                 Install it:\n\n    modl pull {} --variant {}\n",
+                lightning.lora_registry_id, lightning.lora_registry_id, lightning.lora_variant,
+            )
+        })?;
+
+        (lora_ref, Some(lightning.steps), Some(lightning.guidance))
+    } else {
+        (None, None, None)
     };
 
     // -------------------------------------------------------------------
-    // Validate img2img / inpainting paths
+    // Resolve LoRA (--fast takes priority, then --lora)
+    // -------------------------------------------------------------------
+    let lora_ref = if fast_lora.is_some() {
+        fast_lora
+    } else {
+        match lora {
+            Some(name) => Some(
+                resolve_lora(name, lora_strength, &db)?.context("LoRA resolution returned None")?,
+            ),
+            None => None,
+        }
+    };
+
+    // -------------------------------------------------------------------
+    // Validate img2img / inpainting paths + model capabilities
     // -------------------------------------------------------------------
     if let Some(path) = init_image
         && !PathBuf::from(path).exists()
@@ -220,13 +275,31 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         }
     }
 
+    // Check model supports the requested mode
+    let mode = if mask.is_some() {
+        "inpaint"
+    } else if init_image.is_some() {
+        "img2img"
+    } else {
+        "txt2img"
+    };
+
+    // Smart inpaint routing: prefer dedicated fill models over generic Flux inpainting
+    let (effective_model, effective_path) = if mode == "inpaint" {
+        resolve_inpaint_model(&base_model, &db)
+    } else {
+        (base_model.clone(), base_model_path)
+    };
+
+    if let Err(msg) = model_family::validate_mode(&effective_model, mode) {
+        anyhow::bail!(msg);
+    }
+
     // -------------------------------------------------------------------
     // Build output directory: ~/.modl/outputs/<date>/
     // -------------------------------------------------------------------
     let date = chrono::Local::now().format("%Y-%m-%d");
-    let output_dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
+    let output_dir = crate::core::paths::modl_root()
         .join("outputs")
         .join(date.to_string());
     std::fs::create_dir_all(&output_dir)?;
@@ -234,14 +307,19 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     // -------------------------------------------------------------------
     // Build spec
     // -------------------------------------------------------------------
-    let steps = steps.unwrap_or_else(|| default_steps(&base_model));
-    let guidance = guidance.unwrap_or_else(|| default_guidance(&base_model));
+    // --fast overrides defaults, but explicit --steps/--guidance wins
+    let steps = steps
+        .or(fast_steps)
+        .unwrap_or_else(|| default_steps(&effective_model));
+    let guidance = guidance
+        .or(fast_guidance)
+        .unwrap_or_else(|| default_guidance(&effective_model));
 
     let spec = GenerateJobSpec {
         prompt: prompt.to_string(),
         model: ModelRef {
-            base_model_id: base_model.clone(),
-            base_model_path,
+            base_model_id: effective_model.clone(),
+            base_model_path: effective_path,
         },
         lora: lora_ref.clone(),
         output: GenerateOutputRef {
@@ -287,8 +365,16 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
             mode_label
         );
         println!("  Prompt: {}", style(prompt).italic());
-        println!("  Model:  {}", base_model);
-        if let Some(ref lr) = lora_ref {
+        println!("  Model:  {}", effective_model);
+        if fast {
+            println!(
+                "  Mode:   {}",
+                style("fast (Lightning LoRA)").green().bold()
+            );
+        }
+        if let Some(ref lr) = lora_ref
+            && !fast
+        {
             println!("  LoRA:   {} (strength: {:.2})", lr.name, lr.weight);
         }
         if let Some(path) = init_image {

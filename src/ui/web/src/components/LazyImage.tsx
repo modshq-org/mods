@@ -5,12 +5,16 @@ type Props = {
   src: string
   alt: string
   className?: string
-  onClick?: () => void
+  onClick?: (e: React.MouseEvent) => void
+  /** Thumbnail width hint — appends ?w= to load a smaller version */
+  thumbWidth?: number
 }
 
-export function LazyImage({ src, alt, className, onClick }: Props) {
+export function LazyImage({ src, alt, className, onClick, thumbWidth }: Props) {
   const [loaded, setLoaded] = useState(false)
   const [errored, setErrored] = useState(false)
+
+  const displaySrc = thumbWidth ? `${src}?w=${thumbWidth}` : src
 
   return (
     <div className={cn('relative overflow-hidden bg-secondary/40', className)}>
@@ -25,15 +29,18 @@ export function LazyImage({ src, alt, className, onClick }: Props) {
         </div>
       ) : (
         <img
-          src={src}
+          src={displaySrc}
           alt={alt}
           loading="lazy"
+          decoding="async"
           onLoad={() => setLoaded(true)}
           onError={() => setErrored(true)}
           onClick={onClick}
           className={cn(
-            'h-full w-full object-cover transition-opacity duration-300',
-            loaded ? 'opacity-100' : 'opacity-0',
+            'h-full w-full object-cover transition-all duration-500 ease-out',
+            loaded
+              ? 'opacity-100 blur-0 scale-100'
+              : 'opacity-0 blur-lg scale-105',
             onClick && 'cursor-pointer',
           )}
         />

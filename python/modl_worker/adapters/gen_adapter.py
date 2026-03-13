@@ -148,6 +148,61 @@ def _materialize_meta_tensors(model):
                 )
 
 
+def _prepare_fp8_model(model):
+    """Prepare an fp8 model for inference with enable_model_cpu_offload.
+
+    1. Cast all non-Linear-weight parameters (norms, biases, embeddings)
+       to bf16.  These are small and PyTorch can't auto-promote fp8.
+    2. Add PyTorch hooks to each nn.Linear to cast the fp8 weight to
+       bf16 before forward and restore after.  This keeps the model at
+       ~12GB (fp8 weights) on GPU while computing in bf16.
+    """
+    import torch
+
+    # ── Step 1: cast small params to bf16 ──────────────────────────────
+    # Everything except nn.Linear .weight stays as bf16.
+    cast_count = 0
+    for module in model.modules():
+        is_linear = isinstance(module, torch.nn.Linear)
+        for name in list(module._parameters.keys()):
+            p = module._parameters[name]
+            if p is None or p.dtype != torch.float8_e4m3fn:
+                continue
+            # Keep Linear weights as fp8 (handled by hooks below)
+            if is_linear and name == "weight":
+                continue
+            module._parameters[name] = torch.nn.Parameter(
+                p.to(torch.bfloat16), requires_grad=False,
+            )
+            cast_count += 1
+        for name in list(module._buffers.keys()):
+            b = module._buffers[name]
+            if b is not None and b.dtype == torch.float8_e4m3fn:
+                module._buffers[name] = b.to(torch.bfloat16)
+                cast_count += 1
+
+    # ── Step 2: per-layer fp8→bf16 hooks on Linear weights ─────────────
+    def _pre_hook(module, args):
+        if module.weight.dtype == torch.float8_e4m3fn:
+            module._fp8_orig_weight = module.weight.data
+            module.weight.data = module.weight.data.to(torch.bfloat16)
+
+    def _post_hook(module, args, output):
+        if hasattr(module, "_fp8_orig_weight"):
+            module.weight.data = module._fp8_orig_weight
+            del module._fp8_orig_weight
+        return output
+
+    hook_count = 0
+    for m in model.modules():
+        if isinstance(m, torch.nn.Linear):
+            m.register_forward_pre_hook(_pre_hook)
+            m.register_forward_hook(_post_hook)
+            hook_count += 1
+
+    return hook_count, cast_count
+
+
 
 
 def _detect_weight_dtype(filepath: str) -> str:
@@ -315,45 +370,78 @@ def assemble_pipeline(
                 if use_fp8_inference:
                     # fp8 inference: create model from config with empty weights,
                     # convert checkpoint keys, load fp8 state dict directly.
-                    # This avoids allocating a full bf16 model alongside the
-                    # fp8 checkpoint dict (which would OOM for >8GB models).
-                    from diffusers.loaders.single_file_utils import (
-                        convert_flux2_transformer_checkpoint_to_diffusers,
-                    )
+                    # Layerwise casting (fp8 storage, bf16 compute) is applied
+                    # AFTER enable_model_cpu_offload so hooks fire in the
+                    # right order: move-to-GPU → cast-fp8→bf16 → forward.
+                    # Pick the right key converter for the model architecture.
+                    if model_class_name == "FluxTransformer2DModel":
+                        from diffusers.loaders.single_file_utils import (
+                            convert_flux_transformer_checkpoint_to_diffusers,
+                        )
+                        convert_fn = convert_flux_transformer_checkpoint_to_diffusers
+                    else:
+                        from diffusers.loaders.single_file_utils import (
+                            convert_flux2_transformer_checkpoint_to_diffusers,
+                        )
+                        convert_fn = convert_flux2_transformer_checkpoint_to_diffusers
                     config_dict = ModelClass.load_config(str(config_dir))
                     with init_empty_weights():
                         model = ModelClass.from_config(config_dict)
-                    converted = convert_flux2_transformer_checkpoint_to_diffusers(
-                        checkpoint
-                    )
+                    converted = convert_fn(checkpoint)
                     del checkpoint  # free memory
                     model.load_state_dict(converted, strict=False, assign=True)
                     del converted
                     _materialize_meta_tensors(model)
-                    model.enable_layerwise_casting(
-                        storage_dtype=torch.float8_e4m3fn,
-                        compute_dtype=torch.bfloat16,
+                    # Cast small params (norms, biases) to bf16 and add
+                    # per-layer hooks for Linear weights (fp8→bf16 on
+                    # forward, restore after).
+                    n_hooked, n_cast = _prepare_fp8_model(model)
+                    emitter.info(
+                        f"  → fp8 model prepared: {n_hooked} linear layers "
+                        f"hooked, {n_cast} small params cast to bf16"
+                    )
+                elif has_comfy_fp8_scales:
+                    # Small fp8 model dequantized to bf16: the in-memory
+                    # checkpoint is already clean bf16. We can't call
+                    # from_single_file (it would re-read the raw fp8 file
+                    # and choke on scale tensors). Use from_config +
+                    # load_state_dict with the dequantized checkpoint.
+                    if model_class_name == "FluxTransformer2DModel":
+                        from diffusers.loaders.single_file_utils import (
+                            convert_flux_transformer_checkpoint_to_diffusers,
+                        )
+                        convert_fn = convert_flux_transformer_checkpoint_to_diffusers
+                    else:
+                        from diffusers.loaders.single_file_utils import (
+                            convert_flux2_transformer_checkpoint_to_diffusers,
+                        )
+                        convert_fn = convert_flux2_transformer_checkpoint_to_diffusers
+                    config_dict = ModelClass.load_config(str(config_dir))
+                    with init_empty_weights():
+                        model = ModelClass.from_config(config_dict)
+                    converted = convert_fn(checkpoint)
+                    del checkpoint
+                    model.load_state_dict(converted, strict=False, assign=True)
+                    del converted
+                    _materialize_meta_tensors(model)
+                    model = model.to(torch.bfloat16)
+                    emitter.info(
+                        f"  → Loaded dequantized fp8 → bf16 via from_config"
                     )
                 else:
                     model = ModelClass.from_single_file(
-                        checkpoint, config=str(config_dir),
+                        base_model_path, config=str(config_dir),
                         torch_dtype=torch.bfloat16,
-                        low_cpu_mem_usage=False,
                     )
-                    if is_fp8 and dequant_count == 0:
-                        model.enable_layerwise_casting(
-                            storage_dtype=torch.float8_e4m3fn,
-                            compute_dtype=torch.bfloat16,
-                        )
                     emitter.info(
-                        f"  → fp8 layerwise casting enabled (storage=fp8, compute=bf16)"
+                        f"  → Loaded via from_single_file (bf16)"
                     )
             components["transformer"] = model
 
         elif param_name in ("scheduler",):
             components[param_name] = ModelClass.from_pretrained(str(config_dir))
 
-        elif param_name.startswith("tokenizer"):
+        elif param_name.startswith("tokenizer") or param_name == "processor":
             components[param_name] = ModelClass.from_pretrained(str(config_dir))
 
         elif resolved_path:
@@ -508,10 +596,18 @@ def load_pipeline(
         weight_dtype = _detect_weight_dtype(model_source)
         filename = Path(model_source).name
         emitter.info(f"Loading checkpoint: {filename} (weights={weight_dtype})")
-        pipe = PipelineClass.from_single_file(
-            model_source,
-            torch_dtype=torch.bfloat16,
-        )
+        # full_checkpoint (e.g. SDXL) needs HF Hub access for component config
+        # resolution during from_single_file(). Temporarily allow it.
+        from huggingface_hub import constants as hf_constants
+        was_offline = hf_constants.HF_HUB_OFFLINE
+        hf_constants.HF_HUB_OFFLINE = False
+        try:
+            pipe = PipelineClass.from_single_file(
+                model_source,
+                torch_dtype=torch.bfloat16,
+            )
+        finally:
+            hf_constants.HF_HUB_OFFLINE = was_offline
         pipe._modl_loaded_files = {
             "checkpoint": {"file": filename, "path": model_source, "weight_dtype": weight_dtype},
         }
@@ -622,8 +718,8 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
             lora_weight = lora_info.get("weight", 1.0)
             if lora_path and os.path.exists(lora_path):
                 emitter.info(f"Loading LoRA: {lora_info.get('name', 'unnamed')} (weight={lora_weight})")
-                pipe.load_lora_weights(lora_path)
-                pipe.fuse_lora(lora_scale=lora_weight)
+                from modl_worker.adapters.lora_utils import load_lora_with_conversion
+                load_lora_with_conversion(pipe, lora_path, lora_weight, emitter)
 
         emitter.job_started(config=str(config_path))
 
@@ -666,6 +762,8 @@ def run_generate_with_pipeline(
     import torch
     from PIL import Image
 
+    from modl_worker.image_util import load_image
+
     prompt = spec.get("prompt", "")
     model_info = spec.get("model", {})
     lora_info = spec.get("lora")
@@ -700,9 +798,9 @@ def run_generate_with_pipeline(
     init_img = None
     mask_img = None
     if init_image_path:
-        init_img = Image.open(init_image_path).convert("RGB")
+        init_img = load_image(init_image_path)
     if mask_path:
-        mask_img = Image.open(mask_path).convert("RGB")
+        mask_img = load_image(mask_path)
 
     # Switch pipeline if needed for img2img/inpaint via from_pipe()
     pipe = pipeline
@@ -731,13 +829,15 @@ def run_generate_with_pipeline(
         "generator": generator,
     }
 
-    # QwenImagePipeline uses true_cfg_scale (not guidance_scale) for CFG.
-    # negative_prompt="" is required to enable CFG — without it quality degrades.
-    if arch == "qwen_image":
+    # QwenImagePipeline/QwenImageEditPlusPipeline use true_cfg_scale (not guidance_scale).
+    # negative_prompt=" " (space) is required to enable true CFG — without it quality degrades.
+    if arch in ("qwen_image", "qwen_image_edit"):
         gen_kwargs["true_cfg_scale"] = guidance
-        gen_kwargs["negative_prompt"] = ""
+        gen_kwargs["negative_prompt"] = " "
     else:
         gen_kwargs["guidance_scale"] = guidance
+
+    is_flux_fill = arch in ("flux_fill", "flux_fill_onereward")
 
     if mode == "txt2img":
         gen_kwargs["width"] = width
@@ -748,9 +848,10 @@ def run_generate_with_pipeline(
     elif mode == "inpaint":
         gen_kwargs["image"] = init_img
         gen_kwargs["mask_image"] = mask_img
-        gen_kwargs["strength"] = strength
         gen_kwargs["width"] = width
         gen_kwargs["height"] = height
+        if not is_flux_fill:
+            gen_kwargs["strength"] = strength  # Fill pipelines don't use strength
     artifact_paths = []
 
     for i in range(count):

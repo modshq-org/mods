@@ -25,6 +25,7 @@ pub struct TrainOverrides {
     pub seed: Option<u64>,
     pub repeats: Option<u32>,
     pub caption_dropout: Option<f64>,
+    pub class_word: Option<String>,
     pub resume: Option<String>,
 }
 
@@ -258,6 +259,9 @@ pub async fn run(
     if let Some(cd) = overrides.caption_dropout {
         params.caption_dropout_rate = cd; // -1.0 = let adapter decide
     }
+    if overrides.class_word.is_some() {
+        params.class_word = overrides.class_word.clone();
+    }
     if overrides.resume.is_some() {
         params.resume_from = overrides.resume.clone();
 
@@ -283,9 +287,7 @@ pub async fn run(
     // -------------------------------------------------------------------
     // Assemble TrainJobSpec
     // -------------------------------------------------------------------
-    let output_dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
+    let output_dir = crate::core::paths::modl_root()
         .join("training_output")
         .join(&lora_name);
 
@@ -429,10 +431,7 @@ async fn execute_training(
     // Open a log file for the preview server to parse live progress.
     // training_status.rs reads ~/.modl/training_output/<name>.log
     let log_path = {
-        let training_output = dirs::home_dir()
-            .expect("home dir")
-            .join(".modl")
-            .join("training_output");
+        let training_output = crate::core::paths::modl_root().join("training_output");
         training_output.join(format!("{}.log", &spec.output.lora_name))
     };
     let mut log_file = std::fs::OpenOptions::new()
@@ -603,9 +602,7 @@ async fn execute_training(
     // 5. Collect artifacts
     // -------------------------------------------------------------------
     if final_status == "completed" {
-        let store_root = dirs::home_dir()
-            .expect("Could not determine home directory")
-            .join(".modl");
+        let store_root = crate::core::paths::modl_root();
 
         for artifact_path in &artifact_paths {
             let path = PathBuf::from(artifact_path);

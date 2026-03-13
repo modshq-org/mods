@@ -48,10 +48,7 @@ impl AuthStore {
     }
 
     pub fn path() -> PathBuf {
-        dirs::home_dir()
-            .expect("Could not determine home directory")
-            .join(".modl")
-            .join("auth.yaml")
+        crate::core::paths::modl_root().join("auth.yaml")
     }
 
     /// Get the bearer token for a given provider

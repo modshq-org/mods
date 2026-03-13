@@ -585,10 +585,7 @@ fn find_latest_checkpoint(run_inner: &Path) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 fn training_output_dir() -> PathBuf {
-    dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-        .join("training_output")
+    super::paths::modl_root().join("training_output")
 }
 
 fn is_recently_modified(path: &Path, max_age_secs: u64) -> bool {

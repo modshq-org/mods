@@ -1,10 +1,12 @@
-mod analysis;
+pub(crate) mod analysis;
 mod auth;
+mod civitai;
 mod compare;
 mod config;
 mod datasets;
 mod detect;
 mod doctor;
+pub(crate) mod edit;
 mod enhance;
 mod export;
 mod face_restore;
@@ -337,6 +339,15 @@ pub enum Commands {
         /// Show popular/trending models (ignores query)
         #[arg(long)]
         popular: bool,
+        /// Search CivitAI for LoRAs instead of the modl registry
+        #[arg(long)]
+        civitai: bool,
+        /// Base model filter for CivitAI search (e.g., "SDXL 1.0", "Flux.1 D")
+        #[arg(long)]
+        base_model: Option<String>,
+        /// Sort order for CivitAI search (Most Downloaded, Highest Rated, Newest)
+        #[arg(long)]
+        sort: Option<String>,
     },
 
     /// Train a LoRA with managed runtime
@@ -391,6 +402,9 @@ pub enum Commands {
         /// Caption dropout rate (0.0-1.0, higher = learn style over content)
         #[arg(long)]
         caption_dropout: Option<f64>,
+        /// Class word for character/object (e.g. "man", "woman", "dog")
+        #[arg(long, alias = "class")]
+        class_word: Option<String>,
         /// Resume from a checkpoint .safetensors file
         #[arg(long)]
         resume: Option<String>,
@@ -452,10 +466,52 @@ pub enum Commands {
         /// Denoising strength for img2img (0.0-1.0, default: 0.75)
         #[arg(long)]
         strength: Option<f32>,
+        /// Use Lightning distillation LoRA for faster generation (fewer steps)
+        #[arg(long)]
+        fast: bool,
         /// Force one-shot mode (skip persistent worker, cold start every time)
         #[arg(long)]
         no_worker: bool,
         /// Output result as JSON (suppresses progress output)
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Edit images using AI (instruction-based editing)
+    Edit {
+        /// Edit instruction prompt
+        prompt: String,
+        /// Source image(s) — local path or URL (can be repeated)
+        #[arg(long, required = true)]
+        image: Vec<String>,
+        /// Base model to use (default: qwen-image-edit)
+        #[arg(long)]
+        base: Option<String>,
+        /// Random seed for reproducibility
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Number of inference steps
+        #[arg(long)]
+        steps: Option<u32>,
+        /// Guidance scale
+        #[arg(long)]
+        guidance: Option<f32>,
+        /// Number of output images
+        #[arg(long, default_value = "1")]
+        count: u32,
+        /// Use Lightning distillation LoRA for fast editing (fewer steps)
+        #[arg(long)]
+        fast: bool,
+        /// Run on cloud
+        #[arg(long)]
+        cloud: bool,
+        /// Cloud provider
+        #[arg(long, value_enum)]
+        provider: Option<CloudProvider>,
+        /// Force one-shot mode
+        #[arg(long)]
+        no_worker: bool,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
@@ -645,7 +701,14 @@ pub enum Commands {
     // ── Hidden commands ──────────────────────────────────────
     /// Interactive first-run setup
     #[command(hide = true)]
-    Init,
+    Init {
+        /// Skip all prompts (use ~/modl, auto-detect GPU, no tool targets)
+        #[arg(long)]
+        defaults: bool,
+        /// Override storage root (default: ~/modl)
+        #[arg(long)]
+        root: Option<String>,
+    },
 
     /// Export installed state to a lock file
     #[command(hide = true)]
@@ -675,6 +738,12 @@ pub enum Commands {
         /// Run in foreground (blocks terminal; default is background/daemon)
         #[arg(long)]
         foreground: bool,
+        /// Install modl serve as a system service (systemd on Linux, launchd on macOS)
+        #[arg(long)]
+        install_service: bool,
+        /// Remove the modl system service
+        #[arg(long)]
+        remove_service: bool,
     },
 
     /// Manage the persistent GPU worker (keeps models in VRAM)
@@ -708,7 +777,16 @@ pub async fn run(cli: Cli) -> Result<()> {
             variant,
             dry_run,
             force,
-        } => install::run(&id, variant.as_deref(), dry_run, force).await,
+        } => {
+            if let Some(version_id) = id.strip_prefix("civitai:") {
+                if dry_run {
+                    anyhow::bail!("--dry-run is not supported for CivitAI installs");
+                }
+                civitai::install(version_id, force).await
+            } else {
+                install::run(&id, variant.as_deref(), dry_run, force).await
+            }
+        }
         Commands::Rm { id, force } => uninstall::run(&id, force).await,
         Commands::Ls { r#type, summary } => {
             if summary {
@@ -725,8 +803,17 @@ pub async fn run(cli: Cli) -> Result<()> {
             tag,
             min_rating,
             popular,
+            civitai: civitai_flag,
+            base_model,
+            sort,
         } => {
-            if popular {
+            if civitai_flag {
+                let q = query.as_deref().unwrap_or("");
+                if q.is_empty() {
+                    anyhow::bail!("Search query required for --civitai");
+                }
+                civitai::search(q, base_model.as_deref(), sort.as_deref()).await
+            } else if popular {
                 popular::run(r#type, r#for.as_deref()).await
             } else {
                 let q = query.as_deref().unwrap_or("");
@@ -748,7 +835,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Gc => gc::run().await,
         Commands::Export => export::run().await,
         Commands::Import { path } => import::run(&path).await,
-        Commands::Init => init::run().await,
+        Commands::Init { defaults, root } => init::run(defaults, root.as_deref()).await,
         Commands::Train {
             command,
             dataset,
@@ -766,6 +853,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             seed,
             repeats,
             caption_dropout,
+            class_word,
             resume,
             config,
             dry_run,
@@ -819,6 +907,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                         seed,
                         repeats,
                         caption_dropout,
+                        class_word,
                         resume,
                     },
                     config.as_deref(),
@@ -842,6 +931,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             init_image,
             mask,
             strength,
+            fast,
             cloud,
             provider,
             no_worker,
@@ -860,6 +950,37 @@ pub async fn run(cli: Cli) -> Result<()> {
                 init_image: init_image.as_deref(),
                 mask: mask.as_deref(),
                 strength,
+                fast,
+                cloud,
+                provider,
+                no_worker,
+                json,
+            })
+            .await
+        }
+        Commands::Edit {
+            prompt,
+            image,
+            base,
+            seed,
+            steps,
+            guidance,
+            count,
+            fast,
+            cloud,
+            provider,
+            no_worker,
+            json,
+        } => {
+            edit::run(edit::EditArgs {
+                prompt: &prompt,
+                images: &image,
+                base: base.as_deref(),
+                seed,
+                steps,
+                guidance,
+                count,
+                fast,
                 cloud,
                 provider,
                 no_worker,
@@ -951,7 +1072,17 @@ pub async fn run(cli: Cli) -> Result<()> {
             port,
             no_open,
             foreground,
-        } => serve::run(port, no_open, foreground).await,
+            install_service,
+            remove_service,
+        } => {
+            if install_service {
+                serve::install_service(port).await
+            } else if remove_service {
+                serve::remove_service().await
+            } else {
+                serve::run(port, no_open, foreground).await
+            }
+        }
         Commands::Upgrade => upgrade::run().await,
         Commands::CliSchema => {
             dump_cli_schema();

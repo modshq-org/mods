@@ -363,10 +363,7 @@ impl Config {
     }
 
     pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .expect("Could not determine home directory")
-            .join(".modl")
-            .join("config.yaml")
+        super::paths::modl_root().join("config.yaml")
     }
 
     /// Get the store root, expanding ~ if needed

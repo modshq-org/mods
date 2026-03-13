@@ -7,11 +7,12 @@ use crate::core::config::Config;
 use crate::core::db::Database;
 use crate::core::install;
 use crate::core::manifest::AssetType;
+use crate::core::model_family;
 use crate::core::registry::RegistryIndex;
 use crate::core::store::Store;
 use crate::core::training_status;
 
-use super::super::server::modl_root;
+use crate::core::paths::modl_root;
 
 #[derive(Serialize)]
 pub struct InstalledModel {
@@ -458,10 +459,7 @@ pub async fn api_delete_model(Path(id): Path<String>) -> impl IntoResponse {
                 .to_string();
 
             // Remove symlink from loras dir
-            let loras_dir = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".modl")
-                .join("loras");
+            let loras_dir = modl_root().join("loras");
             let symlink_path = loras_dir.join(format!("{lora_name}.safetensors"));
             if symlink_path.is_symlink() {
                 std::fs::remove_file(&symlink_path).ok();
@@ -477,11 +475,7 @@ pub async fn api_delete_model(Path(id): Path<String>) -> impl IntoResponse {
             }
 
             // Remove training output
-            let training_output_dir = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".modl")
-                .join("training_output")
-                .join(&lora_name);
+            let training_output_dir = modl_root().join("training_output").join(&lora_name);
             if training_output_dir.is_dir() {
                 std::fs::remove_dir_all(&training_output_dir).ok();
             }
@@ -548,4 +542,9 @@ pub async fn api_delete_model(Path(id): Path<String>) -> impl IntoResponse {
             Json(serde_json::json!({ "error": "Internal error" })),
         ),
     }
+}
+
+/// GET /api/model-families — all model families with capabilities, params, and UI metadata.
+pub async fn api_model_families() -> impl IntoResponse {
+    Json(model_family::FAMILIES)
 }

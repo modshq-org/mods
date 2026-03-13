@@ -207,8 +207,8 @@ pub async fn install_item(
             .await
             .with_context(|| format!("Failed to download {}", manifest.name))?;
 
-            // Verify hash
-            if !Store::verify_hash(&store_path, &info.sha256)? {
+            // Verify hash (skip if empty — some community GGUF variants lack verified hashes)
+            if !info.sha256.is_empty() && !Store::verify_hash(&store_path, &info.sha256)? {
                 std::fs::remove_file(&store_path).ok();
                 anyhow::bail!(
                     "SHA256 mismatch for {}. File deleted. Try again.",

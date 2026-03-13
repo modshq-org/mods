@@ -1,16 +1,20 @@
 import { useCallback, useRef } from 'react'
-import { ImageIcon, UploadIcon, XIcon } from 'lucide-react'
+import { AlertTriangleIcon, ImageIcon, UploadIcon, XIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
+import type { ModelFamilyInfo } from '../../api'
 import type { GenerateFormState } from './generate-state'
 
 type Props = {
   form: GenerateFormState
   setForm: React.Dispatch<React.SetStateAction<GenerateFormState>>
+  /** Family info for the currently selected model (null if unknown) */
+  modelInfo: ModelFamilyInfo | null
 }
 
-export function Img2ImgPanel({ form, setForm }: Props) {
+export function Img2ImgPanel({ form, setForm, modelInfo }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
+  const supportsImg2img = modelInfo?.capabilities.img2img ?? true
 
   const handleFile = useCallback(
     (file: File | undefined) => {
@@ -50,7 +54,16 @@ export function Img2ImgPanel({ form, setForm }: Props) {
 
   return (
     <div className="space-y-2.5">
-      {/* Section label removed — handled by parent CollapsibleSection */}
+      {/* Warning when model doesn't support img2img */}
+      {!supportsImg2img && (
+        <div className="flex items-start gap-2 rounded-md border border-yellow-500/20 bg-yellow-500/5 px-2.5 py-2">
+          <AlertTriangleIcon className="mt-0.5 size-3 flex-shrink-0 text-yellow-500/70" />
+          <span className="text-[10px] text-yellow-500/80">
+            {modelInfo?.name ?? 'This model'} does not support img2img.
+            Use Flux Dev, Flux Schnell, SDXL, or SD 1.5.
+          </span>
+        </div>
+      )}
 
       {/* Drop zone / preview */}
       {form.init_image ? (
@@ -72,14 +85,18 @@ export function Img2ImgPanel({ form, setForm }: Props) {
         </div>
       ) : (
         <div
-          className="flex h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-border/60 bg-secondary/10 transition-colors hover:border-primary/40 hover:bg-secondary/20"
-          onClick={() => fileRef.current?.click()}
+          className={`flex h-24 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border border-dashed transition-colors ${
+            supportsImg2img
+              ? 'border-border/60 bg-secondary/10 hover:border-primary/40 hover:bg-secondary/20'
+              : 'border-border/30 bg-secondary/5 opacity-50'
+          }`}
+          onClick={() => supportsImg2img && fileRef.current?.click()}
           onDragOver={(e) => e.preventDefault()}
-          onDrop={handleDrop}
+          onDrop={(e) => supportsImg2img && handleDrop(e)}
         >
           <UploadIcon className="size-5 text-muted-foreground/40" />
           <span className="text-[10px] text-muted-foreground/50">
-            Drop image or click to upload
+            {supportsImg2img ? 'Drop image or click to upload' : 'Not supported by this model'}
           </span>
         </div>
       )}
@@ -116,7 +133,7 @@ export function Img2ImgPanel({ form, setForm }: Props) {
         </div>
       )}
 
-      {!form.init_image && (
+      {!form.init_image && supportsImg2img && (
         <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground/40">
           <ImageIcon className="size-3" />
           Upload an image to use img2img mode

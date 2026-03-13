@@ -36,6 +36,15 @@ pub fn check_base_model(base_model_id: &str) -> Result<()> {
 
     let db = Database::open()?;
     if !db.is_installed(base_model_id)? {
+        // Base variant (e.g. "flux2-klein-base-4b") shares components with
+        // its distilled parent ("flux2-klein-4b"). The Python worker resolves
+        // the transformer via MODEL_REGISTRY / HF hub, so allow training if
+        // the parent model is installed.
+        let parent_id = base_model_id.replace("-base", "");
+        if parent_id != base_model_id && db.is_installed(&parent_id)? {
+            return Ok(());
+        }
+
         bail!(
             "Base model '{}' is not installed.\n\n\
              Pull it first:\n\n  \

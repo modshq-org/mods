@@ -11,9 +11,7 @@ pub async fn pull(model_id: &str) -> Result<()> {
         style(model_id).bold()
     );
 
-    let store_dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
+    let store_dir = crate::core::paths::modl_root()
         .join("store")
         .join("llm")
         .join(model_id);
@@ -143,11 +141,7 @@ pub async fn chat(
 
 /// `modl llm ls` — List available LLM models.
 pub async fn list() -> Result<()> {
-    let store_dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".modl")
-        .join("store")
-        .join("llm");
+    let store_dir = crate::core::paths::modl_root().join("store").join("llm");
 
     println!("\n  {} Installed LLM models:\n", style("LLM").bold());
 

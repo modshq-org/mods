@@ -36,10 +36,7 @@ impl RegistryIndex {
     }
 
     pub fn local_path() -> PathBuf {
-        dirs::home_dir()
-            .expect("Could not determine home directory")
-            .join(".modl")
-            .join("index.json")
+        super::paths::modl_root().join("index.json")
     }
 
     /// Look up a manifest by ID

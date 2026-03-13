@@ -9,6 +9,14 @@ use serde::{Deserialize, Serialize};
 use crate::core::dataset;
 
 #[derive(Serialize)]
+struct DatasetSummary {
+    name: String,
+    image_count: u32,
+    captioned_count: u32,
+    coverage: f32,
+}
+
+#[derive(Serialize)]
 struct DatasetOverview {
     name: String,
     image_count: u32,
@@ -39,8 +47,16 @@ fn default_page_size() -> usize {
 pub async fn api_list_datasets() -> impl IntoResponse {
     match tokio::task::spawn_blocking(dataset::list).await {
         Ok(Ok(datasets)) => {
-            let names: Vec<String> = datasets.iter().map(|d| d.name.clone()).collect();
-            Json(names).into_response()
+            let summaries: Vec<DatasetSummary> = datasets
+                .iter()
+                .map(|d| DatasetSummary {
+                    name: d.name.clone(),
+                    image_count: d.image_count,
+                    captioned_count: d.captioned_count,
+                    coverage: d.caption_coverage,
+                })
+                .collect();
+            Json(summaries).into_response()
         }
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,

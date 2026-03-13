@@ -18,6 +18,7 @@ from pathlib import Path
 import torch
 from PIL import Image
 
+from modl_worker.image_util import load_image
 from modl_worker.protocol import EventEmitter
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -53,7 +54,7 @@ def _load_clip(emitter: EventEmitter, model_path: str | None = None):
 
 def _embed_image(model, processor, image_path: Path) -> torch.Tensor:
     """Get normalized CLIP embedding for a single image."""
-    image = Image.open(image_path).convert("RGB")
+    image = load_image(image_path)
     inputs = processor(images=image, return_tensors="pt").to("cuda")
     with torch.no_grad():
         features = model.get_image_features(**inputs)

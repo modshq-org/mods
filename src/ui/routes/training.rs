@@ -1,261 +1,107 @@
 use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-use crate::core::db::Database;
+use crate::core::db::{Database, LibraryLoraRecord};
+use crate::core::training::{self, parse_step_from_filename};
 use crate::core::training_status;
 
-use super::super::server::modl_root;
+use crate::core::paths::modl_root;
 
 #[derive(Serialize)]
-pub struct TrainingRun {
+pub struct RunSummary {
     name: String,
-    config: Option<serde_json::Value>,
-    samples: Vec<SampleGroup>,
-    lora_path: Option<String>,
-    lora_size: Option<u64>,
-    lineage: Option<TrainingLineage>,
-    /// Original total steps from the job spec (covers all phases).
-    total_steps: Option<u64>,
-    /// Sample interval derived from actual samples on disk (stable across phases).
-    sample_every: Option<u64>,
-}
-
-#[derive(Serialize)]
-struct TrainingLineage {
-    dataset_name: Option<String>,
-    dataset_image_count: Option<u32>,
-    base_model: Option<String>,
-    jobs: Vec<JobSummary>,
-}
-
-#[derive(Serialize)]
-struct JobSummary {
-    job_id: String,
     status: String,
-    steps: Option<u64>,
-    created_at: String,
-    resumed_from: Option<String>,
-}
-
-#[derive(Serialize)]
-struct SampleGroup {
-    step: u64,
-    images: Vec<String>,
-}
-
-/// Parse step number from sample filename like `1772410330707__000000000_0.jpg`
-fn parse_step_from_filename(filename: &str) -> Option<u64> {
-    let parts: Vec<&str> = filename.split("__").collect();
-    if parts.len() == 2 {
-        let rest = parts[1];
-        let step_str = rest.split('_').next()?;
-        step_str.parse::<u64>().ok()
-    } else {
-        None
-    }
-}
-
-/// Given a list of sample image paths for a single step, infer the expected
-/// number of prompts.
-fn infer_prompt_count(images: &[String]) -> usize {
-    let mut max_idx: usize = 0;
-    let mut count = 0usize;
-    for img in images {
-        if let Some(fname) = img.rsplit('/').next()
-            && let Some(stem) = fname
-                .strip_suffix(".jpg")
-                .or_else(|| fname.strip_suffix(".png"))
-            && let Some(idx_str) = stem.rsplit('_').next()
-            && let Ok(idx) = idx_str.parse::<usize>()
-        {
-            if idx >= max_idx {
-                max_idx = idx;
-            }
-            count += 1;
-        }
-    }
-    if count == 0 {
-        images.len()
-    } else {
-        max_idx + 1
-    }
-}
-
-/// Scan a training output directory for sample images grouped by step
-fn scan_training_run(name: &str) -> anyhow::Result<TrainingRun> {
-    let run_dir = modl_root().join("training_output").join(name).join(name);
-
-    // Parse config
-    let config_path = run_dir.join("config.yaml");
-    let config = if config_path.exists() {
-        let yaml_str = std::fs::read_to_string(&config_path)?;
-        let yaml_val: serde_yaml::Value = serde_yaml::from_str(&yaml_str)?;
-        let json_val = serde_json::to_value(yaml_val)?;
-        Some(json_val)
-    } else {
-        None
-    };
-
-    // Scan samples directory
-    let samples_dir = run_dir.join("samples");
-    let mut step_map: HashMap<u64, Vec<String>> = HashMap::new();
-
-    if samples_dir.exists() {
-        let mut entries: Vec<_> = std::fs::read_dir(&samples_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .is_some_and(|ext| ext == "jpg" || ext == "png")
-            })
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-
-        for entry in entries {
-            let fname = entry.file_name().to_string_lossy().to_string();
-            if let Some(step) = parse_step_from_filename(&fname) {
-                let rel = format!("training_output/{name}/{name}/samples/{fname}");
-                step_map.entry(step).or_default().push(rel);
-            }
-        }
-    }
-
-    let mut samples: Vec<SampleGroup> = step_map
-        .into_iter()
-        .map(|(step, mut images)| {
-            images.sort();
-            let expected = infer_prompt_count(&images);
-            if images.len() > expected && expected > 0 {
-                if step == 0 {
-                    images.truncate(expected);
-                } else {
-                    images = images.split_off(images.len() - expected);
-                }
-            }
-            SampleGroup { step, images }
-        })
-        .collect();
-    samples.sort_by_key(|s| s.step);
-
-    // Check for final LoRA
-    let lora_path = run_dir.join(format!("{name}.safetensors"));
-    let (lora_p, lora_s) = if lora_path.exists() {
-        let meta = std::fs::metadata(&lora_path)?;
-        (
-            Some(lora_path.to_string_lossy().to_string()),
-            Some(meta.len()),
-        )
-    } else {
-        (None, None)
-    };
-
-    let lineage = build_lineage(name);
-
-    // total_steps from the job spec covers all phases (the config.yaml on
-    // disk only reflects the current phase).
-    let total_steps = lineage
-        .as_ref()
-        .and_then(|l| l.jobs.first())
-        .and_then(|j| j.steps);
-
-    // Derive sample_every from actual samples on disk — stable across phase
-    // transitions (unlike config.yaml which gets overwritten per phase).
-    // The first non-zero step is always the sample interval.
-    let sample_every = {
-        let mut steps: Vec<u64> = samples.iter().map(|s| s.step).collect();
-        steps.sort();
-        steps.into_iter().find(|&s| s > 0)
-    };
-
-    Ok(TrainingRun {
-        name: name.to_string(),
-        config,
-        samples,
-        lora_path: lora_p,
-        lora_size: lora_s,
-        lineage,
-        total_steps,
-        sample_every,
-    })
-}
-
-/// Build training lineage by querying the jobs DB for matching runs.
-fn build_lineage(lora_name: &str) -> Option<TrainingLineage> {
-    let db = Database::open().ok()?;
-    let jobs = db.find_jobs_by_lora_name(lora_name).ok()?;
-
-    if jobs.is_empty() {
-        return None;
-    }
-
-    let has_db_running = jobs.iter().any(|j| j.status == "running");
-    let is_actually_running = if has_db_running {
-        training_status::get_status(lora_name)
-            .map(|s| s.is_running)
-            .unwrap_or(false)
-    } else {
-        false
-    };
-
-    let first_spec: serde_json::Value = serde_json::from_str(&jobs[0].spec_json).ok()?;
-
-    let dataset_name = first_spec
-        .pointer("/dataset/name")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let dataset_image_count = first_spec
-        .pointer("/dataset/image_count")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u32);
-    let base_model = first_spec
-        .pointer("/model/base_model_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    let job_summaries: Vec<JobSummary> = jobs
-        .iter()
-        .map(|j| {
-            let spec: serde_json::Value = serde_json::from_str(&j.spec_json).unwrap_or_default();
-            let steps = spec.pointer("/params/steps").and_then(|v| v.as_u64());
-            let resumed_from = spec
-                .pointer("/params/resume_from")
-                .and_then(|v| v.as_str())
-                .map(|s| s.rsplit('/').next().unwrap_or(s).to_string());
-            let status = if j.status == "running" && !is_actually_running {
-                "interrupted".to_string()
-            } else {
-                j.status.clone()
-            };
-            JobSummary {
-                job_id: j.job_id.clone(),
-                status,
-                steps,
-                created_at: j.created_at.clone(),
-                resumed_from,
-            }
-        })
-        .collect();
-
-    Some(TrainingLineage {
-        dataset_name,
-        dataset_image_count,
-        base_model,
-        jobs: job_summaries,
-    })
+    base_model: Option<String>,
+    trigger_word: Option<String>,
+    created_at: Option<String>,
+    has_lora: bool,
+    total_steps: Option<u64>,
 }
 
 pub async fn api_list_runs() -> impl IntoResponse {
-    let runs = tokio::task::spawn_blocking(|| {
-        crate::core::training::list_training_runs().unwrap_or_default()
+    let summaries = tokio::task::spawn_blocking(|| {
+        let names = crate::core::training::list_training_runs().unwrap_or_default();
+        let db = Database::open().ok();
+        let active = training_status::get_all_status(false).unwrap_or_default();
+        let active_map: std::collections::HashMap<String, _> =
+            active.into_iter().map(|s| (s.name.clone(), s)).collect();
+
+        names
+            .into_iter()
+            .map(|name| {
+                let is_running = active_map.get(&name).map(|s| s.is_running).unwrap_or(false);
+
+                let lora_exists = modl_root()
+                    .join("training_output")
+                    .join(&name)
+                    .join(&name)
+                    .join(format!("{name}.safetensors"))
+                    .exists();
+
+                let (status, base_model, trigger_word, created_at, total_steps) =
+                    if let Some(ref db) = db
+                        && let Ok(jobs) = db.find_jobs_by_lora_name(&name)
+                        && !jobs.is_empty()
+                    {
+                        let latest = &jobs[jobs.len() - 1];
+                        let status = if is_running {
+                            "running".to_string()
+                        } else if latest.status == "running" {
+                            // DB says running but process is gone — check if
+                            // the final LoRA exists to distinguish completed
+                            // from genuinely interrupted.
+                            if lora_exists {
+                                "completed".to_string()
+                            } else {
+                                "interrupted".to_string()
+                            }
+                        } else {
+                            latest.status.clone()
+                        };
+
+                        let spec: serde_json::Value =
+                            serde_json::from_str(&jobs[0].spec_json).unwrap_or_default();
+                        let base = spec
+                            .pointer("/model/base_model_id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let trigger = spec
+                            .pointer("/params/trigger_word")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let steps = spec.pointer("/params/steps").and_then(|v| v.as_u64());
+                        let created = Some(jobs[0].created_at.clone());
+
+                        (status, base, trigger, created, steps)
+                    } else {
+                        // No jobs in DB — infer from disk
+                        let status = if lora_exists {
+                            "completed".to_string()
+                        } else {
+                            "unknown".to_string()
+                        };
+                        (status, None, None, None, None)
+                    };
+
+                RunSummary {
+                    name,
+                    status,
+                    base_model,
+                    trigger_word,
+                    created_at,
+                    has_lora: lora_exists,
+                    total_steps,
+                }
+            })
+            .collect::<Vec<_>>()
     })
     .await
     .unwrap_or_default();
-    Json(runs)
+    Json(summaries)
 }
 
 pub async fn api_get_run(Path(name): Path<String>) -> impl IntoResponse {
-    match tokio::task::spawn_blocking(move || scan_training_run(&name)).await {
+    match tokio::task::spawn_blocking(move || training::scan_training_run(&name)).await {
         Ok(Ok(run)) => Json(run).into_response(),
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -604,4 +450,507 @@ pub async fn api_resume_training(Json(req): Json<ResumeRequest>) -> impl IntoRes
         )
             .into_response(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Start training (new run)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct StartTrainingRequest {
+    dataset: String,
+    base_model: String,
+    name: String,
+    trigger_word: String,
+    lora_type: String,
+    preset: Option<String>,
+    steps: Option<u64>,
+    rank: Option<u32>,
+    lr: Option<f64>,
+    optimizer: Option<String>,
+    seed: Option<u64>,
+    class_word: Option<String>,
+}
+
+pub async fn api_start_training(Json(req): Json<StartTrainingRequest>) -> impl IntoResponse {
+    let modl_bin = std::env::current_exe().unwrap_or_else(|_| "modl".into());
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mut args = vec![
+            "train".to_string(),
+            "--dataset".to_string(),
+            req.dataset,
+            "--base".to_string(),
+            req.base_model,
+            "--name".to_string(),
+            req.name.clone(),
+            "--trigger".to_string(),
+            req.trigger_word,
+            "--lora-type".to_string(),
+            req.lora_type,
+        ];
+
+        if let Some(preset) = req.preset {
+            args.push("--preset".to_string());
+            args.push(preset);
+        }
+        if let Some(steps) = req.steps {
+            args.push("--steps".to_string());
+            args.push(steps.to_string());
+        }
+        if let Some(rank) = req.rank {
+            args.push("--rank".to_string());
+            args.push(rank.to_string());
+        }
+        if let Some(lr) = req.lr {
+            args.push("--lr".to_string());
+            args.push(lr.to_string());
+        }
+        if let Some(optimizer) = req.optimizer {
+            args.push("--optimizer".to_string());
+            args.push(optimizer);
+        }
+        if let Some(seed) = req.seed {
+            args.push("--seed".to_string());
+            args.push(seed.to_string());
+        }
+        if let Some(class_word) = req.class_word {
+            args.push("--class-word".to_string());
+            args.push(class_word);
+        }
+
+        let child = std::process::Command::new(&modl_bin)
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        match child {
+            Ok(_) => Ok(req.name),
+            Err(e) => Err(format!("Failed to start training: {e}")),
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok(name)) => {
+            (StatusCode::OK, Json(serde_json::json!({ "started": name }))).into_response()
+        }
+        Ok(Err(msg)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Training Queue
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct TrainingQueueItemResponse {
+    id: i64,
+    position: i64,
+    name: String,
+    spec: serde_json::Value,
+    status: String,
+    created_at: String,
+}
+
+/// GET /api/train/queue — list pending queue items
+pub async fn api_list_training_queue() -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(|| {
+        let db = Database::open()?;
+        db.list_training_queue()
+    })
+    .await;
+
+    match result {
+        Ok(Ok(items)) => {
+            let response: Vec<TrainingQueueItemResponse> = items
+                .into_iter()
+                .map(|item| TrainingQueueItemResponse {
+                    id: item.id,
+                    position: item.position,
+                    name: item.name,
+                    spec: serde_json::from_str(&item.spec_json).unwrap_or_default(),
+                    status: item.status,
+                    created_at: item.created_at,
+                })
+                .collect();
+            Json(response).into_response()
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to list training queue" })),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/train/queue — add item to queue
+pub async fn api_add_to_training_queue(Json(req): Json<StartTrainingRequest>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let spec_json = serde_json::to_string(&serde_json::json!({
+            "dataset": req.dataset,
+            "base_model": req.base_model,
+            "name": req.name,
+            "trigger_word": req.trigger_word,
+            "lora_type": req.lora_type,
+            "preset": req.preset,
+            "steps": req.steps,
+            "rank": req.rank,
+            "lr": req.lr,
+            "optimizer": req.optimizer,
+            "seed": req.seed,
+            "class_word": req.class_word,
+        }))
+        .unwrap_or_default();
+
+        let db = Database::open()?;
+        let id = db.add_to_training_queue(&req.name, &spec_json)?;
+        Ok::<_, anyhow::Error>((id, req.name))
+    })
+    .await;
+
+    match result {
+        Ok(Ok((id, name))) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "id": id, "name": name })),
+        )
+            .into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to add to queue" })),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/train/queue/{id} — remove item from queue
+pub async fn api_remove_from_training_queue(Path(id): Path<i64>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let db = Database::open()?;
+        db.remove_from_training_queue(id)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to remove from queue" })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UpdatePositionRequest {
+    position: i64,
+}
+
+/// PUT /api/train/queue/{id}/position — reorder queue item
+pub async fn api_reorder_training_queue(
+    Path(id): Path<i64>,
+    Json(req): Json<UpdatePositionRequest>,
+) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let db = Database::open()?;
+        db.update_training_queue_position(id, req.position)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to reorder queue" })),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LoRA Library
+// ---------------------------------------------------------------------------
+
+/// GET /api/library/loras — list all promoted LoRAs
+pub async fn api_list_library_loras() -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(|| {
+        let db = Database::open()?;
+        db.list_library_loras()
+    })
+    .await;
+
+    match result {
+        Ok(Ok(loras)) => Json(serde_json::to_value(loras).unwrap_or_default()).into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to list library LoRAs" })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct PromoteLoraRequest {
+    name: String,
+    trigger_word: Option<String>,
+    base_model: Option<String>,
+    lora_path: String,
+    thumbnail: Option<String>,
+    step: Option<u64>,
+    training_run: Option<String>,
+    config_json: Option<String>,
+    tags: Option<String>,
+}
+
+/// POST /api/library/loras — promote a LoRA to the library
+pub async fn api_promote_lora(Json(req): Json<PromoteLoraRequest>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let lora_path_str = req.lora_path.clone();
+        let lora_path = std::path::Path::new(&lora_path_str);
+
+        // Validate that lora_path is under the modl training_output directory
+        // to prevent path traversal attacks.
+        let allowed_dir = modl_root().join("training_output");
+        let canonical_lora = lora_path
+            .canonicalize()
+            .map_err(|e| anyhow::anyhow!("Invalid lora_path: {e}"))?;
+        let canonical_allowed = allowed_dir.canonicalize().unwrap_or(allowed_dir.clone());
+        if !canonical_lora.starts_with(&canonical_allowed) {
+            anyhow::bail!(
+                "lora_path must be under {}, got {}",
+                canonical_allowed.display(),
+                canonical_lora.display()
+            );
+        }
+
+        let size_bytes = lora_path.metadata().map(|m| m.len()).unwrap_or(0);
+
+        // Auto-resolve thumbnail from training samples when not provided
+        let thumbnail = req.thumbnail.or_else(|| {
+            let run_name = req.training_run.as_deref()?;
+            let samples_dir = modl_root()
+                .join("training_output")
+                .join(run_name)
+                .join(run_name)
+                .join("samples");
+            if !samples_dir.exists() {
+                return None;
+            }
+            // Find the sample image with the highest step number
+            let mut best: Option<(u64, String)> = None;
+            if let Ok(entries) = std::fs::read_dir(&samples_dir) {
+                for entry in entries.flatten() {
+                    let fname = entry.file_name().to_string_lossy().to_string();
+                    if let Some(step) = parse_step_from_filename(&fname)
+                        && best.as_ref().is_none_or(|(s, _)| step > *s)
+                    {
+                        let rel = format!("training_output/{run_name}/{run_name}/samples/{fname}");
+                        best = Some((step, rel));
+                    }
+                }
+            }
+            best.map(|(_, path)| path)
+        });
+
+        let id = format!(
+            "lib:{}:{}",
+            slug(&req.name),
+            &uuid::Uuid::new_v4().to_string()[..8]
+        );
+
+        // Fetch job spec for reproducibility metadata (dataset, LR, rank, etc.)
+        let job_spec = req.training_run.as_deref().and_then(|run_name| {
+            let db = Database::open().ok()?;
+            let jobs = db.find_jobs_by_lora_name(run_name).ok()?;
+            let spec: serde_json::Value = serde_json::from_str(&jobs.first()?.spec_json).ok()?;
+            Some(spec)
+        });
+
+        // Merge ai-toolkit config + job spec into one JSON blob for
+        // full reproducibility.  The job spec has dataset ref, LR,
+        // rank, lora_type, preset — everything needed to re-run.
+        let merged_config = {
+            let mut obj = serde_json::Map::new();
+            if let Some(ref cfg) = req.config_json
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(cfg)
+            {
+                obj.insert("toolkit_config".into(), v);
+            }
+            if let Some(ref spec) = job_spec {
+                obj.insert("job_spec".into(), spec.clone());
+            }
+            if obj.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Object(obj).to_string())
+            }
+        };
+
+        let auto_tag = job_spec.as_ref().and_then(|spec| {
+            spec.pointer("/params/lora_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+
+        let record = LibraryLoraRecord {
+            id: id.clone(),
+            name: req.name,
+            trigger_word: req.trigger_word,
+            base_model: req.base_model,
+            lora_path: req.lora_path,
+            thumbnail,
+            step: req.step,
+            training_run: req.training_run.clone(),
+            config_json: merged_config,
+            tags: req.tags.or(auto_tag),
+            notes: None,
+            size_bytes,
+            created_at: String::new(), // DB default
+        };
+
+        let db = Database::open()?;
+        db.insert_library_lora(&record)?;
+
+        // Copy to content-addressed store so the LoRA survives training
+        // run deletion, then register in installed + artifacts so it
+        // appears in the generate LoRA picker.
+        let install_id = record.id.clone(); // "lib:name:hash"
+        let already_installed = db.is_installed(&install_id).unwrap_or(true);
+        if !already_installed {
+            let file_name = lora_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("checkpoint.safetensors");
+
+            let sha256 = crate::core::store::Store::hash_file(lora_path)
+                .unwrap_or_else(|_| "unknown".to_string());
+
+            // Copy into content-addressed store (~/.modl/store/lora/<sha>/<file>)
+            let store = crate::core::store::Store::new(modl_root().join("store"));
+            let store_path =
+                store.path_for(&crate::core::manifest::AssetType::Lora, &sha256, file_name);
+            store.ensure_dir(&store_path)?;
+            if !store_path.exists() {
+                std::fs::copy(lora_path, &store_path)?;
+            }
+            let store_path_str = store_path.to_string_lossy();
+
+            // Update library record to point to store path (not training dir)
+            db.update_library_lora_path(&record.id, &store_path_str)?;
+
+            db.insert_installed(&crate::core::db::InstalledModelRecord {
+                id: &install_id,
+                name: &record.name,
+                asset_type: "lora",
+                variant: None,
+                sha256: &sha256,
+                size: size_bytes,
+                file_name,
+                store_path: &store_path_str,
+            })?;
+
+            let meta = serde_json::json!({
+                "base_model": record.base_model,
+                "trigger_word": record.trigger_word,
+                "lora_name": record.name,
+            });
+            db.insert_artifact(
+                &install_id,
+                None,
+                "lora",
+                &store_path_str,
+                &sha256,
+                size_bytes,
+                Some(&meta.to_string()),
+            )?;
+        }
+
+        Ok::<_, anyhow::Error>(id)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(id)) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to promote LoRA" })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UpdateLibraryLoraRequest {
+    name: String,
+    tags: Option<String>,
+    notes: Option<String>,
+}
+
+/// PUT /api/library/loras/{id}
+pub async fn api_update_library_lora(
+    Path(id): Path<String>,
+    Json(req): Json<UpdateLibraryLoraRequest>,
+) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let db = Database::open()?;
+        db.update_library_lora(&id, &req.name, req.tags.as_deref(), req.notes.as_deref())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to update library LoRA" })),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/library/loras/{id}
+pub async fn api_delete_library_lora(Path(id): Path<String>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let db = Database::open()?;
+        // Clean up installed + artifacts entries so the LoRA disappears
+        // from the generate dropdown. Store file is kept (content-addressed,
+        // cheap, may be referenced elsewhere).
+        let _ = db.remove_installed(&id);
+        let _ = db.delete_artifact(&id);
+        db.delete_library_lora(&id)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to delete library LoRA" })),
+        )
+            .into_response(),
+    }
+}
+
+fn slug(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
 }

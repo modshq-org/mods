@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_tools;
 pub mod artifacts;
+pub mod civitai;
 pub mod cloud;
 pub mod config;
 pub mod dataset;
@@ -14,7 +15,9 @@ pub mod install;
 pub mod job;
 pub mod llm;
 pub mod manifest;
+pub mod model_family;
 pub mod outputs;
+pub mod paths;
 pub mod preflight;
 pub mod presets;
 pub mod registry;

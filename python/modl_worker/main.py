@@ -4,9 +4,10 @@ import sys
 from pathlib import Path
 
 from modl_worker.adapters import (
-    run_train, run_generate, run_caption, run_resize, run_tag,
+    run_train, run_generate, run_edit, run_caption, run_resize, run_tag,
     run_score, run_detect, run_compare,
     run_segment, run_face_restore, run_upscale, run_remove_bg,
+    run_face_crop,
 )
 from modl_worker.protocol import EventEmitter, fatal
 
@@ -22,6 +23,10 @@ def _build_parser() -> argparse.ArgumentParser:
     gen = sub.add_parser("generate", help="Run inference/generation adapter")
     gen.add_argument("--config", required=True, help="Path to generate spec yaml")
     gen.add_argument("--job-id", default="", help="Job ID for event envelope")
+
+    edt = sub.add_parser("edit", help="Run image editing adapter")
+    edt.add_argument("--config", required=True, help="Path to edit spec yaml")
+    edt.add_argument("--job-id", default="", help="Job ID for event envelope")
 
     cap = sub.add_parser("caption", help="Run auto-captioning adapter")
     cap.add_argument("--config", required=True, help="Path to caption spec yaml")
@@ -63,9 +68,15 @@ def _build_parser() -> argparse.ArgumentParser:
     rbg.add_argument("--config", required=True, help="Path to remove-bg spec yaml")
     rbg.add_argument("--job-id", default="", help="Job ID for event envelope")
 
+    fc = sub.add_parser("face-crop", help="Detect faces and create close-up crops")
+    fc.add_argument("--config", required=True, help="Path to face-crop spec yaml")
+    fc.add_argument("--job-id", default="", help="Job ID for event envelope")
+
     srv = sub.add_parser("serve", help="Start persistent worker daemon")
     srv.add_argument("--timeout", type=int, default=600, help="Idle timeout in seconds (default: 600)")
-    srv.add_argument("--max-models", type=int, default=2, help="Max models to cache in VRAM (default: 2)")
+    srv.add_argument("--max-models", type=int,
+                     default=int(os.environ.get("MODL_MAX_MODELS", "2")),
+                     help="Max models to cache in VRAM (default: 2, env: MODL_MAX_MODELS)")
 
     return parser
 
@@ -86,6 +97,11 @@ def main() -> int:
         config_path = Path(args.config)
         emitter.job_accepted(worker_pid=os.getpid())
         return run_generate(config_path, emitter)
+
+    if args.command == "edit":
+        config_path = Path(args.config)
+        emitter.job_accepted(worker_pid=os.getpid())
+        return run_edit(config_path, emitter)
 
     if args.command == "caption":
         config_path = Path(args.config)
@@ -136,6 +152,11 @@ def main() -> int:
         config_path = Path(args.config)
         emitter.job_accepted(worker_pid=os.getpid())
         return run_remove_bg(config_path, emitter)
+
+    if args.command == "face-crop":
+        config_path = Path(args.config)
+        emitter.job_accepted(worker_pid=os.getpid())
+        return run_face_crop(config_path, emitter)
 
     if args.command == "serve":
         from modl_worker.serve import run_serve

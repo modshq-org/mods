@@ -3,7 +3,7 @@ use console::style;
 use std::sync::mpsc;
 
 use crate::core::executor::{Executor, JobHandle};
-use crate::core::job::{GenerateJobSpec, JobEvent, TrainJobSpec};
+use crate::core::job::{EditJobSpec, GenerateJobSpec, JobEvent, TrainJobSpec};
 
 const CLOUD_WAITLIST_URL: &str = "https://modl.run/cloud";
 
@@ -94,6 +94,11 @@ impl Executor for CloudExecutor {
 
     fn submit_generate(&mut self, _spec: &GenerateJobSpec) -> Result<JobHandle> {
         print_cloud_waitlist("generation", self.provider);
+        std::process::exit(0);
+    }
+
+    fn submit_edit(&mut self, _spec: &EditJobSpec) -> Result<JobHandle> {
+        print_cloud_waitlist("editing", self.provider);
         std::process::exit(0);
     }
 

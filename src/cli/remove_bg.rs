@@ -37,9 +37,7 @@ pub async fn run(paths: &[String], output_dir: Option<&str>, json: bool) -> Resu
 
     let out_dir = output_dir.map(String::from).unwrap_or_else(|| {
         let date = chrono::Local::now().format("%Y-%m-%d");
-        dirs::home_dir()
-            .expect("home dir")
-            .join(".modl")
+        crate::core::paths::modl_root()
             .join("outputs")
             .join(date.to_string())
             .to_string_lossy()
