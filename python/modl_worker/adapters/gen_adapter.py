@@ -257,6 +257,7 @@ def assemble_pipeline(
     base_model_path: str,
     cls_name: str,
     emitter: EventEmitter,
+    force_fp8: bool = False,
 ):
     """Assemble a pipeline from locally installed components.
 
@@ -437,11 +438,12 @@ def assemble_pipeline(
                         f"  → Loaded via from_single_file (bf16)"
                     )
 
-            # Large bf16 transformers (>15GB): apply fp8 layerwise casting
-            # to halve VRAM usage. Weights stored in fp8, compute in bf16.
+            # Apply fp8 layerwise casting to reduce VRAM: weights stored in
+            # fp8, compute in bf16. Auto for large models (>15GB), or forced
+            # when ControlNet is active (need room for CN weights on GPU).
             if not is_fp8 and not is_gguf:
                 file_size_gb = Path(base_model_path).stat().st_size / (1024**3)
-                if file_size_gb > 15.0:
+                if file_size_gb > 15.0 or (force_fp8 and file_size_gb > 5.0):
                     model.enable_layerwise_casting(
                         storage_dtype=torch.float8_e4m3fn,
                         compute_dtype=torch.bfloat16,
@@ -579,6 +581,7 @@ def load_pipeline(
     base_model_path: str | None,
     cls_name: str,
     emitter: EventEmitter,
+    force_fp8: bool = False,
 ):
     """Load a diffusers pipeline from disk or HuggingFace.
 
@@ -629,7 +632,7 @@ def load_pipeline(
         # Assemble pipeline from locally installed components
         assembly = resolve_gen_assembly(base_model_id)
         if assembly:
-            return assemble_pipeline(base_model_id, model_source, cls_name, emitter)
+            return assemble_pipeline(base_model_id, model_source, cls_name, emitter, force_fp8=force_fp8)
         else:
             # Fallback: try from_pretrained with HF repo
             hf_repo = resolve_model_path(base_model_id)
@@ -642,7 +645,7 @@ def load_pipeline(
         # GGUF models need assembly with quantization config
         assembly = resolve_gen_assembly(base_model_id)
         if assembly:
-            return assemble_pipeline(base_model_id, model_source, cls_name, emitter)
+            return assemble_pipeline(base_model_id, model_source, cls_name, emitter, force_fp8=force_fp8)
         else:
             raise RuntimeError(
                 f"GGUF model {model_source} requires assembly spec in arch_config"
@@ -723,8 +726,11 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
 
     try:
         # For cold start, load the mode-specific pipeline directly
+        # Force fp8 transformer quantization if ControlNet is active —
+        # otherwise bf16 transformer + CN weights exceed 24GB VRAM
+        has_controlnet = bool(params.get("controlnet"))
         cls_name = resolve_pipeline_class_for_mode(base_model_id, cold_mode)
-        pipe = load_pipeline(base_model_id, base_model_path, cls_name, emitter)
+        pipe = load_pipeline(base_model_id, base_model_path, cls_name, emitter, force_fp8=has_controlnet)
 
         # Load LoRA if specified
         if lora_info:
@@ -892,16 +898,13 @@ def _load_controlnet(
         )
         return None, [], [], []
 
-    # Create ControlNet pipeline via from_pipe — keep CN on CPU for now
+    # Create ControlNet pipeline via from_pipe (components stay on CPU)
     cn_pipe_cls = getattr(diffusers, config["pipeline_class"])
     cn_pipe = cn_pipe_cls.from_pipe(pipeline, controlnet=cn_model)
 
-    # Note: on 24GB cards with bf16 base models, transformer (~11.4GB) +
-    # text encoder (~7.5GB) + controlnet (~3.1GB) = ~22GB which leaves no
-    # room for activations. Works on 48GB+ GPUs. For 24GB cards, use fp8
-    # quantized base model variants.
-    # TODO: integrate with assemble_pipeline to enable CPU offload from the start
-    emitter.info("ControlNet loaded")
+    # Keep CN on CPU for now — it'll be moved to GPU after text encoding
+    # frees the text encoder VRAM (see pre-encoding block in caller)
+    emitter.info("ControlNet loaded (CN on CPU, will move to GPU after text encoding)")
 
     # Load control images
     from modl_worker.image_util import load_image as _load_img
@@ -1151,6 +1154,39 @@ def run_generate_with_pipeline(
         gen_kwargs["height"] = height
         if not is_flux_fill:
             gen_kwargs["strength"] = strength  # Fill pipelines don't use strength
+
+    # When ControlNet is active, pre-encode the prompt and free the text
+    # encoder to make room for transformer + controlnet on GPU.
+    if cn_pipe is not None and cn_images and hasattr(pipe, "encode_prompt"):
+        import gc
+        emitter.info("Pre-encoding prompt to free text encoder VRAM...")
+        try:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            prompt_result = pipe.encode_prompt(
+                prompt=prompt,
+                device=device,
+            )
+            gen_kwargs["prompt_embeds"] = prompt_result[0]
+            if len(prompt_result) > 1 and prompt_result[1] is not None:
+                gen_kwargs["negative_prompt_embeds"] = prompt_result[1]
+            gen_kwargs.pop("prompt", None)
+            gen_kwargs.pop("negative_prompt", None)
+            # Free text encoder and move ControlNet to GPU
+            if hasattr(pipe, "text_encoder") and pipe.text_encoder is not None:
+                pipe.text_encoder.to("cpu")
+                del pipe.text_encoder
+                pipe.text_encoder = None
+            if hasattr(pipe, "tokenizer"):
+                pipe.tokenizer = None
+            gc.collect()
+            torch.cuda.empty_cache()
+            emitter.info(f"Text encoder freed. GPU: {torch.cuda.memory_allocated()/1024**3:.1f}GB")
+            # Now move ControlNet to GPU — there's room after TE offload
+            if hasattr(pipe, "controlnet") and pipe.controlnet is not None:
+                pipe.controlnet.to("cuda")
+                emitter.info(f"ControlNet moved to GPU. GPU: {torch.cuda.memory_allocated()/1024**3:.1f}GB")
+        except Exception as exc:
+            emitter.info(f"Pre-encoding failed ({exc}), using normal prompt")
 
     # Add ControlNet conditioning
     if cn_pipe is not None and cn_images:
