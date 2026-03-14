@@ -799,6 +799,16 @@ CONTROLNET_CONFIGS = {
         "pipeline_class": "QwenImageControlNetPipeline",
         "modes": QWEN_IMAGE_CONTROLNET_MODES,
     },
+    "zimage_turbo": {
+        "model_class": "ZImageControlNetModel",
+        "pipeline_class": "ZImageControlNetPipeline",
+        "modes": ZIMAGE_CONTROLNET_MODES,
+    },
+    "zimage": {
+        "model_class": "ZImageControlNetModel",
+        "pipeline_class": "ZImageControlNetPipeline",
+        "modes": ZIMAGE_CONTROLNET_MODES,
+    },
 }
 
 
@@ -815,6 +825,8 @@ def _resolve_controlnet_path(arch: str) -> str | None:
         "flux_schnell": "flux-dev-controlnet-union",
         "sdxl": "sdxl-controlnet-union",
         "qwen_image": "qwen-image-controlnet-union",
+        "zimage_turbo": "z-image-turbo-controlnet-union",
+        "zimage": "z-image-turbo-controlnet-union",
     }
     manifest_id = manifest_ids.get(arch)
     if manifest_id:
@@ -835,10 +847,10 @@ def _load_controlnet(
 ) -> tuple:
     """Load ControlNet model and prepare control images.
 
-    Returns (controlnet_model, control_images, scales, end_values).
+    Returns (cn_pipeline, control_images, scales, end_values).
+    cn_pipeline is a new pipeline with controlnet attached, or None on failure.
     """
     import torch
-    from PIL import Image
 
     config = CONTROLNET_CONFIGS.get(arch)
     if not config:
@@ -857,35 +869,38 @@ def _load_controlnet(
         )
         return None, [], [], []
 
-    emitter.info(f"Loading ControlNet: {Path(model_path).name if '/' not in model_path else model_path}")
+    emitter.info(f"Loading ControlNet: {Path(model_path).name}")
 
     import diffusers
     cn_cls = getattr(diffusers, config["model_class"])
 
     dtype = torch.bfloat16
-    if hasattr(pipeline, "dtype"):
-        dtype = pipeline.dtype
-    elif hasattr(pipeline, "transformer") and hasattr(pipeline.transformer, "dtype"):
+    if hasattr(pipeline, "transformer") and hasattr(pipeline.transformer, "dtype"):
         dtype = pipeline.transformer.dtype
 
-    cn_model = cn_cls.from_pretrained(
-        model_path,
-        torch_dtype=dtype,
-    )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    cn_model = cn_model.to(device)
+    # Load ControlNet weights — single file or pretrained directory
+    # Load to CPU first to avoid OOM, then let cpu_offload manage devices
+    try:
+        if model_path.endswith(".safetensors"):
+            cn_model = cn_cls.from_single_file(model_path, torch_dtype=dtype)
+        else:
+            cn_model = cn_cls.from_pretrained(model_path, torch_dtype=dtype)
+    except Exception as exc:
+        emitter.warning(
+            "CONTROLNET_LOAD_FAILED",
+            f"Failed to load ControlNet: {exc}. Generating without ControlNet.",
+        )
+        return None, [], [], []
 
-    # Create ControlNet pipeline
+    # Create ControlNet pipeline via from_pipe — keep CN on CPU for now
     cn_pipe_cls = getattr(diffusers, config["pipeline_class"])
     cn_pipe = cn_pipe_cls.from_pipe(pipeline, controlnet=cn_model)
 
-    # Replace the pipeline reference in the caller's context
-    # We modify the pipeline object in-place by swapping internals
-    # Actually, from_pipe returns a new pipeline, so we need to set it
-    # on the caller's pipe variable — but we can't do that from here.
-    # Instead, we'll attach the controlnet to the pipeline object.
-    pipeline.controlnet = cn_model
-
+    # Note: on 24GB cards with bf16 base models, transformer (~11.4GB) +
+    # text encoder (~7.5GB) + controlnet (~3.1GB) = ~22GB which leaves no
+    # room for activations. Works on 48GB+ GPUs. For 24GB cards, use fp8
+    # quantized base model variants.
+    # TODO: integrate with assemble_pipeline to enable CPU offload from the start
     emitter.info("ControlNet loaded")
 
     # Load control images
@@ -900,7 +915,7 @@ def _load_controlnet(
         scales.append(inp.get("strength", 0.75))
         end_values.append(inp.get("control_end", 0.8))
 
-    return cn_model, control_images, scales, end_values
+    return cn_pipe, control_images, scales, end_values
 
 
 def _resolve_control_modes(cn_types: list[str], arch: str) -> list[int] | None:
@@ -1060,6 +1075,10 @@ def run_generate_with_pipeline(
     if mask_path:
         mask_img = load_image(mask_path)
 
+    # Detect architecture early (needed for ControlNet/style-ref loading)
+    from .arch_config import detect_arch
+    arch = detect_arch(base_model_id)
+
     # ControlNet params
     cn_inputs = params.get("controlnet", [])
 
@@ -1074,14 +1093,16 @@ def run_generate_with_pipeline(
             cls_name = target_cls_name
 
     # Load ControlNet if requested
-    cn_model = None
+    cn_pipe = None
     cn_images = []
     cn_scales = []
     cn_end_values = []
     if cn_inputs:
-        cn_model, cn_images, cn_scales, cn_end_values = _load_controlnet(
+        cn_pipe, cn_images, cn_scales, cn_end_values = _load_controlnet(
             cn_inputs, base_model_id, arch, pipe, emitter
         )
+        if cn_pipe is not None:
+            pipe = cn_pipe  # Use the ControlNet-wrapped pipeline
 
     # Load style reference if requested
     style_inputs = params.get("style_ref", [])
@@ -1101,9 +1122,6 @@ def run_generate_with_pipeline(
         generator.manual_seed(seed)
 
     # Build inference kwargs — different pipelines accept different params
-    from .arch_config import detect_arch
-    arch = detect_arch(base_model_id)
-
     gen_kwargs = {
         "prompt": prompt,
         "num_inference_steps": steps,
@@ -1135,20 +1153,26 @@ def run_generate_with_pipeline(
             gen_kwargs["strength"] = strength  # Fill pipelines don't use strength
 
     # Add ControlNet conditioning
-    if cn_model is not None and cn_images:
+    if cn_pipe is not None and cn_images:
         control_image = cn_images[0] if len(cn_images) == 1 else cn_images
         gen_kwargs["control_image"] = control_image
         control_scale = cn_scales[0] if len(cn_scales) == 1 else cn_scales
         gen_kwargs["controlnet_conditioning_scale"] = control_scale
-        control_end = cn_end_values[0] if len(cn_end_values) == 1 else cn_end_values
-        gen_kwargs["control_guidance_end"] = control_end
 
-        # For union controlnets that use mode indices, set control_mode
-        cn_types = [inp.get("control_type", "canny") for inp in cn_inputs]
-        control_modes = _resolve_control_modes(cn_types, arch)
-        if control_modes is not None:
-            cm = control_modes[0] if len(control_modes) == 1 else control_modes
-            gen_kwargs["control_mode"] = cm
+        # Check which optional kwargs the pipeline accepts
+        import inspect
+        pipe_params = set(inspect.signature(pipe.__call__).parameters.keys())
+
+        if "control_guidance_end" in pipe_params:
+            control_end = cn_end_values[0] if len(cn_end_values) == 1 else cn_end_values
+            gen_kwargs["control_guidance_end"] = control_end
+
+        if "control_mode" in pipe_params:
+            cn_types = [inp.get("control_type", "canny") for inp in cn_inputs]
+            control_modes = _resolve_control_modes(cn_types, arch)
+            if control_modes is not None:
+                cm = control_modes[0] if len(control_modes) == 1 else control_modes
+                gen_kwargs["control_mode"] = cm
 
     # Add style reference images to generation kwargs
     if style_images and style_mechanism == "ip-adapter":
