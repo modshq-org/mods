@@ -389,6 +389,30 @@ pub struct GenerateParams {
     /// Denoising strength for img2img (0.0 = no change, 1.0 = full denoise)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<f32>,
+    /// ControlNet inputs
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controlnet: Vec<ControlNetInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlNetInput {
+    /// Path to the control image
+    pub image: String,
+    /// Control type: canny, depth, pose, softedge, scribble, hed, mlsd, gray, normal
+    pub control_type: String,
+    /// Conditioning strength (0.0-1.5, default 0.75)
+    #[serde(default = "default_cn_strength")]
+    pub strength: f32,
+    /// Stop applying control at this fraction of total steps (0.0-1.0)
+    #[serde(default = "default_cn_end")]
+    pub control_end: f32,
+}
+
+fn default_cn_strength() -> f32 {
+    0.75
+}
+fn default_cn_end() -> f32 {
+    0.8
 }
 
 // ---------------------------------------------------------------------------

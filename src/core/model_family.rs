@@ -690,6 +690,116 @@ pub fn validate_mode(model_id: &str, mode: &str) -> Result<(), String> {
     ))
 }
 
+// ---------------------------------------------------------------------------
+// ControlNet support metadata
+// ---------------------------------------------------------------------------
+
+/// Describes ControlNet availability for a base model.
+#[allow(dead_code)]
+pub struct ControlNetSupport {
+    pub base_model_id: &'static str,
+    /// Registry manifest ID for the ControlNet weights
+    pub manifest_id: &'static str,
+    /// Control types this ControlNet supports
+    pub supported_types: &'static [&'static str],
+    /// Default conditioning strength
+    pub default_strength: f32,
+    /// Default control end fraction
+    pub default_end: f32,
+    /// Recommended minimum steps when using ControlNet
+    pub recommended_min_steps: u32,
+}
+
+pub static CONTROLNET_SUPPORT: &[ControlNetSupport] = &[
+    ControlNetSupport {
+        base_model_id: "z-image-turbo",
+        manifest_id: "z-image-turbo-controlnet-union",
+        supported_types: &["canny", "hed", "depth", "pose", "mlsd", "scribble", "gray"],
+        default_strength: 0.75,
+        default_end: 0.8,
+        recommended_min_steps: 8,
+    },
+    ControlNetSupport {
+        base_model_id: "flux-dev",
+        manifest_id: "flux-dev-controlnet-union",
+        supported_types: &["canny", "depth", "pose", "softedge", "gray"],
+        default_strength: 0.7,
+        default_end: 0.8,
+        recommended_min_steps: 28,
+    },
+    ControlNetSupport {
+        base_model_id: "qwen-image",
+        manifest_id: "qwen-image-controlnet-union",
+        supported_types: &["canny", "depth", "pose", "softedge"],
+        default_strength: 0.8,
+        default_end: 1.0,
+        recommended_min_steps: 25,
+    },
+    ControlNetSupport {
+        base_model_id: "sdxl",
+        manifest_id: "sdxl-controlnet-union",
+        supported_types: &[
+            "canny", "depth", "pose", "softedge", "tile", "scribble", "hed", "mlsd", "normal",
+        ],
+        default_strength: 0.75,
+        default_end: 1.0,
+        recommended_min_steps: 28,
+    },
+    ControlNetSupport {
+        base_model_id: "flux2-dev",
+        manifest_id: "flux-2-dev-controlnet-union",
+        supported_types: &["canny", "depth", "pose", "hed", "mlsd"],
+        default_strength: 0.7,
+        default_end: 0.8,
+        recommended_min_steps: 28,
+    },
+];
+
+/// Find ControlNet support for a base model.
+pub fn controlnet_support(model_id: &str) -> Option<&'static ControlNetSupport> {
+    let resolved = resolve_model(model_id)?;
+    CONTROLNET_SUPPORT
+        .iter()
+        .find(|c| c.base_model_id == resolved.id)
+}
+
+/// Validate that a model supports ControlNet with a specific control type.
+/// Returns Ok(()) or an error message with suggestions.
+pub fn validate_controlnet(model_id: &str, control_type: &str) -> Result<(), String> {
+    let resolved = match resolve_model(model_id) {
+        Some(m) => m,
+        None => return Ok(()), // unknown model, let worker handle it
+    };
+
+    let support = match CONTROLNET_SUPPORT
+        .iter()
+        .find(|c| c.base_model_id == resolved.id)
+    {
+        Some(s) => s,
+        None => {
+            // Find models that DO have ControlNet
+            let alternatives: Vec<&str> =
+                CONTROLNET_SUPPORT.iter().map(|c| c.base_model_id).collect();
+            return Err(format!(
+                "{} does not have ControlNet support. Models with ControlNet: {}",
+                resolved.name,
+                alternatives.join(", ")
+            ));
+        }
+    };
+
+    if !support.supported_types.contains(&control_type) {
+        return Err(format!(
+            "{} ControlNet does not support '{}'. Supported types: {}",
+            resolved.name,
+            control_type,
+            support.supported_types.join(", ")
+        ));
+    }
+
+    Ok(())
+}
+
 /// List all models that support a given capability.
 #[allow(dead_code)]
 pub fn models_with_capability(capability: &str) -> Vec<&'static ModelInfo> {

@@ -751,6 +751,176 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
     return run_generate_with_pipeline(spec, emitter, pipe, cls_name)
 
 
+# ---------------------------------------------------------------------------
+# ControlNet support
+# ---------------------------------------------------------------------------
+
+# Control type → mode index for union controlnets
+# These indices map to the mode embedding in union ControlNet weights
+FLUX_CONTROLNET_MODES = {
+    "canny": 0, "tile": 1, "depth": 2, "blur": 3,
+    "pose": 4, "gray": 5, "softedge": 5,
+}
+
+SDXL_CONTROLNET_MODES = {
+    "canny": 0, "tile": 1, "depth": 2, "blur": 3,
+    "pose": 4, "gray": 5, "softedge": 5, "normal": 6,
+    "scribble": 6, "hed": 6, "mlsd": 7,
+}
+
+ZIMAGE_CONTROLNET_MODES = {
+    "canny": 0, "hed": 1, "depth": 2, "pose": 3,
+    "mlsd": 4, "scribble": 5, "gray": 6,
+}
+
+QWEN_IMAGE_CONTROLNET_MODES = {
+    "canny": 0, "depth": 1, "pose": 2, "softedge": 3,
+}
+
+
+# ControlNet model paths indexed by (arch_key, manifest_id)
+# Maps to HuggingFace repos — resolved from installed store paths at runtime
+CONTROLNET_CONFIGS = {
+    "flux": {
+        "repo": "Shakker-Labs/FLUX.1-dev-ControlNet-Union-Pro-2.0",
+        "model_class": "FluxControlNetModel",
+        "pipeline_class": "FluxControlNetPipeline",
+        "modes": FLUX_CONTROLNET_MODES,
+    },
+    "sdxl": {
+        "repo": "xinsir/controlnet-union-sdxl-1.0",
+        "model_class": "ControlNetModel",
+        "pipeline_class": "StableDiffusionXLControlNetPipeline",
+        "modes": SDXL_CONTROLNET_MODES,
+    },
+    "qwen_image": {
+        "repo": "InstantX/Qwen-Image-ControlNet-Union",
+        "model_class": "QwenImageControlNetModel",
+        "pipeline_class": "QwenImageControlNetPipeline",
+        "modes": QWEN_IMAGE_CONTROLNET_MODES,
+    },
+}
+
+
+def _resolve_controlnet_path(arch: str) -> str | None:
+    """Resolve installed ControlNet path from modl store, fallback to HF repo."""
+    config = CONTROLNET_CONFIGS.get(arch)
+    if not config:
+        return None
+
+    # Try to find installed controlnet from modl's SQLite DB
+    from .arch_config import _get_installed_path
+    manifest_ids = {
+        "flux": "flux-dev-controlnet-union",
+        "flux_schnell": "flux-dev-controlnet-union",
+        "sdxl": "sdxl-controlnet-union",
+        "qwen_image": "qwen-image-controlnet-union",
+    }
+    manifest_id = manifest_ids.get(arch)
+    if manifest_id:
+        path = _get_installed_path(manifest_id)
+        if path:
+            return path
+
+    # Fallback to HuggingFace repo (will download)
+    return config["repo"]
+
+
+def _load_controlnet(
+    cn_inputs: list[dict],
+    base_model_id: str,
+    arch: str,
+    pipeline: object,
+    emitter: EventEmitter,
+) -> tuple:
+    """Load ControlNet model and prepare control images.
+
+    Returns (controlnet_model, control_images, scales, end_values).
+    """
+    import torch
+    from PIL import Image
+
+    config = CONTROLNET_CONFIGS.get(arch)
+    if not config:
+        emitter.warning(
+            "CONTROLNET_NOT_SUPPORTED",
+            f"ControlNet not supported for architecture '{arch}'. Generating without ControlNet.",
+        )
+        return None, [], [], []
+
+    # Load ControlNet model
+    model_path = _resolve_controlnet_path(arch)
+    if not model_path:
+        emitter.warning(
+            "CONTROLNET_NOT_FOUND",
+            f"ControlNet weights not found for {arch}. Generating without ControlNet.",
+        )
+        return None, [], [], []
+
+    emitter.info(f"Loading ControlNet: {Path(model_path).name if '/' not in model_path else model_path}")
+
+    import diffusers
+    cn_cls = getattr(diffusers, config["model_class"])
+
+    dtype = torch.bfloat16
+    if hasattr(pipeline, "dtype"):
+        dtype = pipeline.dtype
+    elif hasattr(pipeline, "transformer") and hasattr(pipeline.transformer, "dtype"):
+        dtype = pipeline.transformer.dtype
+
+    cn_model = cn_cls.from_pretrained(
+        model_path,
+        torch_dtype=dtype,
+    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    cn_model = cn_model.to(device)
+
+    # Create ControlNet pipeline
+    cn_pipe_cls = getattr(diffusers, config["pipeline_class"])
+    cn_pipe = cn_pipe_cls.from_pipe(pipeline, controlnet=cn_model)
+
+    # Replace the pipeline reference in the caller's context
+    # We modify the pipeline object in-place by swapping internals
+    # Actually, from_pipe returns a new pipeline, so we need to set it
+    # on the caller's pipe variable — but we can't do that from here.
+    # Instead, we'll attach the controlnet to the pipeline object.
+    pipeline.controlnet = cn_model
+
+    emitter.info("ControlNet loaded")
+
+    # Load control images
+    from modl_worker.image_util import load_image as _load_img
+
+    control_images = []
+    scales = []
+    end_values = []
+    for inp in cn_inputs:
+        img = _load_img(inp["image"])
+        control_images.append(img)
+        scales.append(inp.get("strength", 0.75))
+        end_values.append(inp.get("control_end", 0.8))
+
+    return cn_model, control_images, scales, end_values
+
+
+def _resolve_control_modes(cn_types: list[str], arch: str) -> list[int] | None:
+    """Map control type names to mode indices for union controlnets."""
+    config = CONTROLNET_CONFIGS.get(arch)
+    if not config or "modes" not in config:
+        return None
+
+    modes = config["modes"]
+    result = []
+    for ct in cn_types:
+        mode_idx = modes.get(ct)
+        if mode_idx is not None:
+            result.append(mode_idx)
+        else:
+            # Unknown type — return None to skip mode setting
+            return None
+    return result
+
+
 def run_generate_with_pipeline(
     spec: dict,
     emitter: EventEmitter,
@@ -816,6 +986,9 @@ def run_generate_with_pipeline(
     if mask_path:
         mask_img = load_image(mask_path)
 
+    # ControlNet params
+    cn_inputs = params.get("controlnet", [])
+
     # Switch pipeline if needed for img2img/inpaint via from_pipe()
     pipe = pipeline
     if mode != "txt2img":
@@ -825,6 +998,16 @@ def run_generate_with_pipeline(
             TargetClass = _get_pipeline(target_cls_name)
             pipe = TargetClass.from_pipe(pipeline)
             cls_name = target_cls_name
+
+    # Load ControlNet if requested
+    cn_model = None
+    cn_images = []
+    cn_scales = []
+    cn_end_values = []
+    if cn_inputs:
+        cn_model, cn_images, cn_scales, cn_end_values = _load_controlnet(
+            cn_inputs, base_model_id, arch, pipe, emitter
+        )
 
     output_dir = output_info.get("output_dir", ".")
     os.makedirs(output_dir, exist_ok=True)
@@ -866,6 +1049,23 @@ def run_generate_with_pipeline(
         gen_kwargs["height"] = height
         if not is_flux_fill:
             gen_kwargs["strength"] = strength  # Fill pipelines don't use strength
+
+    # Add ControlNet conditioning
+    if cn_model is not None and cn_images:
+        control_image = cn_images[0] if len(cn_images) == 1 else cn_images
+        gen_kwargs["control_image"] = control_image
+        control_scale = cn_scales[0] if len(cn_scales) == 1 else cn_scales
+        gen_kwargs["controlnet_conditioning_scale"] = control_scale
+        control_end = cn_end_values[0] if len(cn_end_values) == 1 else cn_end_values
+        gen_kwargs["control_guidance_end"] = control_end
+
+        # For union controlnets that use mode indices, set control_mode
+        cn_types = [inp.get("control_type", "canny") for inp in cn_inputs]
+        control_modes = _resolve_control_modes(cn_types, arch)
+        if control_modes is not None:
+            cm = control_modes[0] if len(control_modes) == 1 else control_modes
+            gen_kwargs["control_mode"] = cm
+
     artifact_paths = []
 
     for i in range(count):

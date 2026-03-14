@@ -470,6 +470,18 @@ pub enum Commands {
         /// Denoising strength for img2img (0.0-1.0, default: 0.75)
         #[arg(long)]
         strength: Option<f32>,
+        /// Control image for ControlNet conditioning (can be repeated up to 2x)
+        #[arg(long)]
+        controlnet: Vec<String>,
+        /// ControlNet conditioning strength (comma-separated if multiple)
+        #[arg(long, default_value = "0.75")]
+        cn_strength: String,
+        /// Stop applying ControlNet at this fraction of total steps (comma-separated)
+        #[arg(long, default_value = "0.8")]
+        cn_end: String,
+        /// ControlNet type: canny, depth, pose, softedge, scribble, hed, mlsd, gray, normal (auto-detected from filename if omitted)
+        #[arg(long)]
+        cn_type: Option<String>,
         /// Use Lightning distillation LoRA for faster generation (fewer steps)
         #[arg(long)]
         fast: bool,
@@ -993,6 +1005,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             init_image,
             mask,
             strength,
+            controlnet,
+            cn_strength,
+            cn_end,
+            cn_type,
             fast,
             cloud,
             provider,
@@ -1012,6 +1028,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                 init_image: init_image.as_deref(),
                 mask: mask.as_deref(),
                 strength,
+                controlnet: &controlnet,
+                cn_strength: &cn_strength,
+                cn_end: &cn_end,
+                cn_type: cn_type.as_deref(),
                 fast,
                 cloud,
                 provider,
