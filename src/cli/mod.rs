@@ -24,6 +24,7 @@ mod list;
 mod llm;
 mod outputs;
 mod popular;
+mod preprocess;
 mod remove_bg;
 mod runtime;
 mod score;
@@ -699,6 +700,13 @@ pub enum Commands {
         json: bool,
     },
 
+    /// Extract control images from an image (canny, depth, pose, softedge, scribble)
+    Preprocess {
+        /// Preprocessing method
+        #[command(subcommand)]
+        command: preprocess::PreprocessMethod,
+    },
+
     /// Manage datasets for training
     #[command(after_help = DATASET_EXAMPLES)]
     Dataset {
@@ -1117,6 +1125,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             output,
             json,
         } => upscale::run(&paths, output.as_deref(), scale, &model, json).await,
+        Commands::Preprocess { command } => preprocess::run(command).await,
         Commands::Dataset { command } => datasets::run(command).await,
         Commands::Runtime { command } => runtime::run(command).await,
         Commands::Doctor {
