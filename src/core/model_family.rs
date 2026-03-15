@@ -761,14 +761,8 @@ pub static CONTROLNET_SUPPORT: &[ControlNetSupport] = &[
         default_end: 0.8,
         recommended_min_steps: 20,
     },
-    ControlNetSupport {
-        base_model_id: "flux2-dev",
-        manifest_id: "flux-2-dev-controlnet-union",
-        supported_types: &["canny", "depth", "pose", "hed", "mlsd"],
-        default_strength: 0.7,
-        default_end: 0.8,
-        recommended_min_steps: 28,
-    },
+    // flux2-dev: ControlNet exists (alibaba-pai) but requires VideoX-Fun
+    // pipeline not yet in diffusers. Defer until Flux2ControlNetPipeline lands.
 ];
 
 /// Find ControlNet support for a base model.
