@@ -6,6 +6,7 @@
 use anyhow::{Result, bail};
 
 use crate::core::db::Database;
+use crate::core::model_family;
 use crate::core::runtime;
 
 /// Check that the training runtime is installed and bootstrapped.
@@ -35,28 +36,46 @@ pub fn check_base_model(base_model_id: &str) -> Result<()> {
     }
 
     let db = Database::open()?;
-    if !db.is_installed(base_model_id)? {
-        // Base variant (e.g. "flux2-klein-base-4b") shares components with
-        // its distilled parent ("flux2-klein-4b"). The Python worker resolves
-        // the transformer via MODEL_REGISTRY / HF hub, so allow training if
-        // the parent model is installed.
-        let parent_id = base_model_id.replace("-base", "");
-        if parent_id != base_model_id && db.is_installed(&parent_id)? {
+
+    // Try exact match first
+    if db.is_installed(base_model_id)? {
+        return Ok(());
+    }
+
+    // Try model_family alias resolution (e.g. "sdxl" → "sdxl-base-1.0")
+    if let Some(family_info) = model_family::resolve_model(base_model_id) {
+        let installed = db.list_installed(None)?;
+        let gen_types = ["checkpoint", "diffusion_model"];
+        let found = installed.iter().any(|m| {
+            gen_types.contains(&m.asset_type.as_str())
+                && (m.id == family_info.id
+                    || m.id.contains(family_info.id)
+                    || family_info.id.contains(&*m.id))
+        });
+        if found {
             return Ok(());
         }
-
-        bail!(
-            "Base model '{}' is not installed.\n\n\
-             Pull it first:\n\n  \
-             modl model pull {}\n\n\
-             Or see available models:\n\n  \
-             modl model search \"{}\"",
-            base_model_id,
-            base_model_id,
-            base_model_id.split('-').next().unwrap_or(base_model_id)
-        );
     }
-    Ok(())
+
+    // Base variant (e.g. "flux2-klein-base-4b") shares components with
+    // its distilled parent ("flux2-klein-4b"). The Python worker resolves
+    // the transformer via MODEL_REGISTRY / HF hub, so allow training if
+    // the parent model is installed.
+    let parent_id = base_model_id.replace("-base", "");
+    if parent_id != base_model_id && db.is_installed(&parent_id)? {
+        return Ok(());
+    }
+
+    bail!(
+        "Base model '{}' is not installed.\n\n\
+         Pull it first:\n\n  \
+         modl pull {}\n\n\
+         Or see available models:\n\n  \
+         modl search \"{}\"",
+        base_model_id,
+        base_model_id,
+        base_model_id.split('-').next().unwrap_or(base_model_id)
+    )
 }
 
 /// Check that auth is configured for providers that require it.

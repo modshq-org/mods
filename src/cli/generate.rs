@@ -113,30 +113,42 @@ fn default_guidance(base_model: &str) -> f32 {
     model_family::model_defaults(base_model).1
 }
 
-/// Resolve base model path from installed models (match by ID or display name).
+/// Resolve base model path from installed models (match by ID, display name, or family alias).
 fn resolve_base_model_path(base_model: &str, db: &Database) -> Option<String> {
     let installed = db.list_installed(None).ok()?;
+    let gen_types = ["checkpoint", "diffusion_model"];
+
+    // Exact match by ID or display name
     for model in &installed {
         if (model.name == base_model || model.id == base_model)
-            && (model.asset_type == "checkpoint" || model.asset_type == "diffusion_model")
+            && gen_types.contains(&model.asset_type.as_str())
         {
             return Some(model.store_path.clone());
         }
     }
+
+    // Fuzzy match via model_family (e.g. "sdxl" → "sdxl-base-1.0")
+    if let Some(family_info) = model_family::resolve_model(base_model) {
+        let family_id = family_info.id;
+        for model in &installed {
+            if gen_types.contains(&model.asset_type.as_str()) {
+                // Match if the installed model's ID contains the family ID or vice versa
+                if model.id == family_id
+                    || model.id.contains(family_id)
+                    || family_id.contains(&*model.id)
+                {
+                    return Some(model.store_path.clone());
+                }
+            }
+        }
+    }
+
     None
 }
 
 /// Check if a model ID is installed in the DB.
 fn is_model_installed(model_id: &str, db: &Database) -> bool {
-    db.list_installed(None)
-        .ok()
-        .map(|models| {
-            models.iter().any(|m| {
-                (m.id == model_id || m.name == model_id)
-                    && (m.asset_type == "checkpoint" || m.asset_type == "diffusion_model")
-            })
-        })
-        .unwrap_or(false)
+    resolve_base_model_path(model_id, db).is_some()
 }
 
 /// Smart inpaint routing: prefer dedicated fill models over generic Flux inpainting.
