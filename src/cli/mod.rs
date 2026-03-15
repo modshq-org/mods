@@ -22,6 +22,7 @@ mod install;
 mod link;
 mod list;
 mod llm;
+mod mcp;
 mod outputs;
 mod popular;
 mod preprocess;
@@ -848,6 +849,13 @@ pub enum Commands {
         command: runtime::RuntimeCommands,
     },
 
+    /// Start MCP (Model Context Protocol) server for AI assistant integration
+    Mcp {
+        /// Port of the modl API server to connect to (default: 3333)
+        #[arg(long)]
+        port: Option<u16>,
+    },
+
     /// Dump CLI schema as JSON
     #[command(hide = true)]
     CliSchema,
@@ -1201,6 +1209,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
         }
         Commands::Upgrade => upgrade::run().await,
+        Commands::Mcp { port } => mcp::run(port).await,
         Commands::CliSchema => {
             dump_cli_schema();
             Ok(())
