@@ -121,7 +121,7 @@ class ModelCache:
         but LoRA changed). Supports mode switching (txt2img -> img2img ->
         inpaint) via from_pipe(), caching each mode variant.
         """
-        from modl_worker.adapters.gen_adapter import (
+        from modl_worker.adapters.pipeline_loader import (
             _resolve_pipeline_class,
             _get_pipeline,
             load_pipeline,
@@ -458,7 +458,7 @@ class WorkerDaemon:
                 emitter = SocketEventEmitter(conn, job_id="control")
                 self.cache.evict_all(emitter)  # TODO: evict specific model
             self._send_ok(conn, "evicted")
-        elif action in ("score", "detect", "compare", "segment", "face-restore", "upscale", "remove-bg"):
+        elif action in ("score", "detect", "compare", "segment", "face-restore", "upscale", "remove-bg", "preprocess"):
             self._handle_analysis(conn, request, action)
         elif action == "ping":
             self._send_ok(conn, "pong")
@@ -536,7 +536,8 @@ class WorkerDaemon:
 
             # Dispatch to the right adapter
             from modl_worker.adapters import (
-                run_score, run_detect, run_compare, run_segment, run_face_restore, run_upscale, run_remove_bg
+                run_score, run_detect, run_compare, run_segment, run_face_restore, run_upscale, run_remove_bg,
+                run_preprocess,
             )
 
             adapter_map = {
@@ -547,6 +548,7 @@ class WorkerDaemon:
                 "face-restore": run_face_restore,
                 "upscale": run_upscale,
                 "remove-bg": run_remove_bg,
+                "preprocess": run_preprocess,
             }
 
             adapter_fn = adapter_map[action]

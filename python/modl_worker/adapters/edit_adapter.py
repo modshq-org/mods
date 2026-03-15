@@ -97,15 +97,31 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
     if seed is not None:
         generator.manual_seed(seed)
 
-    # Build inference kwargs for QwenImageEditPlusPipeline
-    gen_kwargs = {
-        "image": source_images if len(source_images) > 1 else source_images[0],
-        "prompt": prompt,
-        "true_cfg_scale": guidance,
-        "negative_prompt": " ",
-        "num_inference_steps": steps,
-        "generator": generator,
-    }
+    # Build inference kwargs — different pipelines need different params
+    from .arch_config import detect_arch
+    arch = detect_arch(base_model_id)
+
+    if arch in ("flux2_klein", "flux2_klein_9b"):
+        # Klein: native image editing via the `image` parameter.
+        # No guidance (distilled), no negative prompt.
+        gen_kwargs = {
+            "image": source_images[0],
+            "prompt": prompt,
+            "num_inference_steps": steps,
+            "height": source_images[0].size[1],
+            "width": source_images[0].size[0],
+            "generator": generator,
+        }
+    else:
+        # Qwen-Image-Edit: instruction-based editing with true CFG.
+        gen_kwargs = {
+            "image": source_images if len(source_images) > 1 else source_images[0],
+            "prompt": prompt,
+            "true_cfg_scale": guidance,
+            "negative_prompt": " ",
+            "num_inference_steps": steps,
+            "generator": generator,
+        }
 
     artifact_paths = []
 
@@ -231,7 +247,7 @@ def _apply_lora(pipeline, spec: dict, emitter: EventEmitter) -> None:
 def _load_edit_pipeline(base_model_id: str, base_model_path: str | None, emitter: EventEmitter):
     """Load the edit pipeline for the given model."""
     from .arch_config import resolve_pipeline_class
-    from .gen_adapter import load_pipeline
+    from .pipeline_loader import load_pipeline
 
     cls_name = resolve_pipeline_class(base_model_id)
     return load_pipeline(base_model_id, base_model_path, cls_name, emitter)

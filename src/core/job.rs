@@ -264,6 +264,64 @@ fn default_upscale_scale() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreprocessJobSpec {
+    pub image_paths: Vec<String>,
+    pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
+    /// Canny low threshold
+    #[serde(default = "default_canny_low")]
+    pub canny_low: u32,
+    /// Canny high threshold
+    #[serde(default = "default_canny_high")]
+    pub canny_high: u32,
+    /// Depth model variant: small, base, large
+    #[serde(default = "default_depth_model")]
+    pub depth_model: String,
+    /// Scribble binary threshold
+    #[serde(default = "default_scribble_threshold")]
+    pub scribble_threshold: u32,
+    /// Include hands in pose detection
+    #[serde(default = "default_true")]
+    pub include_hands: bool,
+    /// Include face landmarks in pose detection
+    #[serde(default = "default_true")]
+    pub include_face: bool,
+}
+
+impl Default for PreprocessJobSpec {
+    fn default() -> Self {
+        Self {
+            image_paths: Vec::new(),
+            method: "canny".to_string(),
+            output_dir: None,
+            canny_low: default_canny_low(),
+            canny_high: default_canny_high(),
+            depth_model: default_depth_model(),
+            scribble_threshold: default_scribble_threshold(),
+            include_hands: true,
+            include_face: true,
+        }
+    }
+}
+
+fn default_canny_low() -> u32 {
+    100
+}
+fn default_canny_high() -> u32 {
+    200
+}
+fn default_depth_model() -> String {
+    "small".to_string()
+}
+fn default_scribble_threshold() -> u32 {
+    128
+}
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoveBgJobSpec {
     pub image_paths: Vec<String>,
     pub output_dir: String,
@@ -331,6 +389,52 @@ pub struct GenerateParams {
     /// Denoising strength for img2img (0.0 = no change, 1.0 = full denoise)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<f32>,
+    /// ControlNet inputs
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controlnet: Vec<ControlNetInput>,
+    /// Style reference inputs (IP-Adapter or native multi-ref)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub style_ref: Vec<StyleRefInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StyleRefInput {
+    /// Path to the reference image
+    pub image: String,
+    /// How strongly the reference influences output (0.0-1.0)
+    #[serde(default = "default_style_strength")]
+    pub strength: f32,
+    /// Style type: style, face, content (SDXL IP-Adapter only)
+    #[serde(default = "default_style_type")]
+    pub style_type: String,
+}
+
+fn default_style_strength() -> f32 {
+    0.6
+}
+fn default_style_type() -> String {
+    "style".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlNetInput {
+    /// Path to the control image
+    pub image: String,
+    /// Control type: canny, depth, pose, softedge, scribble, hed, mlsd, gray, normal
+    pub control_type: String,
+    /// Conditioning strength (0.0-1.5, default 0.75)
+    #[serde(default = "default_cn_strength")]
+    pub strength: f32,
+    /// Stop applying control at this fraction of total steps (0.0-1.0)
+    #[serde(default = "default_cn_end")]
+    pub control_end: f32,
+}
+
+fn default_cn_strength() -> f32 {
+    0.75
+}
+fn default_cn_end() -> f32 {
+    0.8
 }
 
 // ---------------------------------------------------------------------------

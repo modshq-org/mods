@@ -277,7 +277,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     txt2img: true,
                     img2img: false,
                     inpaint: false,
-                    edit: false,
+                    edit: true,
                     lora: true,
                     training: true,
                 },
@@ -303,7 +303,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     txt2img: true,
                     img2img: false,
                     inpaint: false,
-                    edit: false,
+                    edit: true,
                     lora: true,
                     training: true,
                 },
@@ -687,6 +687,204 @@ pub fn validate_mode(model_id: &str, mode: &str) -> Result<(), String> {
         } else {
             alternatives.join(", ")
         }
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// ControlNet support metadata
+// ---------------------------------------------------------------------------
+
+/// Describes ControlNet availability for a base model.
+#[allow(dead_code)]
+pub struct ControlNetSupport {
+    pub base_model_id: &'static str,
+    /// Registry manifest ID for the ControlNet weights
+    pub manifest_id: &'static str,
+    /// Control types this ControlNet supports
+    pub supported_types: &'static [&'static str],
+    /// Default conditioning strength
+    pub default_strength: f32,
+    /// Default control end fraction
+    pub default_end: f32,
+    /// Recommended minimum steps when using ControlNet
+    pub recommended_min_steps: u32,
+}
+
+pub static CONTROLNET_SUPPORT: &[ControlNetSupport] = &[
+    ControlNetSupport {
+        base_model_id: "z-image-turbo",
+        manifest_id: "z-image-turbo-controlnet-union",
+        supported_types: &["canny", "hed", "depth", "pose", "mlsd", "scribble", "gray"],
+        default_strength: 0.6,
+        default_end: 0.8,
+        recommended_min_steps: 8,
+    },
+    ControlNetSupport {
+        base_model_id: "flux-dev",
+        manifest_id: "flux-dev-controlnet-union",
+        supported_types: &["canny", "depth", "pose", "softedge", "gray"],
+        default_strength: 0.7,
+        default_end: 0.8,
+        recommended_min_steps: 28,
+    },
+    ControlNetSupport {
+        base_model_id: "qwen-image",
+        manifest_id: "qwen-image-controlnet-union",
+        supported_types: &["canny", "depth", "pose", "softedge"],
+        default_strength: 0.8,
+        default_end: 1.0,
+        recommended_min_steps: 25,
+    },
+    ControlNetSupport {
+        base_model_id: "sdxl",
+        manifest_id: "sdxl-controlnet-union",
+        supported_types: &[
+            "canny", "depth", "pose", "softedge", "tile", "scribble", "hed", "mlsd", "normal",
+        ],
+        default_strength: 0.75,
+        default_end: 1.0,
+        recommended_min_steps: 28,
+    },
+    ControlNetSupport {
+        base_model_id: "flux-schnell",
+        manifest_id: "flux-dev-controlnet-union",
+        supported_types: &["canny", "depth", "pose", "softedge", "gray"],
+        default_strength: 0.7,
+        default_end: 0.8,
+        recommended_min_steps: 4,
+    },
+    ControlNetSupport {
+        base_model_id: "z-image",
+        manifest_id: "z-image-turbo-controlnet-union",
+        supported_types: &["canny", "hed", "depth", "pose", "mlsd", "scribble", "gray"],
+        default_strength: 0.6,
+        default_end: 0.8,
+        recommended_min_steps: 20,
+    },
+    // flux2-dev: ControlNet exists (alibaba-pai) but requires VideoX-Fun
+    // pipeline not yet in diffusers. Defer until Flux2ControlNetPipeline lands.
+];
+
+/// Find ControlNet support for a base model.
+pub fn controlnet_support(model_id: &str) -> Option<&'static ControlNetSupport> {
+    let resolved = resolve_model(model_id)?;
+    CONTROLNET_SUPPORT
+        .iter()
+        .find(|c| c.base_model_id == resolved.id)
+}
+
+/// Validate that a model supports ControlNet with a specific control type.
+/// Returns Ok(()) or an error message with suggestions.
+pub fn validate_controlnet(model_id: &str, control_type: &str) -> Result<(), String> {
+    let resolved = match resolve_model(model_id) {
+        Some(m) => m,
+        None => return Ok(()), // unknown model, let worker handle it
+    };
+
+    let support = match CONTROLNET_SUPPORT
+        .iter()
+        .find(|c| c.base_model_id == resolved.id)
+    {
+        Some(s) => s,
+        None => {
+            // Find models that DO have ControlNet
+            let alternatives: Vec<&str> =
+                CONTROLNET_SUPPORT.iter().map(|c| c.base_model_id).collect();
+            return Err(format!(
+                "{} does not have ControlNet support. Models with ControlNet: {}",
+                resolved.name,
+                alternatives.join(", ")
+            ));
+        }
+    };
+
+    if !support.supported_types.contains(&control_type) {
+        return Err(format!(
+            "{} ControlNet does not support '{}'. Supported types: {}",
+            resolved.name,
+            control_type,
+            support.supported_types.join(", ")
+        ));
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Style reference / IP-Adapter support metadata
+// ---------------------------------------------------------------------------
+
+/// Describes style-ref availability for a base model.
+#[allow(dead_code)]
+pub struct StyleRefSupport {
+    pub base_model_id: &'static str,
+    /// "native" (built-in, e.g. Klein multi-ref) or "ip-adapter"
+    pub mechanism: &'static str,
+    /// Registry manifest ID for the IP-Adapter weights (None for native)
+    pub manifest_id: Option<&'static str>,
+    pub default_strength: f32,
+}
+
+pub static STYLE_REF_SUPPORT: &[StyleRefSupport] = &[
+    StyleRefSupport {
+        base_model_id: "flux2-klein-4b",
+        mechanism: "native",
+        manifest_id: None,
+        default_strength: 0.6,
+    },
+    StyleRefSupport {
+        base_model_id: "flux2-klein-9b",
+        mechanism: "native",
+        manifest_id: None,
+        default_strength: 0.6,
+    },
+    StyleRefSupport {
+        base_model_id: "sdxl",
+        mechanism: "ip-adapter",
+        manifest_id: Some("sdxl-ip-adapter"),
+        default_strength: 0.6,
+    },
+    StyleRefSupport {
+        base_model_id: "flux-dev",
+        mechanism: "ip-adapter",
+        manifest_id: Some("flux-dev-ip-adapter"),
+        default_strength: 0.5,
+    },
+];
+
+/// Find style-ref support for a base model.
+#[allow(dead_code)]
+pub fn style_ref_support(model_id: &str) -> Option<&'static StyleRefSupport> {
+    let resolved = resolve_model(model_id)?;
+    STYLE_REF_SUPPORT
+        .iter()
+        .find(|s| s.base_model_id == resolved.id)
+}
+
+/// Validate that a model supports --style-ref.
+/// Returns Ok(()) or an error message with suggestions.
+pub fn validate_style_ref(model_id: &str) -> Result<(), String> {
+    let resolved = match resolve_model(model_id) {
+        Some(m) => m,
+        None => return Ok(()),
+    };
+
+    if STYLE_REF_SUPPORT
+        .iter()
+        .any(|s| s.base_model_id == resolved.id)
+    {
+        return Ok(());
+    }
+
+    let alternatives: Vec<&str> = STYLE_REF_SUPPORT.iter().map(|s| s.base_model_id).collect();
+    Err(format!(
+        "{} does not support --style-ref (no IP-Adapter available).\n\n\
+         Alternatives:\n\
+         • Train a style LoRA: modl train --dataset <folder> --base {} --lora-type style\n\
+         • Use a model with style-ref support: {}",
+        resolved.name,
+        resolved.id,
+        alternatives.join(", ")
     ))
 }
 

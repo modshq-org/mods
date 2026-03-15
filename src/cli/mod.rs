@@ -24,6 +24,7 @@ mod list;
 mod llm;
 mod outputs;
 mod popular;
+mod preprocess;
 mod remove_bg;
 mod runtime;
 mod score;
@@ -469,6 +470,27 @@ pub enum Commands {
         /// Denoising strength for img2img (0.0-1.0, default: 0.75)
         #[arg(long)]
         strength: Option<f32>,
+        /// Control image for ControlNet conditioning (can be repeated up to 2x)
+        #[arg(long)]
+        controlnet: Vec<String>,
+        /// ControlNet conditioning strength (comma-separated if multiple)
+        #[arg(long, default_value = "0.75")]
+        cn_strength: String,
+        /// Stop applying ControlNet at this fraction of total steps (comma-separated)
+        #[arg(long, default_value = "0.8")]
+        cn_end: String,
+        /// ControlNet type: canny, depth, pose, softedge, scribble, hed, mlsd, gray, normal (auto-detected from filename if omitted)
+        #[arg(long)]
+        cn_type: Option<String>,
+        /// Style reference image (can be repeated; backend varies by model)
+        #[arg(long)]
+        style_ref: Vec<String>,
+        /// Style reference strength (0.0-1.0)
+        #[arg(long, default_value = "0.6")]
+        style_strength: f32,
+        /// Style type: style, face, content (SDXL IP-Adapter variants only)
+        #[arg(long)]
+        style_type: Option<String>,
         /// Use Lightning distillation LoRA for faster generation (fewer steps)
         #[arg(long)]
         fast: bool,
@@ -697,6 +719,13 @@ pub enum Commands {
         /// Output result as JSON
         #[arg(long)]
         json: bool,
+    },
+
+    /// Extract control images from an image (canny, depth, pose, softedge, scribble)
+    Preprocess {
+        /// Preprocessing method
+        #[command(subcommand)]
+        command: preprocess::PreprocessMethod,
     },
 
     /// Manage datasets for training
@@ -985,6 +1014,13 @@ pub async fn run(cli: Cli) -> Result<()> {
             init_image,
             mask,
             strength,
+            controlnet,
+            cn_strength,
+            cn_end,
+            cn_type,
+            style_ref,
+            style_strength,
+            style_type,
             fast,
             cloud,
             provider,
@@ -1004,6 +1040,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                 init_image: init_image.as_deref(),
                 mask: mask.as_deref(),
                 strength,
+                controlnet: &controlnet,
+                cn_strength: &cn_strength,
+                cn_end: &cn_end,
+                cn_type: cn_type.as_deref(),
+                style_ref: &style_ref,
+                style_strength,
+                style_type: style_type.as_deref(),
                 fast,
                 cloud,
                 provider,
@@ -1117,6 +1160,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             output,
             json,
         } => upscale::run(&paths, output.as_deref(), scale, &model, json).await,
+        Commands::Preprocess { command } => preprocess::run(command).await,
         Commands::Dataset { command } => datasets::run(command).await,
         Commands::Runtime { command } => runtime::run(command).await,
         Commands::Doctor {

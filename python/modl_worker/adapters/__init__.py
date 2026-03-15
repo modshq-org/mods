@@ -1,5 +1,6 @@
 from .train_adapter import run_train
 from .gen_adapter import run_generate, run_generate_with_pipeline
+from .pipeline_loader import load_pipeline  # noqa: F401
 from .edit_adapter import run_edit, run_edit_with_pipeline
 from .caption_adapter import run_caption
 from .resize_adapter import run_resize
@@ -15,6 +16,7 @@ from .face_crop_adapter import run_face_crop
 from .ground_adapter import run_ground
 from .describe_adapter import run_describe
 from .vl_tag_adapter import run_vl_tag
+from .preprocess_adapter import run_preprocess
 
 # Config building (used by train_adapter, available for testing)
 from .config_builder import spec_to_aitoolkit_config  # noqa: F401
@@ -25,4 +27,5 @@ __all__ = [
     "run_tag", "run_score", "run_detect", "run_compare",
     "run_segment", "run_face_restore", "run_upscale", "run_remove_bg",
     "run_face_crop", "run_ground", "run_describe", "run_vl_tag",
+    "run_preprocess",
 ]

@@ -10,6 +10,36 @@ use crate::core::job::*;
 use crate::core::model_family;
 use crate::core::preflight;
 
+/// Known control type suffixes for auto-detection from filenames.
+const CONTROL_SUFFIXES: &[(&str, &str)] = &[
+    ("_canny", "canny"),
+    ("_depth", "depth"),
+    ("_pose", "pose"),
+    ("_softedge", "softedge"),
+    ("_scribble", "scribble"),
+    ("_hed", "hed"),
+    ("_mlsd", "mlsd"),
+    ("_gray", "gray"),
+    ("_normal", "normal"),
+    ("_lineart", "lineart"),
+];
+
+/// Try to detect the control type from a filename suffix (e.g. "photo_depth.png" → "depth").
+fn detect_control_type_from_filename(path: &str) -> Option<String> {
+    let stem = PathBuf::from(path)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+
+    for &(suffix, control_type) in CONTROL_SUFFIXES {
+        if stem.ends_with(suffix) {
+            return Some(control_type.to_string());
+        }
+    }
+    None
+}
+
 /// Size presets: aspect ratio → (width, height)
 const SIZE_PRESETS: &[(&str, u32, u32)] = &[
     ("1:1", 1024, 1024),
@@ -158,6 +188,13 @@ pub struct GenerateArgs<'a> {
     pub init_image: Option<&'a str>,
     pub mask: Option<&'a str>,
     pub strength: Option<f32>,
+    pub controlnet: &'a [String],
+    pub cn_strength: &'a str,
+    pub cn_end: &'a str,
+    pub cn_type: Option<&'a str>,
+    pub style_ref: &'a [String],
+    pub style_strength: f32,
+    pub style_type: Option<&'a str>,
     pub fast: bool,
     pub cloud: bool,
     pub provider: Option<CloudProvider>,
@@ -182,6 +219,13 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         init_image,
         mask,
         strength,
+        controlnet,
+        cn_strength,
+        cn_end,
+        cn_type,
+        style_ref,
+        style_strength,
+        style_type,
         fast,
         cloud,
         provider,
@@ -296,6 +340,92 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     }
 
     // -------------------------------------------------------------------
+    // Validate and build ControlNet inputs
+    // -------------------------------------------------------------------
+    let cn_inputs = if !controlnet.is_empty() {
+        if controlnet.len() > 2 {
+            anyhow::bail!(
+                "Maximum 2 ControlNet inputs supported. You provided {}.",
+                controlnet.len()
+            );
+        }
+
+        // Parse comma-separated strengths/ends
+        let strengths: Vec<f32> = cn_strength
+            .split(',')
+            .map(|s| s.trim().parse::<f32>().unwrap_or(0.75))
+            .collect();
+        let ends: Vec<f32> = cn_end
+            .split(',')
+            .map(|s| s.trim().parse::<f32>().unwrap_or(0.8))
+            .collect();
+
+        let mut inputs = Vec::new();
+        for (i, cn_path) in controlnet.iter().enumerate() {
+            let path = PathBuf::from(cn_path);
+            if !path.exists() {
+                anyhow::bail!("ControlNet image not found: {cn_path}");
+            }
+
+            // Resolve control type: explicit flag > filename suffix > error
+            let control_type = if let Some(explicit) = cn_type {
+                explicit.to_string()
+            } else {
+                detect_control_type_from_filename(cn_path).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Could not auto-detect control type for '{}'. \
+                         Use --cn-type to specify. Options: canny, depth, pose, softedge, scribble, hed, mlsd, gray, normal",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    )
+                })?
+            };
+
+            // Validate this model + type combination
+            if let Err(msg) = model_family::validate_controlnet(&effective_model, &control_type) {
+                anyhow::bail!(msg);
+            }
+
+            inputs.push(ControlNetInput {
+                image: cn_path.clone(),
+                control_type,
+                strength: strengths.get(i).copied().unwrap_or(0.75),
+                control_end: ends.get(i).copied().unwrap_or(0.8),
+            });
+        }
+        inputs
+    } else {
+        Vec::new()
+    };
+
+    // -------------------------------------------------------------------
+    // Validate and build style-ref inputs
+    // -------------------------------------------------------------------
+    let style_inputs: Vec<StyleRefInput> = if !style_ref.is_empty() {
+        // Validate model supports style-ref
+        if let Err(msg) = model_family::validate_style_ref(&effective_model) {
+            anyhow::bail!(msg);
+        }
+
+        let style_type_str = style_type.unwrap_or("style").to_string();
+
+        style_ref
+            .iter()
+            .map(|path| {
+                if !PathBuf::from(path).exists() {
+                    anyhow::bail!("Style reference image not found: {path}");
+                }
+                Ok(StyleRefInput {
+                    image: path.clone(),
+                    strength: style_strength,
+                    style_type: style_type_str.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+
+    // -------------------------------------------------------------------
     // Build output directory: ~/.modl/outputs/<date>/
     // -------------------------------------------------------------------
     let date = chrono::Local::now().format("%Y-%m-%d");
@@ -308,12 +438,54 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     // Build spec
     // -------------------------------------------------------------------
     // --fast overrides defaults, but explicit --steps/--guidance wins
-    let steps = steps
+    let mut steps = steps
         .or(fast_steps)
         .unwrap_or_else(|| default_steps(&effective_model));
     let guidance = guidance
         .or(fast_guidance)
         .unwrap_or_else(|| default_guidance(&effective_model));
+
+    // ControlNet step adjustment: some models need more steps with ControlNet
+    let steps_adjusted = if !cn_inputs.is_empty() && args.steps.is_none() {
+        if let Some(cn_support) = model_family::controlnet_support(&effective_model) {
+            if steps < cn_support.recommended_min_steps {
+                let old_steps = steps;
+                steps = cn_support.recommended_min_steps;
+                if !json {
+                    println!(
+                        "  {} Adjusting steps: {} → {} (ControlNet requires more steps for {})",
+                        style("↳").dim(),
+                        old_steps,
+                        steps,
+                        effective_model,
+                    );
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else if !cn_inputs.is_empty() {
+        // User provided explicit --steps, warn if too low
+        if let Some(cn_support) = model_family::controlnet_support(&effective_model)
+            && steps < cn_support.recommended_min_steps
+            && !json
+        {
+            println!(
+                "  {} {} with ControlNet works best at {}+ steps (you set {})",
+                style("⚠").yellow(),
+                effective_model,
+                cn_support.recommended_min_steps,
+                steps,
+            );
+        }
+        false
+    } else {
+        false
+    };
+    let _ = steps_adjusted; // used in JSON output later
 
     let spec = GenerateJobSpec {
         prompt: prompt.to_string(),
@@ -335,6 +507,8 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
             init_image: init_image.map(|s| s.to_string()),
             mask: mask.map(|s| s.to_string()),
             strength,
+            controlnet: cn_inputs,
+            style_ref: style_inputs,
         },
         runtime: RuntimeRef {
             profile: "trainer-cu124".to_string(),
@@ -383,6 +557,40 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         }
         if let Some(path) = mask {
             println!("  Mask:   {}", path);
+        }
+        for (i, cn) in spec.params.controlnet.iter().enumerate() {
+            let label = if spec.params.controlnet.len() > 1 {
+                format!("CN {}:", i + 1)
+            } else {
+                "CN:".to_string()
+            };
+            println!(
+                "  {:<6} {} (type: {}, strength: {:.2}, end: {:.1})",
+                label,
+                PathBuf::from(&cn.image)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
+                cn.control_type,
+                cn.strength,
+                cn.control_end,
+            );
+        }
+        for (i, sr) in spec.params.style_ref.iter().enumerate() {
+            let label = if spec.params.style_ref.len() > 1 {
+                format!("Ref {}:", i + 1)
+            } else {
+                "Ref:".to_string()
+            };
+            println!(
+                "  {:<6} {} (strength: {:.2})",
+                label,
+                PathBuf::from(&sr.image)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
+                sr.strength,
+            );
         }
         println!("  Size:   {}×{}", width, height);
         println!("  Steps:  {}", steps);
