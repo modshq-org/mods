@@ -18,9 +18,6 @@ path = "src/main.rs"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
-# MCP (Model Context Protocol)
-rmcp = { version = "0.4", features = ["server", "transport-io"] }
-
 # Terminal UX
 indicatif = "0.17"
 console = "0.15"
