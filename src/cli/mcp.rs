@@ -251,18 +251,35 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .ok_or((-32602, "Missing required parameter: prompt".to_string()))?;
 
+        let model_id = args
+            .get("base")
+            .and_then(|v| v.as_str())
+            .ok_or((-32602, "Missing required parameter: base".to_string()))?;
+
+        // Parse size into width/height
+        let size_str = args.get("size").and_then(|v| v.as_str()).unwrap_or("1:1");
+        let (width, height) = parse_size(size_str);
+
         let client = reqwest::Client::new();
+
+        // Build LoRAs array if lora is specified
+        let loras = if let Some(lora_id) = args.get("lora").and_then(|v| v.as_str()) {
+            let strength = args.get("lora_strength").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+            json!([{"id": lora_id, "strength": strength}])
+        } else {
+            json!([])
+        };
 
         let body = json!({
             "prompt": prompt,
-            "count": args.get("count").and_then(|v| v.as_u64()).unwrap_or(1),
-            "base_model": args.get("base"),
-            "lora": args.get("lora"),
-            "lora_strength": args.get("lora_strength"),
-            "size": args.get("size"),
-            "steps": args.get("steps"),
-            "guidance": args.get("guidance"),
-            "seed": args.get("seed"),
+            "model_id": model_id,
+            "width": width,
+            "height": height,
+            "steps": args.get("steps").and_then(|v| v.as_u64()).unwrap_or(8) as u32,
+            "guidance": args.get("guidance").and_then(|v| v.as_f64()).unwrap_or(3.5) as f32,
+            "seed": args.get("seed").and_then(|v| v.as_u64()),
+            "num_images": args.get("count").and_then(|v| v.as_u64()).unwrap_or(1) as u32,
+            "loras": loras,
         });
 
         match client
@@ -472,6 +489,27 @@ impl McpServer {
         Ok(json!({
             "content": [{"type": "text", "text": message}]
         }))
+    }
+}
+
+/// Parse size preset into (width, height) dimensions.
+fn parse_size(size: &str) -> (u32, u32) {
+    match size {
+        "1:1" => (1024, 1024),
+        "16:9" => (1344, 768),
+        "9:16" => (768, 1344),
+        "4:3" => (1152, 896),
+        "3:4" => (896, 1152),
+        _ => {
+            // Try to parse WxH format
+            if let Some((w, h)) = size.split_once('x') {
+                if let (Ok(width), Ok(height)) = (w.parse::<u32>(), h.parse::<u32>()) {
+                    return (width, height);
+                }
+            }
+            // Default to 1:1
+            (1024, 1024)
+        }
     }
 }
 
