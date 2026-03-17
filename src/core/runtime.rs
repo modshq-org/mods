@@ -418,10 +418,10 @@ fn write_profile_requirements_if_missing(root: &Path, profile: &str) -> Result<(
 
     let content = match profile {
         "trainer-cu124" => {
-            "# Additional trainer-cu124 requirements (base torch + ai-toolkit are installed by bootstrap logic)\naccelerate>=0.33\nsafetensors>=0.5\ntransformers>=4.51\ndiffusers>=0.37.0\npillow>=10.0\n"
+            "# Additional trainer-cu124 requirements (base torch + ai-toolkit are installed by bootstrap logic)\naccelerate>=0.33\nsafetensors>=0.5\ntransformers>=4.51\ndiffusers>=0.37.0\npillow>=10.0\nspandrel>=0.4\n"
         }
         "inference-cu124" => {
-            "# Runtime profile requirements for inference-cu124\n# Add/adjust heavy dependencies as manifests stabilize.\n\n"
+            "# Runtime profile requirements for inference-cu124\nspandrel>=0.4\ninsightface>=0.7\n"
         }
         _ => "# Runtime profile requirements\n\n",
     };
