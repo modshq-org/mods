@@ -725,11 +725,20 @@ async fn install_managed_python(root: &Path, profile: &str) -> Result<()> {
         if target.exists() {
             fs::remove_file(&target)?;
         }
+        #[cfg(unix)]
         std::os::unix::fs::symlink(&system_python, &target).with_context(|| {
             format!(
                 "Failed to symlink {} -> {}",
                 target.display(),
                 system_python.display()
+            )
+        })?;
+        #[cfg(windows)]
+        fs::copy(&system_python, &target).with_context(|| {
+            format!(
+                "Failed to copy {} -> {}",
+                system_python.display(),
+                target.display()
             )
         })?;
         return Ok(());
@@ -801,7 +810,10 @@ async fn download_managed_python(root: &Path, profile: &str) -> Result<()> {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if name.starts_with("python3.") && !name.contains('-') {
+                    #[cfg(unix)]
                     std::os::unix::fs::symlink(entry.path(), &python_bin)?;
+                    #[cfg(windows)]
+                    fs::copy(entry.path(), &python_bin)?;
                     break;
                 }
             }
