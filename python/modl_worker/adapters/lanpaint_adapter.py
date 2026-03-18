@@ -1,14 +1,11 @@
-"""LanPaint inpainting adapter — training-free inpainting for Z-Image.
+"""LanPaint inpainting adapter — training-free inpainting for multiple models.
 
-Uses the LanPaint algorithm (Zheng et al., arXiv:2502.03491v3) to enable
-inpainting on models that have no dedicated inpaint pipeline.
+Uses the LanPaint algorithm (Zheng et al., arXiv:2502.03491v3) with per-model
+adapters that handle architecture-specific details (sign conventions, latent
+formats, timestep schedules).
 
-The algorithm code (lanpaint/) is a direct port from the original ComfyUI
-implementation at https://github.com/scraed/LanPaint (MIT license).
-
-Current implementation: Z-Image only. Other architectures need a
-per-model wrapper (see ZImageModelWrapper) due to differing transformer
-output conventions.
+Algorithm code from scraed/LanPaint (MIT license).
+Adapter pattern inspired by charrywhite/LanPaint-diffusers.
 """
 
 import gc
@@ -29,13 +26,32 @@ from modl_worker.adapters.arch_config import (
     resolve_pipeline_class_for_mode,
 )
 
-# Models known to be distilled — LanPaint quality will degrade.
+
+# Architecture → adapter class mapping
+_ADAPTER_MAP = {
+    "zimage": ("lanpaint_adapters.z_image", "ZImageAdapter", {}),
+    "zimage_turbo": ("lanpaint_adapters.z_image", "ZImageAdapter", {"is_turbo": True}),
+    "flux2_klein": ("lanpaint_adapters.flux_klein", "FluxKleinAdapter", {}),
+    "flux2_klein_9b": ("lanpaint_adapters.flux_klein", "FluxKleinAdapter", {}),
+    "chroma": ("lanpaint_adapters.chroma", "ChromaAdapter", {}),
+}
+
+# Models known to be distilled
 _DISTILLED_ARCHS = frozenset({
     "flux_schnell", "flux2_klein", "flux2_klein_9b", "zimage_turbo",
 })
 
-# Supported architectures (add more as we validate per-model wrappers)
-_SUPPORTED_ARCHS = frozenset({"zimage"})
+
+def _get_adapter(arch, pipe, emitter):
+    """Instantiate the appropriate adapter for the model architecture."""
+    if arch not in _ADAPTER_MAP:
+        return None
+
+    module_name, class_name, kwargs = _ADAPTER_MAP[arch]
+    import importlib
+    mod = importlib.import_module(f"modl_worker.adapters.{module_name}")
+    adapter_cls = getattr(mod, class_name)
+    return adapter_cls(pipe, emitter, **kwargs)
 
 
 def run_lanpaint(config_path: Path, emitter: EventEmitter) -> int:
@@ -64,27 +80,25 @@ def run_lanpaint(config_path: Path, emitter: EventEmitter) -> int:
         return 2
 
     arch = detect_arch(base_model_id)
-    if arch not in _SUPPORTED_ARCHS:
+    if arch not in _ADAPTER_MAP:
+        supported = ", ".join(sorted(_ADAPTER_MAP.keys()))
         emitter.error(
             "UNSUPPORTED_ARCH",
-            f"LanPaint currently only supports Z-Image (got {base_model_id}, arch={arch}).",
+            f"LanPaint doesn't support {base_model_id} (arch={arch}). Supported: {supported}",
             recoverable=False,
         )
         return 2
 
     if arch in _DISTILLED_ARCHS:
-        emitter.info(f"WARNING: {base_model_id} is distilled — LanPaint quality will degrade.")
+        emitter.info(f"WARNING: {base_model_id} is distilled — LanPaint quality may degrade.")
 
+    # Load pipeline WITHOUT enable_model_cpu_offload
     cls_name = resolve_pipeline_class_for_mode(base_model_id, "txt2img")
-    emitter.info(f"Loading {base_model_id} for LanPaint inpainting (pipeline={cls_name})...")
+    emitter.info(f"Loading {base_model_id} for LanPaint (pipeline={cls_name})...")
     emitter.progress(stage="load", step=0, total_steps=1)
 
     try:
         from modl_worker.adapters.pipeline_loader import assemble_pipeline
-
-        # Load WITHOUT enable_model_cpu_offload — we manage GPU placement
-        # manually. Diffusers' accelerate hooks leak CUDA memory when
-        # components are moved between devices outside the pipeline flow.
         pipe = assemble_pipeline(base_model_id, base_model_path, cls_name, emitter, no_offload=True)
 
         if lora_info:
@@ -100,98 +114,15 @@ def run_lanpaint(config_path: Path, emitter: EventEmitter) -> int:
         emitter.error("PIPELINE_LOAD_FAILED", str(exc), recoverable=False)
         return 1
 
-    return _run_lanpaint_zimage(spec, emitter, pipe)
+    adapter = _get_adapter(arch, pipe, emitter)
+    return _run_lanpaint(spec, emitter, pipe, adapter)
 
 
-# ---------------------------------------------------------------------------
-# Z-Image model wrapper + forward pass
-# ---------------------------------------------------------------------------
-
-def _zimage_forward_raw(transformer, latents, timestep, embeds, device):
-    """Single forward pass through Z-Image transformer.
-
-    Returns RAW diffusers output (no negation). Note: diffusers' Z-Image
-    output is the NEGATIVE of ComfyUI's raw output. The x0 conversion
-    accounts for this: x0 = x + raw_diffusers * sigma.
-    """
-    latent_input = latents.to(transformer.dtype)
-    latent_input = latent_input.unsqueeze(2)  # Z-Image expects 5D (B,C,F,H,W)
-    latent_input_list = list(latent_input.unbind(dim=0))
-
-    embeds_gpu = [e.to(device) for e in embeds]
-
-    with torch.no_grad():
-        out_list = transformer(
-            latent_input_list, timestep, embeds_gpu, return_dict=False
-        )[0]
-
-    raw_output = torch.stack([t.float() for t in out_list], dim=0)
-    raw_output = raw_output.squeeze(2)
-    return raw_output
-
-
-class ZImageModelWrapper:
-    """Wraps Z-Image pipeline to match the interface LanPaint expects.
-
-    LanPaint calls inner_model(x, sigma) and expects (x0_std, x0_big).
-
-    Key convention difference: diffusers' Z-Image transformer output is
-    NEGATED relative to ComfyUI's. ZImagePipeline line 265 explicitly
-    negates before passing to the scheduler. So:
-        ComfyUI:   x0 = x - raw_comfy * sigma
-        Diffusers: x0 = x + raw_diffusers * sigma  (raw_diffusers = -raw_comfy)
-    """
-
-    def __init__(self, transformer, prompt_embeds, negative_prompt_embeds, guidance, cfg_big, device):
-        self.transformer = transformer
-        self.prompt_embeds = prompt_embeds
-        self.negative_prompt_embeds = negative_prompt_embeds
-        self.guidance = guidance
-        self.cfg_BIG = cfg_big
-        self.device = device
-
-        # Dummy inner_model with CONST noise_scaling (used by LanPaint's replace step)
-        class _ModelSampling:
-            def noise_scaling(self, sigma, noise, latent_image, max_denoise=False):
-                return sigma * noise + (1.0 - sigma) * latent_image
-
-        class _InnerModel:
-            model_sampling = _ModelSampling()
-            model_type = type("FlowType", (), {"value": 2})()
-
-        self.inner_model = _InnerModel()
-
-    def __call__(self, x, sigma, model_options=None, seed=None):
-        sigma_val = sigma if sigma.dim() == 0 else sigma[0]
-        zimage_t = (1 - sigma_val).expand(x.shape[0])
-
-        sigma_e = sigma_val
-        while sigma_e.dim() < x.dim():
-            sigma_e = sigma_e.unsqueeze(-1)
-
-        # x0 = x + raw * sigma (diffusers sign convention)
-        raw_cond = _zimage_forward_raw(self.transformer, x, zimage_t, self.prompt_embeds, self.device)
-        x0_cond = x.float() + raw_cond * sigma_e
-
-        if self.guidance <= 1.0 or self.negative_prompt_embeds is None:
-            return x0_cond, x0_cond
-
-        raw_uncond = _zimage_forward_raw(self.transformer, x, zimage_t, self.negative_prompt_embeds, self.device)
-        x0_uncond = x.float() + raw_uncond * sigma_e
-
-        x0_std = x0_uncond + self.guidance * (x0_cond - x0_uncond)
-        x0_big = x0_uncond + self.cfg_BIG * (x0_cond - x0_uncond)
-        return x0_std, x0_big
-
-
-# ---------------------------------------------------------------------------
-# Main Z-Image LanPaint flow
-# ---------------------------------------------------------------------------
-
-def _run_lanpaint_zimage(spec: dict, emitter: EventEmitter, pipe) -> int:
-    from diffusers.image_processor import VaeImageProcessor
-    from modl_worker.image_util import load_image
+def _run_lanpaint(spec, emitter, pipe, adapter):
+    """Model-agnostic LanPaint orchestrator."""
     from modl_worker.lanpaint import LanPaint
+    from modl_worker.image_util import load_image
+    from diffusers.image_processor import VaeImageProcessor
 
     prompt = spec.get("prompt", "")
     params = spec.get("params", {})
@@ -216,93 +147,69 @@ def _run_lanpaint_zimage(spec: dict, emitter: EventEmitter, pipe) -> int:
     cfg_big = params.get("lanpaint_cfg_big", guidance)
 
     emitter.info(
-        f"LanPaint config: inner_steps={lp_steps}, lambda={lp_lambda}, "
-        f"friction={lp_friction}, guidance={guidance}, cfg_big={cfg_big}"
+        f"LanPaint [{type(adapter).__name__}]: inner_steps={lp_steps}, "
+        f"lambda={lp_lambda}, guidance={guidance}, cfg_big={cfg_big}"
     )
 
-    device = torch.device("cuda")
+    device = adapter.device
 
-    # --- 1. Encode prompt: text encoder → GPU → CPU → delete ---
+    # --- 1. Encode prompt ---
     emitter.info("Encoding prompt...")
-    pipe.text_encoder.to(device)
-    with torch.no_grad():
-        prompt_embeds, negative_prompt_embeds = pipe.encode_prompt(
-            prompt=prompt,
-            negative_prompt="",
-            do_classifier_free_guidance=(guidance > 1.0),
-            device=device,
-        )
-    prompt_embeds = [p.cpu() for p in prompt_embeds]
-    if negative_prompt_embeds:
-        negative_prompt_embeds = [n.cpu() for n in negative_prompt_embeds]
+    adapter.encode_prompt(prompt, "")
 
-    pipe.text_encoder.to("cpu")
-    del pipe.text_encoder
-    pipe.text_encoder = None
-    torch.cuda.empty_cache()
-    gc.collect()
-
-    # --- 2. Encode init image ---
-    vae_scale = pipe.vae_scale_factor * 2
+    # --- 2. Encode image ---
+    vae_scale = pipe.vae_scale_factor * 2 if hasattr(pipe, 'vae_scale_factor') else 16
     img_processor = VaeImageProcessor(vae_scale_factor=vae_scale)
 
     init_img = load_image(params["init_image"]).resize((width, height), Image.LANCZOS)
     mask_img = load_image(params["mask"]).convert("L").resize((width, height), Image.NEAREST)
 
     init_tensor = img_processor.preprocess(init_img, height=height, width=width)
-    init_tensor = init_tensor.to(device=device, dtype=pipe.vae.dtype)
 
-    pipe.vae.to(device)
-    with torch.no_grad():
-        latent_dist = pipe.vae.encode(init_tensor)
-        latent_image = latent_dist.latent_dist.mode() if hasattr(latent_dist, "latent_dist") else latent_dist.mode()
+    # Store dims for Klein's prepare_latents
+    if hasattr(adapter, '_height'):
+        adapter._height = height
+        adapter._width = width
 
-    # Scale only (no shift) — matches ComfyUI's process_latent_in
-    if hasattr(pipe.vae.config, "scaling_factor"):
-        latent_image = latent_image * pipe.vae.config.scaling_factor
+    generator = torch.Generator(device="cpu")
+    if seed is not None:
+        generator.manual_seed(seed)
 
-    pipe.vae.to("cpu")
-    torch.cuda.empty_cache()
-    latent_image = latent_image.to(dtype=torch.float32)
+    latent_image = adapter.encode_image(init_tensor, generator)
 
     # --- 3. Prepare mask ---
     mask_np = np.array(mask_img).astype(np.float32) / 255.0
     mask_np = 1.0 - (mask_np > 0.5).astype(np.float32)  # white=inpaint → 0 for LanPaint
     mask_tensor = torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0)
 
-    latent_h, latent_w = latent_image.shape[-2], latent_image.shape[-1]
-    latent_mask = torch.nn.functional.interpolate(
-        mask_tensor, size=(latent_h, latent_w), mode="nearest"
-    ).expand_as(latent_image).to(device=device, dtype=torch.float32)
+    latent_mask = adapter.mask_to_latent_space(mask_tensor, latent_image.shape)
+    latent_mask = latent_mask.expand_as(latent_image).to(device=device, dtype=torch.float32)
 
     # --- 4. Set up scheduler ---
-    from diffusers.pipelines.z_image.pipeline_z_image import calculate_shift, retrieve_timesteps
+    timesteps, flow_ts = adapter.prepare_timesteps(steps)
 
-    # Use shift=3.0 matching ComfyUI's Z-Image config (diffusers ships 6.0)
-    pipe.scheduler.config["shift"] = 3.0
+    # --- 5. Build LanPaint model wrapper ---
+    class _ModelWrapper:
+        def __init__(self, adapter, guidance, cfg_big):
+            self.adapter = adapter
+            self.guidance = guidance
+            self.cfg_BIG = cfg_big
 
-    image_seq_len = (latent_h // 2) * (latent_w // 2)
-    mu = calculate_shift(
-        image_seq_len,
-        pipe.scheduler.config.get("base_image_seq_len", 256),
-        pipe.scheduler.config.get("max_image_seq_len", 4096),
-        pipe.scheduler.config.get("base_shift", 0.5),
-        pipe.scheduler.config.get("max_shift", 1.15),
-    )
-    pipe.scheduler.sigma_min = 0.0
-    timesteps, _ = retrieve_timesteps(pipe.scheduler, steps, device, mu=mu)
-    sigmas = pipe.scheduler.sigmas.to(device=device, dtype=torch.float32)
+            class _Inner:
+                class model_sampling:
+                    @staticmethod
+                    def noise_scaling(sigma, noise, latent_image, max_denoise=False):
+                        return adapter.noise_scaling(sigma, noise, latent_image)
+                model_type = type("Flow", (), {"value": 2})()
+            self.inner_model = _Inner()
 
-    # --- 5. Build model wrapper ---
-    model_wrapper = ZImageModelWrapper(
-        pipe.transformer, prompt_embeds, negative_prompt_embeds, guidance, cfg_big, device,
-    )
+        def __call__(self, x, sigma, model_options=None, seed=None):
+            flow_t = float(sigma.flatten()[0])
+            return self.adapter.predict_x0(x, flow_t, self.guidance, self.cfg_BIG)
+
+    model_wrapper = _ModelWrapper(adapter, guidance, cfg_big)
 
     # --- 6. Generate ---
-    generator = torch.Generator(device="cpu")
-    if seed is not None:
-        generator.manual_seed(seed)
-
     output_dir = output_info.get("output_dir", ".")
     os.makedirs(output_dir, exist_ok=True)
     artifact_paths = []
@@ -320,6 +227,7 @@ def _run_lanpaint_zimage(spec: dict, emitter: EventEmitter, pipe) -> int:
         total_steps = len(timesteps)
         emitter.info(f"Running {total_steps} denoising steps...")
 
+        # Move transformer to GPU
         pipe.transformer.to(device)
 
         lanpaint = LanPaint(
@@ -328,38 +236,48 @@ def _run_lanpaint_zimage(spec: dict, emitter: EventEmitter, pipe) -> int:
             IS_FLUX=False, IS_FLOW=True,
         )
 
-        # CONST noise scaling: x = sigma * noise + (1-sigma) * latent
-        latents = sigmas[0] * noise + (1 - sigmas[0]) * latent_image
+        # CONST noise scaling
+        latents = adapter.noise_scaling(
+            flow_ts[0:1].reshape(1, *([1] * (latent_image.dim() - 1))).float(),
+            noise, latent_image,
+        )
 
         try:
-            for step_idx in range(total_steps):
-                sigma = sigmas[step_idx]
+            with torch.no_grad():
+                for step_idx in range(total_steps):
+                    t = timesteps[step_idx]
+                    flow_t_val = flow_ts[step_idx].item()
 
-                sigma_clamped = sigma.clamp(max=0.9999)
-                flow_t = sigma_clamped.unsqueeze(0) if sigma_clamped.dim() == 0 else sigma_clamped
-                abt = (1 - flow_t) ** 2 / ((1 - flow_t) ** 2 + flow_t ** 2)
-                ve_sigma = flow_t / (1 - flow_t + 1e-8)
-                current_times = (ve_sigma, abt, flow_t)
+                    # Build current_times for LanPaint
+                    ft = max(flow_t_val, 1e-6)
+                    ve_sigma = ft / (1 - ft + 1e-8)
+                    abt = (1 - ft) ** 2 / ((1 - ft) ** 2 + ft ** 2)
+                    current_times = (
+                        torch.tensor([ve_sigma], device=device, dtype=torch.float32),
+                        torch.tensor([abt], device=device, dtype=torch.float32),
+                        torch.tensor([ft], device=device, dtype=torch.float32),
+                    )
 
-                remaining = total_steps - step_idx
-                n_inner = 0 if remaining <= lp_early_stop else None
+                    remaining = total_steps - step_idx
+                    n_inner = 0 if remaining <= lp_early_stop else None
 
-                x0_pred = lanpaint(
-                    latents, latent_image, noise, flow_t,
-                    latent_mask, current_times, {}, image_seed,
-                    n_steps=n_inner,
-                )
+                    x0_pred = lanpaint(
+                        latents, latent_image, noise,
+                        torch.tensor([ft], device=device, dtype=torch.float32),
+                        latent_mask, current_times, {}, image_seed,
+                        n_steps=n_inner,
+                    )
 
-                # Euler step: d = (x - x0) / sigma, x_next = x + d * dt
-                sigma_next = sigmas[step_idx + 1] if step_idx + 1 < len(sigmas) else torch.zeros_like(sigma)
-                if sigma_next == 0:
-                    latents = x0_pred
-                else:
-                    d = (latents - x0_pred) / sigma.clamp(min=1e-6)
-                    latents = latents + d * (sigma_next - sigma)
+                    # Euler step
+                    sigma_next = flow_ts[step_idx + 1].item() if step_idx + 1 < len(flow_ts) else 0.0
+                    if sigma_next == 0:
+                        latents = x0_pred
+                    else:
+                        d = (latents - x0_pred) / max(ft, 1e-6)
+                        latents = latents + d * (sigma_next - ft)
 
-                if (step_idx + 1) % 5 == 0 or step_idx == total_steps - 1:
-                    emitter.info(f"  Step {step_idx + 1}/{total_steps}")
+                    if (step_idx + 1) % 5 == 0 or step_idx == total_steps - 1:
+                        emitter.info(f"  Step {step_idx + 1}/{total_steps}")
 
         except Exception as exc:
             import traceback
@@ -370,24 +288,15 @@ def _run_lanpaint_zimage(spec: dict, emitter: EventEmitter, pipe) -> int:
         # --- 7. Decode ---
         pipe.transformer.to("cpu")
         torch.cuda.empty_cache()
-        pipe.vae.to(device)
 
-        with torch.no_grad():
-            decoded = latents.to(pipe.vae.dtype)
-            if hasattr(pipe.vae.config, "shift_factor"):
-                decoded = decoded + pipe.vae.config.shift_factor
-            if hasattr(pipe.vae.config, "scaling_factor"):
-                decoded = decoded / pipe.vae.config.scaling_factor
-            image_tensor = pipe.vae.decode(decoded, return_dict=False)[0]
-
-        result = pipe.image_processor.postprocess(image_tensor, output_type="pil")[0]
+        result = adapter.decode_latents(latents)
 
         pipe.vae.to("cpu")
         torch.cuda.empty_cache()
         if img_idx < count - 1:
             pipe.transformer.to(device)
 
-        # Pixel-space blend: paste original in keep region
+        # Pixel-space blend
         keep_mask_pil = Image.fromarray((mask_np * 255).astype(np.uint8)).resize(
             (width, height), Image.NEAREST
         )
@@ -404,6 +313,7 @@ def _run_lanpaint_zimage(spec: dict, emitter: EventEmitter, pipe) -> int:
             pnginfo = PngInfo()
             pnginfo.add_text("modl", json.dumps({
                 "generated_with": "modl.run", "method": "lanpaint",
+                "adapter": type(adapter).__name__,
                 "prompt": prompt, "base_model_id": base_model_id,
                 "seed": image_seed, "steps": steps, "guidance": guidance,
                 "lanpaint_steps": lp_steps, "lanpaint_lambda": lp_lambda,
