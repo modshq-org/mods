@@ -1,11 +1,11 @@
 """Chroma adapter for LanPaint.
 
-Similar to Flux but simpler:
-- Spatial latents (B, C, H, W), not packed
+Chroma uses packed latent sequences like Flux:
+- Packed latents via _pack_latents / _unpack_latents
 - Standard flow matching: x0 = x - flow_t * v
-- Supports negative prompts (separate cond/uncond passes)
-- No reference image concatenation
-- Uses T5-XXL text encoder
+- Supports negative prompts (T5-XXL encoder)
+- No reference image concatenation (not edit-style)
+- timestep / 1000 normalization
 """
 
 from typing import Tuple
@@ -23,15 +23,21 @@ class ChromaAdapter(ModelAdapter):
         super().__init__(pipe, emitter)
         self._prompt_embeds = None
         self._neg_prompt_embeds = None
-        self._txt_ids = None
-        self._neg_txt_ids = None
-        self._img_ids = None
+        self._text_ids = None
+        self._neg_text_ids = None
+        self._attention_mask = None
+        self._neg_attention_mask = None
+        self._latent_image_ids = None
+        self._height = None
+        self._width = None
 
     def encode_prompt(self, prompt, negative_prompt):
         device = self.device
-        # Chroma uses T5-XXL (text_encoder_2 or text_encoder)
-        te = getattr(self.pipe, 'text_encoder_2', None) or self.pipe.text_encoder
-        te.to(device)
+        # Move text encoder(s) to GPU
+        if hasattr(self.pipe, 'text_encoder') and self.pipe.text_encoder is not None:
+            self.pipe.text_encoder.to(device)
+        if hasattr(self.pipe, 'text_encoder_2') and self.pipe.text_encoder_2 is not None:
+            self.pipe.text_encoder_2.to(device)
 
         with torch.no_grad():
             result = self.pipe.encode_prompt(
@@ -39,27 +45,33 @@ class ChromaAdapter(ModelAdapter):
                 negative_prompt=negative_prompt or "",
                 device=device,
             )
-            if len(result) == 4:
-                self._prompt_embeds, self._neg_prompt_embeds, _, _ = result
-            elif len(result) == 2:
-                self._prompt_embeds, self._neg_prompt_embeds = result
-            else:
-                self._prompt_embeds = result[0]
-                self._neg_prompt_embeds = None
+            # ChromaPipeline.encode_prompt returns (prompt_embeds, text_ids, attention_mask, ...)
+            if isinstance(result, tuple):
+                if len(result) >= 6:
+                    # (prompt_embeds, text_ids, attention_mask, neg_embeds, neg_ids, neg_mask)
+                    self._prompt_embeds = result[0].cpu()
+                    self._text_ids = result[1].cpu()
+                    self._attention_mask = result[2].cpu() if result[2] is not None else None
+                    self._neg_prompt_embeds = result[3].cpu() if result[3] is not None else None
+                    self._neg_text_ids = result[4].cpu() if result[4] is not None else None
+                    self._neg_attention_mask = result[5].cpu() if result[5] is not None else None
+                elif len(result) >= 3:
+                    self._prompt_embeds = result[0].cpu()
+                    self._text_ids = result[1].cpu()
+                    self._attention_mask = result[2].cpu() if result[2] is not None else None
+                elif len(result) == 2:
+                    self._prompt_embeds = result[0].cpu()
+                    self._neg_prompt_embeds = result[1].cpu() if result[1] is not None else None
 
-        # Move to CPU
-        self._prompt_embeds = self._prompt_embeds.cpu()
-        if self._neg_prompt_embeds is not None:
-            self._neg_prompt_embeds = self._neg_prompt_embeds.cpu()
-
-        # Prepare txt_ids
-        seq_len = self._prompt_embeds.shape[1]
-        self._txt_ids = torch.zeros(seq_len, 3, dtype=torch.float32)
-        if self._neg_prompt_embeds is not None:
-            neg_seq_len = self._neg_prompt_embeds.shape[1]
-            self._neg_txt_ids = torch.zeros(neg_seq_len, 3, dtype=torch.float32)
-
-        te.to("cpu")
+        # Free text encoders
+        if hasattr(self.pipe, 'text_encoder') and self.pipe.text_encoder is not None:
+            self.pipe.text_encoder.to("cpu")
+            del self.pipe.text_encoder
+            self.pipe.text_encoder = None
+        if hasattr(self.pipe, 'text_encoder_2') and self.pipe.text_encoder_2 is not None:
+            self.pipe.text_encoder_2.to("cpu")
+            del self.pipe.text_encoder_2
+            self.pipe.text_encoder_2 = None
         torch.cuda.empty_cache()
         import gc; gc.collect()
         self.emitter.info(f"  Text encoder freed: {torch.cuda.memory_allocated()/1e9:.1f}GB used")
@@ -73,19 +85,43 @@ class ChromaAdapter(ModelAdapter):
             dist = self.pipe.vae.encode(img_tensor)
             latent = dist.latent_dist.mode() if hasattr(dist, "latent_dist") else dist.mode()
 
-        # Scale (same VAE as Flux)
+        # Scale + shift
         if hasattr(self.pipe.vae.config, "scaling_factor"):
             latent = latent * self.pipe.vae.config.scaling_factor
         if hasattr(self.pipe.vae.config, "shift_factor"):
             latent = latent - self.pipe.vae.config.shift_factor
 
-        # Prepare img_ids
-        h, w = latent.shape[-2], latent.shape[-1]
-        self._img_ids = self.pipe._prepare_latent_image_ids(1, h, w, device, torch.float32)
+        # Get spatial dims before packing
+        self._height = img_tensor.shape[-2]
+        self._width = img_tensor.shape[-1]
+
+        # Pack latents
+        num_ch = self.pipe.transformer.config.in_channels // 4
+        latent_h, latent_w = latent.shape[-2], latent.shape[-1]
+
+        # Prepare latent_image_ids
+        self._latent_image_ids = self.pipe._prepare_latent_image_ids(
+            1, latent_h // 2, latent_w // 2, device, torch.float32,
+        ).cpu()
+
+        # Pack: (B, C, H, W) → (B, L, C*4)
+        packed = self.pipe._pack_latents(latent, 1, num_ch, latent_h, latent_w)
 
         self.pipe.vae.to("cpu")
         torch.cuda.empty_cache()
-        return latent.to(dtype=torch.float32)
+        return packed.to(dtype=torch.float32)
+
+    def mask_to_latent_space(self, mask, latent_shape):
+        """Pixel mask → packed latent mask (1, L, 1)."""
+        device = self.device
+        # Latent spatial dims: latent_h/2, latent_w/2 (after packing)
+        vae_scale = self.pipe.vae_scale_factor
+        lat_h = self._height // vae_scale // 2
+        lat_w = self._width // vae_scale // 2
+        mask_latent = torch.nn.functional.interpolate(
+            mask, size=(lat_h, lat_w), mode="nearest",
+        ).to(device, torch.float32).reshape(1, -1, 1)
+        return mask_latent
 
     def prepare_timesteps(self, num_steps):
         device = self.device
@@ -106,9 +142,10 @@ class ChromaAdapter(ModelAdapter):
             v_cond = self.pipe.transformer(
                 hidden_states=x.to(model_dtype),
                 encoder_hidden_states=self._prompt_embeds.to(device, model_dtype),
-                timestep=t_tensor / 1000,  # Chroma expects normalized timestep
-                img_ids=self._img_ids.to(device) if self._img_ids is not None else None,
-                txt_ids=self._txt_ids.to(device, model_dtype),
+                timestep=t_tensor / 1000,
+                img_ids=self._latent_image_ids.to(device),
+                txt_ids=self._text_ids.to(device, model_dtype) if self._text_ids is not None else None,
+                attention_mask=self._attention_mask.to(device) if self._attention_mask is not None else None,
                 return_dict=False,
             )[0]
 
@@ -122,12 +159,12 @@ class ChromaAdapter(ModelAdapter):
                 hidden_states=x.to(model_dtype),
                 encoder_hidden_states=self._neg_prompt_embeds.to(device, model_dtype),
                 timestep=t_tensor / 1000,
-                img_ids=self._img_ids.to(device) if self._img_ids is not None else None,
-                txt_ids=self._neg_txt_ids.to(device, model_dtype) if self._neg_txt_ids is not None else None,
+                img_ids=self._latent_image_ids.to(device),
+                txt_ids=self._neg_text_ids.to(device, model_dtype) if self._neg_text_ids is not None else None,
+                attention_mask=self._neg_attention_mask.to(device) if self._neg_attention_mask is not None else None,
                 return_dict=False,
             )[0]
 
-        # Dual CFG + x0 (standard flow: x0 = x - t*v)
         v_cfg = v_uncond.float() + guidance_scale * (v_cond.float() - v_uncond.float())
         v_big = v_uncond.float() + cfg_big * (v_cond.float() - v_uncond.float())
 
@@ -139,12 +176,13 @@ class ChromaAdapter(ModelAdapter):
         device = self.device
         self.pipe.vae.to(device)
         with torch.no_grad():
-            decoded = latents.to(self.pipe.vae.dtype)
-            if hasattr(self.pipe.vae.config, "shift_factor"):
-                decoded = (decoded / self.pipe.vae.config.scaling_factor) + self.pipe.vae.config.shift_factor
-            else:
-                decoded = decoded / self.pipe.vae.config.scaling_factor
-            img = self.pipe.vae.decode(decoded, return_dict=False)[0]
+            # Unpack
+            unpacked = self.pipe._unpack_latents(
+                latents.to(device), self._height, self._width, self.pipe.vae_scale_factor,
+            )
+            # Reverse scale + shift
+            decoded = (unpacked / self.pipe.vae.config.scaling_factor) + self.pipe.vae.config.shift_factor
+            img = self.pipe.vae.decode(decoded.to(self.pipe.vae.dtype), return_dict=False)[0]
         result = self.pipe.image_processor.postprocess(img, output_type="pil")[0]
         self.pipe.vae.to("cpu")
         torch.cuda.empty_cache()
