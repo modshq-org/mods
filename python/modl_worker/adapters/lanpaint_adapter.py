@@ -34,6 +34,7 @@ _ADAPTER_MAP = {
     "flux2_klein": ("lanpaint_adapters.flux_klein", "FluxKleinAdapter", {}),
     "flux2_klein_9b": ("lanpaint_adapters.flux_klein", "FluxKleinAdapter", {}),
     "chroma": ("lanpaint_adapters.chroma", "ChromaAdapter", {}),
+    "qwen_image_edit": ("lanpaint_adapters.qwen_image", "QwenImageAdapter", {}),
 }
 
 # Models known to be distilled
