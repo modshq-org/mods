@@ -247,6 +247,9 @@ pub enum TrainSubcommands {
         /// Watch mode: refresh every 2 seconds
         #[arg(long, short = 'w')]
         watch: bool,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Delete a training run (output, logs, LoRA, and DB records)
@@ -761,6 +764,9 @@ pub enum Commands {
         /// Sort order for CivitAI search (Most Downloaded, Highest Rated, Newest)
         #[arg(long)]
         sort: Option<String>,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show model details
@@ -1017,8 +1023,8 @@ pub async fn run(cli: Cli) -> Result<()> {
             provider,
         } => match command {
             Some(TrainSubcommands::Setup { reinstall }) => train_setup::run(reinstall).await,
-            Some(TrainSubcommands::Status { name, watch }) => {
-                train_status::run(name.as_deref(), watch)?;
+            Some(TrainSubcommands::Status { name, watch, json }) => {
+                train_status::run(name.as_deref(), watch, json)?;
                 Ok(())
             }
             Some(TrainSubcommands::Rm { name }) => {
@@ -1148,6 +1154,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             civitai: civitai_flag,
             base_model,
             sort,
+            json,
         } => {
             if civitai_flag {
                 let q = query.as_deref().unwrap_or("");
@@ -1162,7 +1169,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 if q.is_empty() {
                     anyhow::bail!("Search query required (or use --popular)");
                 }
-                search::run(q, r#type, r#for.as_deref(), tag.as_deref(), min_rating).await
+                search::run(
+                    q,
+                    r#type,
+                    r#for.as_deref(),
+                    tag.as_deref(),
+                    min_rating,
+                    json,
+                )
+                .await
             }
         }
         Commands::Info { id } => info::run(&id).await,

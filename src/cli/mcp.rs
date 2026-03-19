@@ -186,7 +186,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "train",
-            "description": "Start a LoRA training run on a dataset. Returns the training run name and status.",
+            "description": "Preview a LoRA training configuration (dry-run). Returns the resolved training spec without starting training.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -581,7 +581,7 @@ fn tool_train(args: &Value) -> Result<Value, (i32, String)> {
 
     let mut cmd_args: Vec<String> = vec![
         "train".into(),
-        "--json".into(),
+        "--dry-run".into(),
         "--base".into(),
         base.into(),
         "--lora-type".into(),
@@ -618,26 +618,11 @@ fn tool_train(args: &Value) -> Result<Value, (i32, String)> {
         return Err((-32603, format!("Training failed: {}", msg.trim())));
     }
 
-    // Parse the --json output from modl train
-    if let Ok(result) = serde_json::from_str::<Value>(&stdout) {
-        let name = result
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        let status = result
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("started");
-
-        let text = format!("Training run '{}' {}", name, status);
-        Ok(json!({
-            "content": [{"type": "text", "text": text}]
-        }))
-    } else {
-        Ok(json!({
-            "content": [{"type": "text", "text": stdout.trim()}]
-        }))
-    }
+    // dry-run outputs the training spec as YAML
+    let clean = strip_ansi(&stdout);
+    Ok(json!({
+        "content": [{"type": "text", "text": clean.trim()}]
+    }))
 }
 
 fn tool_train_status(args: &Value) -> Result<Value, (i32, String)> {

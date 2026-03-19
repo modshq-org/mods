@@ -4,12 +4,25 @@ use console::style;
 use crate::core::training_status;
 
 /// Show live training status for all runs or a specific one.
-pub fn run(name: Option<&str>, watch: bool) -> Result<()> {
+pub fn run(name: Option<&str>, watch: bool, json: bool) -> Result<()> {
+    if json {
+        return run_json(name);
+    }
     if watch {
         run_watch(name)
     } else {
         run_once(name)
     }
+}
+
+fn run_json(name: Option<&str>) -> Result<()> {
+    let runs = if let Some(name) = name {
+        vec![training_status::get_status(name)?]
+    } else {
+        training_status::get_all_status(false)?
+    };
+    println!("{}", serde_json::to_string(&runs)?);
+    Ok(())
 }
 
 fn run_once(name: Option<&str>) -> Result<()> {
