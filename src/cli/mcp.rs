@@ -143,6 +143,109 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "edit",
+            "description": "Edit an existing image using AI models guided by a text prompt. Returns file paths of edited images.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Text prompt describing the desired edit"
+                    },
+                    "image": {
+                        "type": "string",
+                        "description": "Path to the source image to edit"
+                    },
+                    "base": {
+                        "type": "string",
+                        "description": "Base model (e.g. klein-4b, klein-9b, qwen-image-edit, flux-2-dev). Default: auto-selected"
+                    },
+                    "steps": {
+                        "type": "integer",
+                        "description": "Number of inference steps (model-dependent default)"
+                    },
+                    "guidance": {
+                        "type": "number",
+                        "description": "Guidance scale (model-dependent default)"
+                    },
+                    "seed": {
+                        "type": "integer",
+                        "description": "Random seed for reproducibility"
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of edited images to generate. Default: 1"
+                    },
+                    "fast": {
+                        "type": "boolean",
+                        "description": "Use Lightning LoRA for faster generation (fewer steps)"
+                    }
+                },
+                "required": ["prompt", "image"]
+            }
+        },
+        {
+            "name": "train",
+            "description": "Start a LoRA training run on a dataset. Returns the training run name and status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "base": {
+                        "type": "string",
+                        "description": "Base model to train on (e.g. flux-dev, flux-schnell, z-image, sdxl)"
+                    },
+                    "lora_type": {
+                        "type": "string",
+                        "description": "Type of LoRA to train: style, character, or object",
+                        "enum": ["style", "character", "object"]
+                    },
+                    "dataset": {
+                        "type": "string",
+                        "description": "Path to training dataset directory"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name for the training run"
+                    },
+                    "trigger": {
+                        "type": "string",
+                        "description": "Trigger word for the LoRA"
+                    },
+                    "steps": {
+                        "type": "integer",
+                        "description": "Number of training steps"
+                    },
+                    "rank": {
+                        "type": "integer",
+                        "description": "LoRA rank (dimensionality)"
+                    },
+                    "lr": {
+                        "type": "number",
+                        "description": "Learning rate"
+                    },
+                    "preset": {
+                        "type": "string",
+                        "description": "Training preset: quick, standard, or advanced",
+                        "enum": ["quick", "standard", "advanced"]
+                    }
+                },
+                "required": ["base", "lora_type"]
+            }
+        },
+        {
+            "name": "train_status",
+            "description": "Check the status of LoRA training runs. Shows progress, loss, and completion status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Specific training run name to check. If omitted, shows all recent runs."
+                    }
+                }
+            }
+        },
+        {
             "name": "list_models",
             "description": "List all installed models with their type, variant, size, and ID.",
             "inputSchema": {
@@ -169,6 +272,32 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "search_models",
+            "description": "Search for models in the modl registry and optionally CivitAI.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (e.g. 'flux', 'anime', 'realistic')"
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": "Filter by model type (e.g. checkpoint, lora, vae)"
+                    },
+                    "popular": {
+                        "type": "boolean",
+                        "description": "Sort by popularity"
+                    },
+                    "civitai": {
+                        "type": "boolean",
+                        "description": "Include CivitAI results"
+                    }
+                },
+                "required": ["query"]
+            }
+        },
+        {
             "name": "describe",
             "description": "Describe/caption an image using AI vision models.",
             "inputSchema": {
@@ -180,6 +309,76 @@ fn tool_definitions() -> Value {
                     }
                 },
                 "required": ["path"]
+            }
+        },
+        {
+            "name": "score",
+            "description": "Score image quality and aesthetics using AI. Returns quality metrics for one or more images.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to an image file or directory of images to score"
+                    }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "upscale",
+            "description": "Upscale an image to higher resolution using AI super-resolution.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the image file to upscale"
+                    },
+                    "scale": {
+                        "type": "integer",
+                        "description": "Upscale factor: 2 or 4. Default: 4",
+                        "enum": [2, 4]
+                    }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "remove_bg",
+            "description": "Remove the background from an image, producing a transparent PNG.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the image file to remove background from"
+                    }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "enhance",
+            "description": "Enhance a text prompt for better image generation results using AI rewriting.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "The prompt to enhance"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Target model to optimize the prompt for"
+                    },
+                    "intensity": {
+                        "type": "string",
+                        "description": "Enhancement intensity: subtle, moderate, or aggressive",
+                        "enum": ["subtle", "moderate", "aggressive"]
+                    }
+                },
+                "required": ["prompt"]
             }
         }
     ])
@@ -298,6 +497,176 @@ fn tool_generate(args: &Value) -> Result<Value, (i32, String)> {
     }
 }
 
+fn tool_edit(args: &Value) -> Result<Value, (i32, String)> {
+    let prompt = args
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .ok_or((-32602, "Missing required parameter: prompt".to_string()))?;
+    let image = args
+        .get("image")
+        .and_then(|v| v.as_str())
+        .ok_or((-32602, "Missing required parameter: image".to_string()))?;
+
+    let mut cmd_args: Vec<String> = vec![
+        "edit".into(),
+        "--json".into(),
+        prompt.into(),
+        "--image".into(),
+        image.into(),
+    ];
+
+    if let Some(v) = args.get("base").and_then(|v| v.as_str()) {
+        cmd_args.extend(["--base".into(), v.into()]);
+    }
+    if let Some(v) = args.get("steps").and_then(|v| v.as_u64()) {
+        cmd_args.extend(["--steps".into(), v.to_string()]);
+    }
+    if let Some(v) = args.get("guidance").and_then(|v| v.as_f64()) {
+        cmd_args.extend(["--guidance".into(), v.to_string()]);
+    }
+    if let Some(v) = args.get("seed").and_then(|v| v.as_u64()) {
+        cmd_args.extend(["--seed".into(), v.to_string()]);
+    }
+    if let Some(v) = args.get("count").and_then(|v| v.as_u64()) {
+        cmd_args.extend(["--count".into(), v.to_string()]);
+    }
+    if args.get("fast").and_then(|v| v.as_bool()).unwrap_or(false) {
+        cmd_args.push("--fast".into());
+    }
+
+    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
+    let (stdout, stderr, success) = run_modl(&args_ref).map_err(|e| (-32603, e))?;
+
+    if !success {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err((-32603, format!("Edit failed: {}", msg.trim())));
+    }
+
+    // Parse the --json output from modl edit
+    if let Ok(result) = serde_json::from_str::<Value>(&stdout) {
+        let images = result.get("images").cloned().unwrap_or_else(|| json!([]));
+        let status = result
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed");
+
+        let mut text = format!("Status: {}\n", status);
+        if let Some(arr) = images.as_array() {
+            for path in arr {
+                if let Some(p) = path.as_str() {
+                    text.push_str(&format!("Image: {}\n", p));
+                }
+            }
+        }
+
+        Ok(json!({
+            "content": [{"type": "text", "text": text.trim()}]
+        }))
+    } else {
+        Ok(json!({
+            "content": [{"type": "text", "text": stdout.trim()}]
+        }))
+    }
+}
+
+fn tool_train(args: &Value) -> Result<Value, (i32, String)> {
+    let base = args
+        .get("base")
+        .and_then(|v| v.as_str())
+        .ok_or((-32602, "Missing required parameter: base".to_string()))?;
+    let lora_type = args
+        .get("lora_type")
+        .and_then(|v| v.as_str())
+        .ok_or((-32602, "Missing required parameter: lora_type".to_string()))?;
+
+    let mut cmd_args: Vec<String> = vec![
+        "train".into(),
+        "--json".into(),
+        "--base".into(),
+        base.into(),
+        "--lora-type".into(),
+        lora_type.into(),
+    ];
+
+    if let Some(v) = args.get("dataset").and_then(|v| v.as_str()) {
+        cmd_args.extend(["--dataset".into(), v.into()]);
+    }
+    if let Some(v) = args.get("name").and_then(|v| v.as_str()) {
+        cmd_args.extend(["--name".into(), v.into()]);
+    }
+    if let Some(v) = args.get("trigger").and_then(|v| v.as_str()) {
+        cmd_args.extend(["--trigger".into(), v.into()]);
+    }
+    if let Some(v) = args.get("steps").and_then(|v| v.as_u64()) {
+        cmd_args.extend(["--steps".into(), v.to_string()]);
+    }
+    if let Some(v) = args.get("rank").and_then(|v| v.as_u64()) {
+        cmd_args.extend(["--rank".into(), v.to_string()]);
+    }
+    if let Some(v) = args.get("lr").and_then(|v| v.as_f64()) {
+        cmd_args.extend(["--lr".into(), v.to_string()]);
+    }
+    if let Some(v) = args.get("preset").and_then(|v| v.as_str()) {
+        cmd_args.extend(["--preset".into(), v.into()]);
+    }
+
+    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
+    let (stdout, stderr, success) = run_modl(&args_ref).map_err(|e| (-32603, e))?;
+
+    if !success {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err((-32603, format!("Training failed: {}", msg.trim())));
+    }
+
+    // Parse the --json output from modl train
+    if let Ok(result) = serde_json::from_str::<Value>(&stdout) {
+        let name = result
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let status = result
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("started");
+
+        let text = format!("Training run '{}' {}", name, status);
+        Ok(json!({
+            "content": [{"type": "text", "text": text}]
+        }))
+    } else {
+        Ok(json!({
+            "content": [{"type": "text", "text": stdout.trim()}]
+        }))
+    }
+}
+
+fn tool_train_status(args: &Value) -> Result<Value, (i32, String)> {
+    let mut cmd_args: Vec<String> = vec!["train".into(), "status".into(), "--json".into()];
+
+    if let Some(v) = args.get("name").and_then(|v| v.as_str()) {
+        cmd_args.push(v.into());
+    }
+
+    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
+    let (stdout, stderr, success) = run_modl(&args_ref).map_err(|e| (-32603, e))?;
+
+    if !success {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err((-32603, format!("Train status failed: {}", msg.trim())));
+    }
+
+    if let Ok(result) = serde_json::from_str::<Value>(&stdout) {
+        Ok(json!({
+            "content": [{"type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_else(|_| stdout.clone())}]
+        }))
+    } else {
+        let clean = strip_ansi(&stdout);
+        Ok(json!({
+            "content": [{"type": "text", "text": clean.trim()}]
+        }))
+    }
+}
+
 fn tool_list_models(_args: &Value) -> Result<Value, (i32, String)> {
     let (stdout, stderr, success) = run_modl(&["ls"]).map_err(|e| (-32603, e))?;
 
@@ -348,6 +717,52 @@ fn tool_pull_model(args: &Value) -> Result<Value, (i32, String)> {
     }))
 }
 
+fn tool_search_models(args: &Value) -> Result<Value, (i32, String)> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or((-32602, "Missing required parameter: query".to_string()))?;
+
+    let mut cmd_args: Vec<String> = vec!["search".into(), "--json".into(), query.into()];
+
+    if let Some(v) = args.get("type").and_then(|v| v.as_str()) {
+        cmd_args.extend(["--type".into(), v.into()]);
+    }
+    if args
+        .get("popular")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        cmd_args.push("--popular".into());
+    }
+    if args
+        .get("civitai")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        cmd_args.push("--civitai".into());
+    }
+
+    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
+    let (stdout, stderr, success) = run_modl(&args_ref).map_err(|e| (-32603, e))?;
+
+    if !success {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err((-32603, format!("Search failed: {}", msg.trim())));
+    }
+
+    if let Ok(result) = serde_json::from_str::<Value>(&stdout) {
+        Ok(json!({
+            "content": [{"type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_else(|_| stdout.clone())}]
+        }))
+    } else {
+        let clean = strip_ansi(&stdout);
+        Ok(json!({
+            "content": [{"type": "text", "text": clean.trim()}]
+        }))
+    }
+}
+
 fn tool_describe(args: &Value) -> Result<Value, (i32, String)> {
     let path = args
         .get("path")
@@ -369,6 +784,140 @@ fn tool_describe(args: &Value) -> Result<Value, (i32, String)> {
             .unwrap_or(&stdout);
         Ok(json!({
             "content": [{"type": "text", "text": caption}]
+        }))
+    } else {
+        Ok(json!({
+            "content": [{"type": "text", "text": stdout.trim()}]
+        }))
+    }
+}
+
+fn tool_score(args: &Value) -> Result<Value, (i32, String)> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or((-32602, "Missing required parameter: path".to_string()))?;
+
+    let (stdout, stderr, success) =
+        run_modl(&["image", "score", "--json", path]).map_err(|e| (-32603, e))?;
+
+    if !success {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err((-32603, format!("Score failed: {}", msg.trim())));
+    }
+
+    if let Ok(result) = serde_json::from_str::<Value>(&stdout) {
+        Ok(json!({
+            "content": [{"type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_else(|_| stdout.clone())}]
+        }))
+    } else {
+        Ok(json!({
+            "content": [{"type": "text", "text": stdout.trim()}]
+        }))
+    }
+}
+
+fn tool_upscale(args: &Value) -> Result<Value, (i32, String)> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or((-32602, "Missing required parameter: path".to_string()))?;
+
+    let mut cmd_args: Vec<String> = vec![
+        "image".into(),
+        "upscale".into(),
+        "--json".into(),
+        path.into(),
+    ];
+
+    if let Some(v) = args.get("scale").and_then(|v| v.as_u64()) {
+        cmd_args.extend(["--scale".into(), v.to_string()]);
+    }
+
+    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
+    let (stdout, stderr, success) = run_modl(&args_ref).map_err(|e| (-32603, e))?;
+
+    if !success {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err((-32603, format!("Upscale failed: {}", msg.trim())));
+    }
+
+    if let Ok(result) = serde_json::from_str::<Value>(&stdout) {
+        let output_path = result
+            .get("output")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let text = format!("Upscaled image: {}", output_path);
+        Ok(json!({
+            "content": [{"type": "text", "text": text}]
+        }))
+    } else {
+        Ok(json!({
+            "content": [{"type": "text", "text": stdout.trim()}]
+        }))
+    }
+}
+
+fn tool_remove_bg(args: &Value) -> Result<Value, (i32, String)> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or((-32602, "Missing required parameter: path".to_string()))?;
+
+    let (stdout, stderr, success) =
+        run_modl(&["image", "remove-bg", "--json", path]).map_err(|e| (-32603, e))?;
+
+    if !success {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err((-32603, format!("Remove background failed: {}", msg.trim())));
+    }
+
+    if let Ok(result) = serde_json::from_str::<Value>(&stdout) {
+        let output_path = result
+            .get("output")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let text = format!("Background removed: {}", output_path);
+        Ok(json!({
+            "content": [{"type": "text", "text": text}]
+        }))
+    } else {
+        Ok(json!({
+            "content": [{"type": "text", "text": stdout.trim()}]
+        }))
+    }
+}
+
+fn tool_enhance(args: &Value) -> Result<Value, (i32, String)> {
+    let prompt = args
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .ok_or((-32602, "Missing required parameter: prompt".to_string()))?;
+
+    let mut cmd_args: Vec<String> = vec!["enhance".into(), "--json".into(), prompt.into()];
+
+    if let Some(v) = args.get("model").and_then(|v| v.as_str()) {
+        cmd_args.extend(["--model".into(), v.into()]);
+    }
+    if let Some(v) = args.get("intensity").and_then(|v| v.as_str()) {
+        cmd_args.extend(["--intensity".into(), v.into()]);
+    }
+
+    let args_ref: Vec<&str> = cmd_args.iter().map(|s| s.as_str()).collect();
+    let (stdout, stderr, success) = run_modl(&args_ref).map_err(|e| (-32603, e))?;
+
+    if !success {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err((-32603, format!("Enhance failed: {}", msg.trim())));
+    }
+
+    if let Ok(result) = serde_json::from_str::<Value>(&stdout) {
+        let enhanced = result
+            .get("enhanced")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&stdout);
+        Ok(json!({
+            "content": [{"type": "text", "text": enhanced}]
         }))
     } else {
         Ok(json!({
@@ -411,9 +960,17 @@ fn handle_request(request: &JsonRpcRequest) -> Option<JsonRpcResponse> {
 
             match name {
                 "generate" => tool_generate(&arguments),
+                "edit" => tool_edit(&arguments),
+                "train" => tool_train(&arguments),
+                "train_status" => tool_train_status(&arguments),
                 "list_models" => tool_list_models(&arguments),
                 "pull_model" => tool_pull_model(&arguments),
+                "search_models" => tool_search_models(&arguments),
                 "describe" => tool_describe(&arguments),
+                "score" => tool_score(&arguments),
+                "upscale" => tool_upscale(&arguments),
+                "remove_bg" => tool_remove_bg(&arguments),
+                "enhance" => tool_enhance(&arguments),
                 _ => Err((-32601, format!("Unknown tool: {}", name))),
             }
         }
@@ -574,9 +1131,18 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"generate"));
+        assert!(names.contains(&"edit"));
+        assert!(names.contains(&"train"));
+        assert!(names.contains(&"train_status"));
         assert!(names.contains(&"list_models"));
         assert!(names.contains(&"pull_model"));
+        assert!(names.contains(&"search_models"));
         assert!(names.contains(&"describe"));
+        assert!(names.contains(&"score"));
+        assert!(names.contains(&"upscale"));
+        assert!(names.contains(&"remove_bg"));
+        assert!(names.contains(&"enhance"));
+        assert_eq!(tool_list.len(), 12);
     }
 
     #[test]
@@ -623,6 +1189,97 @@ mod tests {
             method: "tools/call".into(),
             params: Some(json!({"name": "generate", "arguments": {}})),
             id: Some(json!(5)),
+        };
+        let resp = handle_request(&req).unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("prompt"));
+    }
+
+    #[test]
+    fn test_edit_missing_params() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "tools/call".into(),
+            params: Some(json!({"name": "edit", "arguments": {"prompt": "test"}})),
+            id: Some(json!(7)),
+        };
+        let resp = handle_request(&req).unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("image"));
+    }
+
+    #[test]
+    fn test_train_missing_params() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "tools/call".into(),
+            params: Some(json!({"name": "train", "arguments": {"base": "flux-dev"}})),
+            id: Some(json!(8)),
+        };
+        let resp = handle_request(&req).unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("lora_type"));
+    }
+
+    #[test]
+    fn test_search_models_missing_query() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "tools/call".into(),
+            params: Some(json!({"name": "search_models", "arguments": {}})),
+            id: Some(json!(9)),
+        };
+        let resp = handle_request(&req).unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("query"));
+    }
+
+    #[test]
+    fn test_score_missing_path() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "tools/call".into(),
+            params: Some(json!({"name": "score", "arguments": {}})),
+            id: Some(json!(10)),
+        };
+        let resp = handle_request(&req).unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("path"));
+    }
+
+    #[test]
+    fn test_upscale_missing_path() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "tools/call".into(),
+            params: Some(json!({"name": "upscale", "arguments": {}})),
+            id: Some(json!(11)),
+        };
+        let resp = handle_request(&req).unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("path"));
+    }
+
+    #[test]
+    fn test_remove_bg_missing_path() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "tools/call".into(),
+            params: Some(json!({"name": "remove_bg", "arguments": {}})),
+            id: Some(json!(12)),
+        };
+        let resp = handle_request(&req).unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("path"));
+    }
+
+    #[test]
+    fn test_enhance_missing_prompt() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "tools/call".into(),
+            params: Some(json!({"name": "enhance", "arguments": {}})),
+            id: Some(json!(13)),
         };
         let resp = handle_request(&req).unwrap();
         assert!(resp.error.is_some());

@@ -16,7 +16,7 @@ fn help_shows_description() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(contains("Model manager"));
+        .stdout(contains("AI image generation toolkit"));
 }
 
 #[test]

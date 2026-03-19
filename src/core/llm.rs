@@ -146,7 +146,7 @@ impl LocalLlmBackend {
         // For now, validate the file exists so we fail early.
         if !model_path.exists() {
             bail!(
-                "Model file not found: {}. Run `modl llm pull {model_id}` first.",
+                "Model file not found: {}. Configure cloud LLM access in ~/.modl/auth.yaml or use Ollama.",
                 model_path.display()
             );
         }
@@ -481,7 +481,7 @@ impl LlmBackend for BuiltinLlmBackend {
         Ok(CompletionResult::Text(format!(
             "I'm running in builtin mode (no LLM model loaded). \
              Your request: \"{}\". \
-             For better results, run `modl llm pull qwen3.5-4b-instruct-q4` or configure cloud access.",
+             For better results, configure cloud LLM access or use Ollama.",
             &last_user[..last_user.len().min(100)]
         )))
     }
@@ -490,7 +490,7 @@ impl LlmBackend for BuiltinLlmBackend {
         // Return a generic description — can't actually analyze images
         Ok(format!(
             "Received {} image(s). Running in builtin mode — unable to analyze images. \
-             Install a VL model with `modl llm pull qwen3-vl-8b-instruct-q4` for image understanding.",
+             Configure cloud LLM access or use Ollama with a VL model for image understanding.",
             images.len()
         ))
     }
@@ -548,7 +548,7 @@ pub fn resolve_model(model_id: &str, prefer_gpu: bool) -> Result<Box<dyn LlmBack
     }
     bail!(
         "Model '{model_id}' not available locally and cloud not configured. \
-         Run `modl llm pull {model_id}` or configure cloud access in ~/.modl/auth.yaml."
+         Configure cloud LLM access in ~/.modl/auth.yaml or use Ollama."
     )
 }
 
