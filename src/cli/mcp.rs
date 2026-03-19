@@ -755,7 +755,7 @@ fn tool_describe(args: &Value) -> Result<Value, (i32, String)> {
         .ok_or((-32602, "Missing required parameter: path".to_string()))?;
 
     let (stdout, stderr, success) =
-        run_modl(&["image", "describe", "--json", path]).map_err(|e| (-32603, e))?;
+        run_modl(&["vision", "describe", "--json", path]).map_err(|e| (-32603, e))?;
 
     if !success {
         return Err((-32603, format!("Describe failed: {}", stderr.trim())));
@@ -784,7 +784,7 @@ fn tool_score(args: &Value) -> Result<Value, (i32, String)> {
         .ok_or((-32602, "Missing required parameter: path".to_string()))?;
 
     let (stdout, stderr, success) =
-        run_modl(&["image", "score", "--json", path]).map_err(|e| (-32603, e))?;
+        run_modl(&["vision", "score", "--json", path]).map_err(|e| (-32603, e))?;
 
     if !success {
         let msg = if stderr.is_empty() { &stdout } else { &stderr };
@@ -809,7 +809,7 @@ fn tool_upscale(args: &Value) -> Result<Value, (i32, String)> {
         .ok_or((-32602, "Missing required parameter: path".to_string()))?;
 
     let mut cmd_args: Vec<String> = vec![
-        "image".into(),
+        "process".into(),
         "upscale".into(),
         "--json".into(),
         path.into(),
@@ -850,7 +850,7 @@ fn tool_remove_bg(args: &Value) -> Result<Value, (i32, String)> {
         .ok_or((-32602, "Missing required parameter: path".to_string()))?;
 
     let (stdout, stderr, success) =
-        run_modl(&["image", "remove-bg", "--json", path]).map_err(|e| (-32603, e))?;
+        run_modl(&["process", "remove-bg", "--json", path]).map_err(|e| (-32603, e))?;
 
     if !success {
         let msg = if stderr.is_empty() { &stdout } else { &stderr };

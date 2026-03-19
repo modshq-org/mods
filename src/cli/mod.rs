@@ -287,7 +287,7 @@ pub enum TrainSubcommands {
 }
 
 #[derive(Subcommand)]
-pub enum ImageCommands {
+pub enum VisionCommands {
     /// Describe image content using vision-language AI (detailed captioning)
     Describe {
         /// Image file(s) or directory
@@ -360,31 +360,10 @@ pub enum ImageCommands {
         #[arg(long)]
         json: bool,
     },
+}
 
-    /// Generate a segmentation mask for use with generate --mask (inpainting)
-    Segment {
-        /// Input image
-        image: String,
-        /// Output mask path (default: <image>_mask.png)
-        #[arg(long, short = 'o')]
-        output: Option<String>,
-        /// Segmentation method: bbox, background, sam
-        #[arg(long, default_value = "bbox")]
-        method: String,
-        /// Bounding box: x1,y1,x2,y2 (for bbox/sam methods)
-        #[arg(long)]
-        bbox: Option<String>,
-        /// Point prompt: x,y (for sam method)
-        #[arg(long)]
-        point: Option<String>,
-        /// Expand mask by N pixels (feathering)
-        #[arg(long, default_value = "10")]
-        expand: u32,
-        /// Output result as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
+#[derive(Subcommand)]
+pub enum ProcessCommands {
     /// Upscale images 2x or 4x using Real-ESRGAN super-resolution
     Upscale {
         /// Image file(s) or directory to upscale
@@ -418,6 +397,30 @@ pub enum ImageCommands {
         json: bool,
     },
 
+    /// Generate a segmentation mask for use with generate --mask (inpainting)
+    Segment {
+        /// Input image
+        image: String,
+        /// Output mask path (default: <image>_mask.png)
+        #[arg(long, short = 'o')]
+        output: Option<String>,
+        /// Segmentation method: bbox, background, sam
+        #[arg(long, default_value = "bbox")]
+        method: String,
+        /// Bounding box: x1,y1,x2,y2 (for bbox/sam methods)
+        #[arg(long)]
+        bbox: Option<String>,
+        /// Point prompt: x,y (for sam method)
+        #[arg(long)]
+        point: Option<String>,
+        /// Expand mask by N pixels (feathering)
+        #[arg(long, default_value = "10")]
+        expand: u32,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Extract control images from an image (canny, depth, pose, softedge, scribble)
     Preprocess {
         /// Preprocessing method
@@ -428,32 +431,11 @@ pub enum ImageCommands {
 
 #[derive(Subcommand)]
 pub enum SystemCommands {
-    /// View or update configuration (e.g., storage.root, gpu.vram_mb)
-    Config {
-        /// Config key to view or set (e.g., storage.root)
-        key: Option<String>,
-        /// New value (required when setting a key)
-        value: Option<String>,
-    },
-
-    /// Check for broken symlinks, missing deps, corrupt files
-    Doctor {
-        /// Also verify SHA256 hashes (slow for large files)
-        #[arg(long)]
-        verify_hashes: bool,
-        /// Re-populate database from orphaned store files
-        #[arg(long)]
-        repair: bool,
-    },
-
     /// Remove unreferenced files from the store
     Gc,
 
     /// Fetch latest registry index
     Update,
-
-    /// Update modl CLI to the latest release
-    Upgrade,
 
     /// Link a tool's model folder (ComfyUI, A1111)
     Link {
@@ -465,6 +447,22 @@ pub enum SystemCommands {
         /// Path to A1111 installation
         #[arg(long)]
         a1111: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AuthCommands {
+    /// Login to modl hub
+    Login,
+    /// Logout from modl hub
+    Logout,
+    /// Show hub account info
+    Whoami,
+    /// Configure source credentials (HuggingFace, CivitAI) for gated model downloads
+    Add {
+        /// Auth provider: huggingface or civitai
+        #[arg(value_enum)]
+        provider: AuthProvider,
     },
 }
 
@@ -701,7 +699,7 @@ pub enum Commands {
     },
 
     /// Enhance prompts with AI quality tags and descriptors for better generation results
-    #[command(after_help = ENHANCE_EXAMPLES)]
+    #[command(after_help = ENHANCE_EXAMPLES, hide = true)]
     Enhance {
         /// Text prompt to enhance
         prompt: String,
@@ -818,11 +816,17 @@ pub enum Commands {
         id: String,
     },
 
-    // ── Image Tools ──────────────────────────────────────────────────
-    /// Image analysis & processing tools (describe, score, detect, upscale, remove-bg, etc.)
-    Image {
+    // ── Vision & Processing ─────────────────────────────────────────
+    /// Image understanding tools (describe, score, detect, ground, compare)
+    Vision {
         #[command(subcommand)]
-        command: ImageCommands,
+        command: VisionCommands,
+    },
+
+    /// Image processing tools (upscale, remove-bg, segment, preprocess)
+    Process {
+        #[command(subcommand)]
+        command: ProcessCommands,
     },
 
     // ── Remote GPU ───────────────────────────────────────────────────
@@ -832,21 +836,11 @@ pub enum Commands {
         command: GpuCommands,
     },
 
-    // ── Hub Identity ─────────────────────────────────────────────────
-    /// Login to modl hub
-    Login,
-
-    /// Logout from modl hub
-    Logout,
-
-    /// Show hub account info
-    Whoami,
-
-    /// Configure source auth (HuggingFace, CivitAI)
+    // ── Auth ──────────────────────────────────────────────────────────
+    /// Authentication: hub login/logout and source credentials (HuggingFace, CivitAI)
     Auth {
-        /// Auth provider: huggingface or civitai
-        #[arg(value_enum)]
-        provider: AuthProvider,
+        #[command(subcommand)]
+        command: AuthCommands,
     },
 
     // ── Data Management ──────────────────────────────────────────────
@@ -898,13 +892,47 @@ pub enum Commands {
     Mcp,
 
     // ── System ───────────────────────────────────────────────────────
-    /// System maintenance (config, doctor, gc, update, upgrade)
+    /// View or update configuration (e.g., storage.root, gpu.vram_mb)
+    Config {
+        /// Config key to view or set (e.g., storage.root)
+        key: Option<String>,
+        /// New value (required when setting a key)
+        value: Option<String>,
+    },
+
+    /// Check for broken symlinks, missing deps, corrupt files
+    Doctor {
+        /// Also verify SHA256 hashes (slow for large files)
+        #[arg(long)]
+        verify_hashes: bool,
+        /// Re-populate database from orphaned store files
+        #[arg(long)]
+        repair: bool,
+    },
+
+    /// Update modl CLI to the latest release
+    Upgrade,
+
+    /// System maintenance (gc, update, link)
     System {
         #[command(subcommand)]
         command: SystemCommands,
     },
 
+    // ── Workflow ─────────────────────────────────────────────────────
+    /// Execute a workflow from a YAML spec file
+    Run {
+        /// Workflow spec file (.yaml)
+        spec: String,
+        /// Auto-pull missing models before running
+        #[arg(long)]
+        auto_pull: bool,
+    },
+
     // ── Hidden ───────────────────────────────────────────────────────
+    /// Login to modl hub (alias for `modl auth login`)
+    #[command(hide = true)]
+    Login,
     /// Interactive first-run setup
     #[command(hide = true)]
     Init {
@@ -1225,34 +1253,50 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Info { id } => info::run(&id).await,
 
-        // ── Image Tools ──────────────────────────────────────────────
-        Commands::Image { command } => match command {
-            ImageCommands::Describe {
+        // ── Vision (image → text/data) ─────────────────────────────
+        Commands::Vision { command } => match command {
+            VisionCommands::Describe {
                 paths,
                 detail,
                 model,
                 json,
             } => describe::run(&paths, &detail, model.as_deref(), json).await,
-            ImageCommands::Score { paths, json } => score::run(&paths, json).await,
-            ImageCommands::Detect {
+            VisionCommands::Score { paths, json } => score::run(&paths, json).await,
+            VisionCommands::Detect {
                 paths,
                 r#type,
                 embeddings,
                 json,
             } => detect::run(&paths, &r#type, embeddings, json).await,
-            ImageCommands::Ground {
+            VisionCommands::Ground {
                 query,
                 paths,
                 threshold,
                 model,
                 json,
             } => ground::run(&query, &paths, threshold, model.as_deref(), json).await,
-            ImageCommands::Compare {
+            VisionCommands::Compare {
                 paths,
                 reference,
                 json,
             } => compare::run(&paths, reference.as_deref(), json).await,
-            ImageCommands::Segment {
+        },
+
+        // ── Process (image → image) ─────────────────────────────────
+        Commands::Process { command } => match command {
+            ProcessCommands::Upscale {
+                paths,
+                scale,
+                model,
+                output,
+                json,
+            } => upscale::run(&paths, output.as_deref(), scale, &model, json).await,
+            ProcessCommands::RemoveBg {
+                paths,
+                output,
+                json,
+            } => remove_bg::run(&paths, output.as_deref(), json).await,
+            ProcessCommands::Segment {
                 image,
                 output,
                 method,
@@ -1272,19 +1316,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 )
                 .await
             }
-            ImageCommands::Upscale {
-                paths,
-                scale,
-                model,
-                output,
-                json,
-            } => upscale::run(&paths, output.as_deref(), scale, &model, json).await,
-            ImageCommands::RemoveBg {
-                paths,
-                output,
-                json,
-            } => remove_bg::run(&paths, output.as_deref(), json).await,
-            ImageCommands::Preprocess { command } => preprocess::run(command).await,
+            ProcessCommands::Preprocess { command } => preprocess::run(command).await,
         },
 
         // ── Remote GPU ───────────────────────────────────────────────
@@ -1295,11 +1327,14 @@ pub async fn run(cli: Cli) -> Result<()> {
             GpuCommands::Ssh => gpu::ssh().await,
         },
 
-        // ── Hub Identity ─────────────────────────────────────────────
+        // ── Auth ─────────────────────────────────────────────────────
+        Commands::Auth { command } => match command {
+            AuthCommands::Login => login::run().await,
+            AuthCommands::Logout => logout::run().await,
+            AuthCommands::Whoami => whoami::run().await,
+            AuthCommands::Add { provider } => auth::run(provider).await,
+        },
         Commands::Login => login::run().await,
-        Commands::Logout => logout::run().await,
-        Commands::Whoami => whoami::run().await,
-        Commands::Auth { provider } => auth::run(provider).await,
 
         // ── Data Management ──────────────────────────────────────────
         Commands::Dataset { command } => datasets::run(command).await,
@@ -1329,17 +1364,15 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Mcp => mcp::run().await,
 
         // ── System ───────────────────────────────────────────────────
+        Commands::Config { key, value } => config::run(key.as_deref(), value.as_deref()).await,
+        Commands::Doctor {
+            verify_hashes,
+            repair,
+        } => doctor::run(verify_hashes, repair).await,
+        Commands::Upgrade => upgrade::run().await,
         Commands::System { command } => match command {
-            SystemCommands::Config { key, value } => {
-                config::run(key.as_deref(), value.as_deref()).await
-            }
-            SystemCommands::Doctor {
-                verify_hashes,
-                repair,
-            } => doctor::run(verify_hashes, repair).await,
             SystemCommands::Gc => gc::run().await,
             SystemCommands::Update => update::run().await,
-            SystemCommands::Upgrade => upgrade::run().await,
             SystemCommands::Link {
                 path,
                 comfyui,
@@ -1349,6 +1382,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                 link::run(comfy.as_deref(), a1111.as_deref()).await
             }
         },
+
+        // ── Workflow ────────────────────────────────────────────────
+        Commands::Run { spec, auto_pull: _ } => {
+            anyhow::bail!("modl run is not yet implemented (spec: {spec})")
+        }
 
         // ── Hidden ───────────────────────────────────────────────────
         Commands::Init { defaults, root } => init::run(defaults, root.as_deref()).await,
@@ -1498,13 +1536,67 @@ fn print_train_info() {
 }
 
 fn dump_cli_schema() {
+    use crate::core::model_family::{self, CONTROLNET_SUPPORT, STYLE_REF_SUPPORT};
+
     let cmd = Cli::command();
     let mut commands = Vec::new();
     collect_schema_commands(&cmd, "", &mut commands);
 
+    // Build model capability matrix from model_family.rs
+    let models: Vec<serde_json::Value> = model_family::FAMILIES
+        .iter()
+        .flat_map(|f| {
+            f.models.iter().map(move |m| {
+                let has_controlnet = CONTROLNET_SUPPORT.iter().any(|c| c.base_model_id == m.id);
+                let controlnet_types: Vec<&str> = CONTROLNET_SUPPORT
+                    .iter()
+                    .find(|c| c.base_model_id == m.id)
+                    .map(|c| c.supported_types.to_vec())
+                    .unwrap_or_default();
+                let has_style_ref = STYLE_REF_SUPPORT.iter().any(|s| s.base_model_id == m.id);
+                let style_ref_mechanism = STYLE_REF_SUPPORT
+                    .iter()
+                    .find(|s| s.base_model_id == m.id)
+                    .map(|s| s.mechanism);
+
+                serde_json::json!({
+                    "id": m.id,
+                    "name": m.name,
+                    "family": f.name,
+                    "vendor": f.vendor,
+                    "description": m.description,
+                    "params_b": m.total_b,
+                    "transformer_b": m.transformer_b,
+                    "vram_bf16_gb": m.vram_bf16_gb,
+                    "vram_fp8_gb": m.vram_fp8_gb,
+                    "capabilities": {
+                        "txt2img": m.capabilities.txt2img,
+                        "img2img": m.capabilities.img2img,
+                        "inpaint": m.capabilities.inpaint,
+                        "edit": m.capabilities.edit,
+                        "training": m.capabilities.training,
+                        "controlnet": has_controlnet,
+                        "controlnet_types": controlnet_types,
+                        "style_ref": has_style_ref,
+                        "style_ref_mechanism": style_ref_mechanism,
+                        "text_rendering": m.text_rendering,
+                    },
+                    "defaults": {
+                        "steps": m.default_steps,
+                        "guidance": m.default_guidance,
+                        "resolution": m.default_resolution,
+                    },
+                    "quality": m.quality,
+                    "speed": m.speed,
+                })
+            })
+        })
+        .collect();
+
     let schema = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "commands": commands,
+        "models": models,
     });
 
     println!("{}", serde_json::to_string_pretty(&schema).unwrap());
