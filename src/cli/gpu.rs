@@ -269,7 +269,8 @@ pub async fn agent(session_token: &str, api_base: &str) -> Result<()> {
 
         println!("[agent] Received job {job_id} (type: {job_type})");
 
-        // Ensure the model is available locally (pull if needed)
+        // Ensure the model is available locally (pull if needed).
+        // Use --variant fp16 to avoid interactive prompts in non-TTY.
         if let Some(model_id) = spec
             .get("model")
             .and_then(|m| m.get("base_model_id"))
@@ -277,7 +278,7 @@ pub async fn agent(session_token: &str, api_base: &str) -> Result<()> {
         {
             println!("[agent] Ensuring model {model_id} is available...");
             let pull_status = std::process::Command::new("modl")
-                .args(["pull", model_id])
+                .args(["pull", model_id, "--variant", "fp16"])
                 .status();
             match pull_status {
                 Ok(s) if s.success() => println!("[agent] Model {model_id} ready"),
