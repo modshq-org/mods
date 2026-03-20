@@ -8,6 +8,7 @@ use crate::core::db::Database;
 use crate::core::executor::{Executor, LocalExecutor};
 use crate::core::job::*;
 use crate::core::model_family;
+use crate::core::outputs::{SidecarMetadata, write_sidecar_yaml};
 use crate::core::preflight;
 
 /// All arguments for `modl edit`, used by both CLI and web UI.
@@ -418,6 +419,21 @@ async fn execute_edit(
                 artifact.size_bytes.unwrap_or(0),
                 Some(&metadata_str),
             );
+
+            // Write YAML sidecar file next to the image
+            let sidecar = SidecarMetadata {
+                prompt: spec.prompt.clone(),
+                base_model: spec.model.base_model_id.clone(),
+                seed: image_seed,
+                steps: spec.params.steps,
+                guidance: spec.params.guidance,
+                size: String::new(), // edit mode does not specify output size
+                lora: spec.lora.as_ref().map(|l| l.name.clone()),
+                lora_strength: spec.lora.as_ref().map(|l| l.weight),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                source: "edit".to_string(),
+            };
+            write_sidecar_yaml(&artifact.path, &sidecar);
         }
 
         let artifact_paths: Vec<String> = artifacts.iter().map(|a| a.path.clone()).collect();

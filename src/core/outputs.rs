@@ -8,10 +8,57 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::db::{ArtifactRecord, Database};
 use super::paths;
+
+// ---------------------------------------------------------------------------
+// Sidecar YAML metadata
+// ---------------------------------------------------------------------------
+
+/// Metadata written as a YAML sidecar file alongside generated/edited images.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SidecarMetadata {
+    pub prompt: String,
+    pub base_model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    pub steps: u32,
+    pub guidance: f32,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub size: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lora: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lora_strength: Option<f32>,
+    pub created_at: String,
+    pub source: String,
+}
+
+/// Write a YAML sidecar file next to an image.
+///
+/// The sidecar is named `<stem>.yaml` where `<stem>` is the image filename
+/// without its extension. Failures are logged as warnings but never propagated
+/// — sidecar writing must not break generation/editing.
+pub fn write_sidecar_yaml(image_path: &str, metadata: &SidecarMetadata) {
+    let path = Path::new(image_path);
+    let sidecar_path = path.with_extension("yaml");
+    match serde_yaml::to_string(metadata) {
+        Ok(yaml) => {
+            if let Err(e) = std::fs::write(&sidecar_path, &yaml) {
+                eprintln!(
+                    "Warning: failed to write sidecar YAML {}: {}",
+                    sidecar_path.display(),
+                    e
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("Warning: failed to serialize sidecar YAML: {}", e);
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -409,6 +456,10 @@ pub fn delete_output(
     } else {
         false
     };
+
+    // Clean up sidecar YAML if present
+    let sidecar_path = target_file.with_extension("yaml");
+    let _ = std::fs::remove_file(sidecar_path);
 
     // Clean up cached thumbnails
     cleanup_thumbs(&target_file);

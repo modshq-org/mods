@@ -256,7 +256,7 @@ pub async fn api_list_models() -> impl IntoResponse {
                 description: "AI-powered prompt expansion (enhance command, Studio)".to_string(),
                 model_type: "LLM".to_string(),
                 installed: false,
-                install_hint: Some("modl llm pull".to_string()),
+                install_hint: Some("Configure cloud LLM or Ollama".to_string()),
             });
         }
 

@@ -16,6 +16,7 @@ pub async fn run(
     for_model: Option<&str>,
     tag: Option<&str>,
     min_rating: Option<f32>,
+    json: bool,
 ) -> Result<()> {
     let index = RegistryIndex::load_or_fetch().await?;
 
@@ -37,6 +38,22 @@ pub async fn run(
 
     if let Some(min) = min_rating {
         results.retain(|m| m.rating.unwrap_or(0.0) >= min);
+    }
+
+    if json {
+        let json_results: Vec<serde_json::Value> = results
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "id": m.id,
+                    "name": m.name,
+                    "type": m.asset_type.to_string(),
+                    "tags": m.tags,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string(&json_results)?);
+        return Ok(());
     }
 
     // ── Registry results ────────────────────────────────────────────────

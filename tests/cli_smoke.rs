@@ -16,7 +16,7 @@ fn help_shows_description() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(contains("Model manager"));
+        .stdout(contains("AI image generation toolkit"));
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn model_search_rejects_invalid_type() {
 #[test]
 fn auth_rejects_invalid_provider() {
     modl_cmd()
-        .args(["auth", "dropbox"])
+        .args(["auth", "add", "dropbox"])
         .assert()
         .failure()
         .stderr(contains("possible values"));
