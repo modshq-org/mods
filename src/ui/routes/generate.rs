@@ -172,6 +172,7 @@ async fn run_single_generate(sender: &broadcast::Sender<String>, req: GenerateRe
         init_image: req.init_image.as_deref(),
         mask: req.mask.as_deref(),
         strength: req.strength,
+        inpaint: crate::cli::InpaintMethod::Auto,
         controlnet: &[],
         cn_strength: "0.75",
         cn_end: "0.8",

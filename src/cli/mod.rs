@@ -217,6 +217,17 @@ const MODEL_PULL_EXAMPLES: &str = "\
   modl pull sdxl-base-1.0 --dry-run
 ";
 
+/// Inpainting method for `modl generate --mask`.
+#[derive(Clone, Debug, ValueEnum)]
+pub enum InpaintMethod {
+    /// Auto-select: LanPaint for supported models, standard for others
+    Auto,
+    /// LanPaint training-free inpainting (supports Klein, Z-Image)
+    Lanpaint,
+    /// Standard diffusers inpainting or Flux Fill
+    Standard,
+}
+
 /// Auth provider for `modl auth` command.
 #[derive(Clone, Debug, ValueEnum)]
 pub enum AuthProvider {
@@ -544,6 +555,9 @@ pub enum Commands {
         /// Denoising strength for img2img (0.0 = identical to input, 1.0 = fully new). Default: 0.75
         #[arg(long)]
         strength: Option<f32>,
+        /// Inpainting method: auto (default), lanpaint (training-free), standard (diffusers/Fill)
+        #[arg(long, value_enum, default_value = "auto")]
+        inpaint: InpaintMethod,
         /// Control image for ControlNet conditioning (can be repeated up to 2x)
         #[arg(long)]
         controlnet: Vec<String>,
@@ -998,6 +1012,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             init_image,
             mask,
             strength,
+            inpaint,
             controlnet,
             cn_strength,
             cn_end,
@@ -1024,6 +1039,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 init_image: init_image.as_deref(),
                 mask: mask.as_deref(),
                 strength,
+                inpaint,
                 controlnet: &controlnet,
                 cn_strength: &cn_strength,
                 cn_end: &cn_end,

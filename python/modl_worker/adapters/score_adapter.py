@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
+from modl_worker.device import get_device
 from modl_worker.image_util import load_image
 from modl_worker.protocol import EventEmitter
 
@@ -66,7 +67,7 @@ def _load_clip(emitter: EventEmitter, model_path: str | None = None):
     emitter.info(f"Loading CLIP ViT-L/14 from {source}: {model_id}")
 
     processor = CLIPProcessor.from_pretrained(model_id)
-    model = CLIPModel.from_pretrained(model_id).to("cuda").eval()
+    model = CLIPModel.from_pretrained(model_id).to(get_device()).eval()
 
     return model, processor
 
@@ -86,7 +87,7 @@ def _load_aesthetic_predictor(
         state_dict = torch.hub.load_state_dict_from_url(url, map_location="cpu", weights_only=True)
 
     predictor.load_state_dict(state_dict)
-    predictor.to("cuda").eval()
+    predictor.to(get_device()).eval()
     return predictor
 
 
@@ -152,7 +153,7 @@ def run_score(config_path: Path, emitter: EventEmitter, model_cache: dict | None
         try:
             t0 = time.time()
             image = load_image(image_path)
-            inputs = clip_processor(images=image, return_tensors="pt").to("cuda")
+            inputs = clip_processor(images=image, return_tensors="pt").to(get_device())
 
             with torch.no_grad():
                 image_features = clip_model.get_image_features(**inputs)

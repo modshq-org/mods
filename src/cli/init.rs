@@ -123,19 +123,31 @@ pub async fn run(defaults: bool, root_override: Option<&str>) -> Result<()> {
     let gpu_info = gpu::detect();
     let gpu_override = match &gpu_info {
         Some(info) => {
+            let device_label = match info.device {
+                gpu::DeviceType::Cuda => "CUDA",
+                gpu::DeviceType::Mps => "MPS (Apple Silicon)",
+            };
             println!(
-                "  {} {} — {} MB VRAM",
+                "  {} {} — {} MB VRAM ({})",
                 style("✓").green(),
                 info.name,
-                info.vram_mb
+                info.vram_mb,
+                device_label,
             );
+            if info.device == gpu::DeviceType::Mps {
+                println!(
+                    "  {} Training is not available on MPS. Use {} for cloud training.",
+                    style("!").yellow(),
+                    style("modl train --cloud").cyan(),
+                );
+            }
             Some(GpuOverride {
                 vram_mb: info.vram_mb,
             })
         }
         None => {
             println!(
-                "  {} No NVIDIA GPU detected. Variant auto-selection will default to smallest.",
+                "  {} No GPU detected. Variant auto-selection will default to smallest.",
                 style("!").yellow()
             );
             None

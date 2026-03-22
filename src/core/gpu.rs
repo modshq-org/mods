@@ -1,13 +1,32 @@
+/// The type of GPU/accelerator device detected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceType {
+    Cuda,
+    Mps,
+}
+
+impl std::fmt::Display for DeviceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cuda => write!(f, "cuda"),
+            Self::Mps => write!(f, "mps"),
+        }
+    }
+}
+
 /// Detected GPU information
 #[derive(Debug, Clone)]
 pub struct GpuInfo {
     pub name: String,
     pub vram_mb: u64,
+    pub device: DeviceType,
 }
 
 /// Detect GPU and VRAM. Returns None if no GPU found.
+///
+/// Tries NVML → nvidia-smi → Apple Silicon MPS, in order.
 pub fn detect() -> Option<GpuInfo> {
-    detect_nvml().or_else(detect_nvidia_smi)
+    detect_nvml().or_else(detect_nvidia_smi).or_else(detect_mps)
 }
 
 /// Try NVML (programmatic nvidia-smi)
@@ -19,6 +38,7 @@ fn detect_nvml() -> Option<GpuInfo> {
     Some(GpuInfo {
         name,
         vram_mb: memory.total / (1024 * 1024),
+        device: DeviceType::Cuda,
     })
 }
 
@@ -46,7 +66,68 @@ fn detect_nvidia_smi() -> Option<GpuInfo> {
     let name = parts[0].trim().to_string();
     let vram_mb: u64 = parts[1].trim().parse().ok()?;
 
-    Some(GpuInfo { name, vram_mb })
+    Some(GpuInfo {
+        name,
+        vram_mb,
+        device: DeviceType::Cuda,
+    })
+}
+
+/// Detect Apple Silicon GPU via MPS (Metal Performance Shaders).
+///
+/// Returns unified memory as VRAM (macOS shares memory between CPU and GPU).
+fn detect_mps() -> Option<GpuInfo> {
+    // Only meaningful on macOS ARM
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+
+    // Check architecture: must be arm64 (Apple Silicon)
+    let arch_output = std::process::Command::new("uname")
+        .arg("-m")
+        .output()
+        .ok()?;
+    let arch = String::from_utf8_lossy(&arch_output.stdout);
+    if arch.trim() != "arm64" {
+        return None;
+    }
+
+    // Get chip name (e.g. "Apple M2 Max")
+    let chip_output = std::process::Command::new("sysctl")
+        .arg("-n")
+        .arg("machdep.cpu.brand_string")
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&chip_output.stdout)
+        .trim()
+        .to_string();
+
+    // Get total unified memory in bytes
+    let mem_output = std::process::Command::new("sysctl")
+        .arg("-n")
+        .arg("hw.memsize")
+        .output()
+        .ok()?;
+    let mem_bytes: u64 = String::from_utf8_lossy(&mem_output.stdout)
+        .trim()
+        .parse()
+        .ok()?;
+    let vram_mb = mem_bytes / (1024 * 1024);
+
+    Some(GpuInfo {
+        name,
+        vram_mb,
+        device: DeviceType::Mps,
+    })
+}
+
+/// Return the device string for the Python worker env var MODL_DEVICE.
+///
+/// Returns "cuda", "mps", or "cpu" based on detected hardware.
+pub fn detect_device_str() -> String {
+    detect()
+        .map(|g| g.device.to_string())
+        .unwrap_or_else(|| "cpu".to_string())
 }
 
 /// Select best variant based on available VRAM

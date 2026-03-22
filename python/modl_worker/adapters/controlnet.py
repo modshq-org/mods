@@ -285,10 +285,12 @@ def _load_controlnet(
         base_was_offloaded = bool(getattr(pipeline, "_all_hooks", None))
         if base_was_offloaded:
             cn_pipe.enable_model_cpu_offload()
-            cn_pipe.controlnet.to("cuda")
+            from modl_worker.device import get_device
+            cn_pipe.controlnet.to(get_device())
             emitter.info(f"ControlNet loaded ({cn_model_size_gb:.1f}GB, CPU offload)")
         else:
-            cn_pipe.to("cuda")
+            from modl_worker.device import get_device
+            cn_pipe.to(get_device())
             emitter.info(f"ControlNet loaded ({cn_model_size_gb:.1f}GB)")
 
     # Load control images
@@ -341,12 +343,6 @@ STYLE_REF_CONFIGS = {
         "repo": "InstantX/FLUX.1-dev-IP-Adapter",
         "weight_name": "ip-adapter.bin",
         "image_encoder_repo": "google/siglip-so400m-patch14-384",
-    },
-    "flux2_klein": {
-        "mechanism": "native",
-    },
-    "flux2_klein_9b": {
-        "mechanism": "native",
     },
 }
 

@@ -159,8 +159,27 @@ pub fn check_dependencies(base_model_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Check that the current device supports training.
+///
+/// Training requires CUDA — MPS (Apple Silicon) is not supported because
+/// ai-toolkit and bitsandbytes depend on CUDA-specific kernels.
+pub fn check_device_for_training() -> Result<()> {
+    if let Some(info) = crate::core::gpu::detect()
+        && info.device == crate::core::gpu::DeviceType::Mps
+    {
+        bail!(
+            "Training requires a CUDA GPU and is not supported on Apple Silicon (MPS).\n\n\
+             Use cloud training instead:\n\n  \
+             modl train --cloud\n\n\
+             This runs training on a remote A100 GPU." // TODO: point to `modl train --attach-gpu` when cloud GPU orchestrator lands
+        );
+    }
+    Ok(())
+}
+
 /// Run all pre-flight checks for training.
 pub fn for_training(base_model_id: &str) -> Result<()> {
+    check_device_for_training()?;
     check_runtime()?;
     check_base_model(base_model_id)?;
     check_dependencies(base_model_id)?;

@@ -4,7 +4,16 @@ Provides model loading with configurable model ID and HuggingFace repo routing.
 """
 
 import torch
+from modl_worker.device import get_device
 from modl_worker.protocol import EventEmitter
+
+
+def _vl_device_map() -> str:
+    """Return device_map value for VL models. MPS doesn't support device_map='cuda'."""
+    dev = get_device()
+    if dev == "mps":
+        return "auto"
+    return dev
 
 # Map modl model IDs to HuggingFace repos
 VL_MODEL_REPOS = {
@@ -42,7 +51,7 @@ def load_qwen_vl(emitter: EventEmitter, model_id: str | None = None):
     model = AutoModelForImageTextToText.from_pretrained(
         repo,
         torch_dtype=torch.float16,
-        device_map="cuda",
+        device_map=_vl_device_map(),
     )
     processor = AutoProcessor.from_pretrained(repo)
 
@@ -85,7 +94,7 @@ def run_vl_inference(model, processor, image_path: str, prompt: str, max_tokens:
         videos=video_inputs,
         padding=True,
         return_tensors="pt",
-    ).to("cuda")
+    ).to(get_device())
 
     with torch.no_grad():
         generated_ids = model.generate(**inputs, max_new_tokens=max_tokens)

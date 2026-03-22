@@ -400,6 +400,9 @@ pub struct GenerateParams {
     /// Style reference inputs (IP-Adapter or native multi-ref)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub style_ref: Vec<StyleRefInput>,
+    /// Inpainting method: "standard" (diffusers/Flux Fill) or "lanpaint" (training-free)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inpaint_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

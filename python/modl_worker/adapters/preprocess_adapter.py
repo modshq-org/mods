@@ -89,7 +89,8 @@ def _preprocess_depth(img_np: np.ndarray, model_variant: str, emitter: EventEmit
         transform = AutoImageProcessor.from_pretrained(model_id)
         model = AutoModelForDepthEstimation.from_pretrained(model_id)
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        from modl_worker.device import get_device
+        device = get_device()
         model = model.to(device).eval()
         _depth_model_cache[cache_key] = (model, transform)
         emitter.info("Depth model loaded")

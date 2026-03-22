@@ -655,4 +655,5 @@ def load_pipeline(
         # don't both occupy GPU simultaneously during inference.
         pipe.enable_model_cpu_offload()
         return pipe
-    return pipe.to("cuda")
+    from modl_worker.device import get_device
+    return pipe.to(get_device())

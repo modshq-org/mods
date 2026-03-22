@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
+from modl_worker.device import get_device
 from modl_worker.image_util import load_image
 from modl_worker.protocol import EventEmitter
 
@@ -72,13 +73,13 @@ def _mask_from_birefnet(
             # Load local weights
             state_dict = torch.load(model_path, map_location="cpu", weights_only=False)
             model.load_state_dict(state_dict, strict=False)
-            model = model.cuda().eval()
+            model = model.to(get_device()).eval()
         except Exception:
             # Fallback: try loading via transformers pipeline with local model
             from transformers import pipeline as hf_pipeline
             pipe = hf_pipeline(
                 "image-segmentation", model="ZhengPeng7/BiRefNet",
-                trust_remote_code=True, device="cuda"
+                trust_remote_code=True, device=get_device()
             )
             if model_cache is not None:
                 model_cache["birefnet_pipe"] = pipe
@@ -101,7 +102,7 @@ def _mask_from_birefnet(
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
-    input_tensor = transform(img).unsqueeze(0).cuda()
+    input_tensor = transform(img).unsqueeze(0).to(get_device())
 
     with torch.no_grad():
         preds = model(input_tensor)[-1].sigmoid().cpu()
@@ -137,7 +138,7 @@ def _mask_from_sam(
         from segment_anything import SamPredictor, sam_model_registry
 
         sam = sam_model_registry["vit_b"](checkpoint=sam_checkpoint)
-        sam.to("cuda")
+        sam.to(get_device())
         predictor = SamPredictor(sam)
         if model_cache is not None:
             model_cache["sam_predictor"] = predictor

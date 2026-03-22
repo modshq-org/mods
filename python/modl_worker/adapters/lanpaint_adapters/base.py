@@ -25,7 +25,8 @@ class ModelAdapter(ABC):
 
     @property
     def device(self) -> torch.device:
-        return torch.device("cuda")
+        from modl_worker.device import get_device
+        return torch.device(get_device())
 
     @property
     def dtype(self) -> torch.dtype:

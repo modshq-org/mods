@@ -47,9 +47,11 @@ def _load_upscaler(model_path: str, emitter: EventEmitter):
     emitter.info(f"Loading upscaler via spandrel: {Path(model_path).name}")
     model = spandrel.ModelLoader().load_from_file(model_path)
 
-    if torch.cuda.is_available():
-        model = model.cuda()
-        if model.supports_half:
+    from modl_worker.device import get_device
+    dev = get_device()
+    if dev != "cpu":
+        model = model.to(dev)
+        if dev == "cuda" and model.supports_half:
             model = model.half()
 
     model.eval()
@@ -131,9 +133,11 @@ def run_upscale(config_path: Path, emitter: EventEmitter, model_cache: dict | No
             img_np = np.array(img_pil).astype(np.float32) / 255.0
             img_tensor = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0)
 
-            if torch.cuda.is_available():
-                img_tensor = img_tensor.cuda()
-                if model.supports_half:
+            from modl_worker.device import get_device
+            dev = get_device()
+            if dev != "cpu":
+                img_tensor = img_tensor.to(dev)
+                if dev == "cuda" and model.supports_half:
                     img_tensor = img_tensor.half()
 
             # Run upscaling

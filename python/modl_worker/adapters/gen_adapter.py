@@ -246,7 +246,8 @@ def run_generate_with_pipeline(
     output_dir = output_info.get("output_dir", ".")
     os.makedirs(output_dir, exist_ok=True)
 
-    generator = torch.Generator(device="cuda")
+    from modl_worker.device import get_generator_device
+    generator = torch.Generator(device=get_generator_device())
     if seed is None:
         seed = generator.seed()  # capture the random seed for reproducibility
     generator.manual_seed(seed)
@@ -336,9 +337,6 @@ def run_generate_with_pipeline(
     # Add style reference images to generation kwargs
     if style_images and style_mechanism == "ip-adapter":
         gen_kwargs["ip_adapter_image"] = style_images if len(style_images) > 1 else style_images[0]
-    elif style_images and style_mechanism == "native":
-        # Flux 2 Klein native multi-ref: pass as reference_images
-        gen_kwargs["reference_images"] = style_images
 
     # VAE-encode control image for wrapper approach (deferred until now so
     # the VAE's cpu_offload hook can move it to CUDA).

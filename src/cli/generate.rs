@@ -3,6 +3,7 @@ use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 
+use crate::cli::InpaintMethod;
 use crate::core::cloud::{CloudExecutor, CloudProvider};
 use crate::core::db::Database;
 use crate::core::executor::{Executor, LocalExecutor};
@@ -213,6 +214,7 @@ pub struct GenerateArgs<'a> {
     pub init_image: Option<&'a str>,
     pub mask: Option<&'a str>,
     pub strength: Option<f32>,
+    pub inpaint: InpaintMethod,
     pub controlnet: &'a [String],
     pub cn_strength: &'a str,
     pub cn_end: &'a str,
@@ -244,6 +246,7 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         init_image,
         mask,
         strength,
+        inpaint,
         controlnet,
         cn_strength,
         cn_end,
@@ -359,12 +362,57 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         "txt2img"
     };
 
-    // Smart inpaint routing: prefer dedicated fill models over generic Flux inpainting
-    let (effective_model, effective_path) = if mode == "inpaint" {
-        resolve_inpaint_model(&base_model, &db)
+    // Resolve inpainting method
+    let resolved_inpaint_method = if mode == "inpaint" {
+        let model_info = model_family::resolve_model(&base_model);
+        let supports_lanpaint = model_info.is_some_and(|m| m.capabilities.lanpaint_inpaint);
+        let supports_standard = model_info.is_some_and(|m| m.capabilities.inpaint);
+
+        match inpaint {
+            InpaintMethod::Lanpaint => {
+                if !supports_lanpaint {
+                    let name = model_info.map_or(&base_model as &str, |m| m.name);
+                    anyhow::bail!(
+                        "{} does not support LanPaint inpainting. \
+                         Models with LanPaint: z-image, z-image-turbo, flux2-klein-4b, flux2-klein-9b",
+                        name
+                    );
+                }
+                Some("lanpaint")
+            }
+            InpaintMethod::Auto => {
+                if supports_lanpaint && !supports_standard {
+                    // Model only supports LanPaint (e.g. Klein 9b)
+                    Some("lanpaint")
+                } else {
+                    // Standard inpainting (with Flux Fill routing)
+                    None
+                }
+            }
+            InpaintMethod::Standard => {
+                if !supports_standard {
+                    let name = model_info.map_or(&base_model as &str, |m| m.name);
+                    anyhow::bail!(
+                        "{} does not support standard inpainting. \
+                         Try --inpaint lanpaint instead.",
+                        name
+                    );
+                }
+                None
+            }
+        }
     } else {
-        (base_model.clone(), base_model_path)
+        None
     };
+
+    // Smart inpaint routing: prefer dedicated fill models over generic Flux inpainting
+    // Skip fill routing when using LanPaint — it uses the base model directly
+    let (effective_model, effective_path) =
+        if mode == "inpaint" && resolved_inpaint_method.is_none() {
+            resolve_inpaint_model(&base_model, &db)
+        } else {
+            (base_model.clone(), base_model_path)
+        };
 
     if let Err(msg) = model_family::validate_mode(&effective_model, mode) {
         anyhow::bail!(msg);
@@ -540,6 +588,7 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
             strength,
             controlnet: cn_inputs,
             style_ref: style_inputs,
+            inpaint_method: resolved_inpaint_method.map(|s| s.to_string()),
         },
         runtime: RuntimeRef {
             profile: "trainer-cu124".to_string(),
@@ -557,7 +606,9 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     // Print summary
     // -------------------------------------------------------------------
     if !json {
-        let mode_label = if mask.is_some() {
+        let mode_label = if resolved_inpaint_method == Some("lanpaint") {
+            "LanPaint inpainting"
+        } else if mask.is_some() {
             "inpainting"
         } else if init_image.is_some() {
             "img2img"

@@ -120,6 +120,7 @@ impl Executor for LocalExecutor {
             .arg("--job-id")
             .arg(&job_id)
             .env("PYTHONPATH", &py_path)
+            .env("MODL_DEVICE", crate::core::gpu::detect_device_str())
             // Training needs HF access: modl store has single safetensors but
             // ai-toolkit expects HF diffusers directory layout. Let it download.
             .stdout(Stdio::piped())
@@ -417,6 +418,7 @@ impl LocalExecutor {
             .arg(job_id)
             .env("PYTHONPATH", py_path)
             .env("HF_HUB_OFFLINE", "1")
+            .env("MODL_DEVICE", crate::core::gpu::detect_device_str())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -488,17 +490,24 @@ impl LocalExecutor {
             py_path = format!("{}:{}", py_path, current);
         }
 
+        let worker_subcommand = if spec.params.inpaint_method.as_deref() == Some("lanpaint") {
+            "lanpaint"
+        } else {
+            "generate"
+        };
+
         let mut command = Command::new(&self.python_path);
         command
             .arg("-m")
             .arg("modl_worker.main")
-            .arg("generate")
+            .arg(worker_subcommand)
             .arg("--config")
             .arg(&spec_path)
             .arg("--job-id")
             .arg(job_id)
             .env("PYTHONPATH", py_path)
             .env("HF_HUB_OFFLINE", "1")
+            .env("MODL_DEVICE", crate::core::gpu::detect_device_str())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

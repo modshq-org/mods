@@ -46,9 +46,9 @@ class ZImageAdapter(ModelAdapter):
         self.pipe.text_encoder.to("cpu")
         del self.pipe.text_encoder
         self.pipe.text_encoder = None
-        torch.cuda.empty_cache()
+        from modl_worker.device import empty_cache
+        empty_cache()
         import gc; gc.collect()
-        self.emitter.info(f"  Text encoder freed: {torch.cuda.memory_allocated()/1e9:.1f}GB used")
 
     def encode_image(self, img_tensor, generator):
         device = self.device
@@ -64,7 +64,8 @@ class ZImageAdapter(ModelAdapter):
             latent = latent * self.pipe.vae.config.scaling_factor
 
         self.pipe.vae.to("cpu")
-        torch.cuda.empty_cache()
+        from modl_worker.device import empty_cache
+        empty_cache()
         return latent.to(dtype=torch.float32)
 
     def prepare_timesteps(self, num_steps):
@@ -145,5 +146,6 @@ class ZImageAdapter(ModelAdapter):
             image_tensor = self.pipe.vae.decode(decoded, return_dict=False)[0]
         result = self.pipe.image_processor.postprocess(image_tensor, output_type="pil")[0]
         self.pipe.vae.to("cpu")
-        torch.cuda.empty_cache()
+        from modl_worker.device import empty_cache
+        empty_cache()
         return result

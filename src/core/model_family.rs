@@ -69,6 +69,8 @@ pub struct Capabilities {
     pub edit: bool,
     pub lora: bool,
     pub training: bool,
+    /// Supports LanPaint training-free inpainting (no dedicated inpaint model needed)
+    pub lanpaint_inpaint: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +104,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 28,
                 default_guidance: 3.5,
@@ -128,6 +131,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 4,
                 default_guidance: 1.0,
@@ -154,6 +158,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 40,
                 default_guidance: 5.0,
@@ -191,6 +196,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: false,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 50,
                 default_guidance: 30.0,
@@ -217,6 +223,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: false,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 50,
                 default_guidance: 30.0,
@@ -254,6 +261,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 28,
                 default_guidance: 4.0,
@@ -280,6 +288,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: true,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: true,
                 },
                 default_steps: 4,
                 default_guidance: 1.0,
@@ -306,6 +315,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: true,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: true,
                 },
                 default_steps: 4,
                 default_guidance: 1.0,
@@ -343,6 +353,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: true,
                 },
                 default_steps: 20,
                 default_guidance: 4.0,
@@ -369,6 +380,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: true,
                 },
                 default_steps: 8,
                 default_guidance: 1.0,
@@ -406,6 +418,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 25,
                 default_guidance: 3.0,
@@ -432,6 +445,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: true,
                     lora: true,
                     training: false,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 50,
                 default_guidance: 4.0,
@@ -469,6 +483,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 30,
                 default_guidance: 7.5,
@@ -495,6 +510,7 @@ pub static FAMILIES: &[ModelFamily] = &[
                     edit: false,
                     lora: true,
                     training: true,
+                    lanpaint_inpaint: false,
                 },
                 default_steps: 30,
                 default_guidance: 7.5,
@@ -657,7 +673,7 @@ pub fn validate_mode(model_id: &str, mode: &str) -> Result<(), String> {
     let supported = match mode {
         "txt2img" => info.capabilities.txt2img,
         "img2img" => info.capabilities.img2img,
-        "inpaint" => info.capabilities.inpaint,
+        "inpaint" => info.capabilities.inpaint || info.capabilities.lanpaint_inpaint,
         "edit" => info.capabilities.edit,
         _ => return Ok(()),
     };
@@ -672,7 +688,7 @@ pub fn validate_mode(model_id: &str, mode: &str) -> Result<(), String> {
         .flat_map(|f| f.models.iter())
         .filter(|m| match mode {
             "img2img" => m.capabilities.img2img,
-            "inpaint" => m.capabilities.inpaint,
+            "inpaint" => m.capabilities.inpaint || m.capabilities.lanpaint_inpaint,
             "edit" => m.capabilities.edit,
             _ => false,
         })
@@ -827,18 +843,6 @@ pub struct StyleRefSupport {
 
 pub static STYLE_REF_SUPPORT: &[StyleRefSupport] = &[
     StyleRefSupport {
-        base_model_id: "flux2-klein-4b",
-        mechanism: "native",
-        manifest_id: None,
-        default_strength: 0.6,
-    },
-    StyleRefSupport {
-        base_model_id: "flux2-klein-9b",
-        mechanism: "native",
-        manifest_id: None,
-        default_strength: 0.6,
-    },
-    StyleRefSupport {
         base_model_id: "sdxl",
         mechanism: "ip-adapter",
         manifest_id: Some("sdxl-ip-adapter"),
@@ -897,7 +901,7 @@ pub fn models_with_capability(capability: &str) -> Vec<&'static ModelInfo> {
         .filter(|m| match capability {
             "txt2img" => m.capabilities.txt2img,
             "img2img" => m.capabilities.img2img,
-            "inpaint" => m.capabilities.inpaint,
+            "inpaint" => m.capabilities.inpaint || m.capabilities.lanpaint_inpaint,
             "edit" => m.capabilities.edit,
             "lora" => m.capabilities.lora,
             "training" => m.capabilities.training,

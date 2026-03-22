@@ -52,7 +52,8 @@ def _load_birefnet(model_path: str, emitter: EventEmitter, model_cache: dict | N
     # Load local weights from modl store
     state_dict = torch.load(model_path, map_location="cpu", weights_only=False)
     model.load_state_dict(state_dict, strict=False)
-    model = model.cuda().eval()
+    from modl_worker.device import get_device
+    model = model.to(get_device()).eval()
 
     if model_cache is not None:
         model_cache["birefnet_model"] = model
@@ -73,7 +74,8 @@ def _remove_background(image_path: Path, model, emitter: EventEmitter) -> Image.
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
-    input_tensor = transform(img).unsqueeze(0).cuda()
+    from modl_worker.device import get_device
+    input_tensor = transform(img).unsqueeze(0).to(get_device())
 
     with torch.no_grad():
         preds = model(input_tensor)[-1].sigmoid().cpu()

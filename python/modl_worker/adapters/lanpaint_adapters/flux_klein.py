@@ -59,9 +59,9 @@ class FluxKleinAdapter(ModelAdapter):
         self.pipe.text_encoder.to("cpu")
         if hasattr(self.pipe, 'tokenizer') and self.pipe.tokenizer is not None:
             pass  # tokenizer is CPU-only
-        torch.cuda.empty_cache()
+        from modl_worker.device import empty_cache
+        empty_cache()
         import gc; gc.collect()
-        self.emitter.info(f"  Text encoder freed: {torch.cuda.memory_allocated()/1e9:.1f}GB used")
 
     def encode_image(self, img_tensor, generator):
         device = self.device
@@ -94,7 +94,8 @@ class FluxKleinAdapter(ModelAdapter):
         self._latent_ids = latent_ids.cpu()
 
         self.pipe.vae.to("cpu")
-        torch.cuda.empty_cache()
+        from modl_worker.device import empty_cache
+        empty_cache()
         return self._y_packed.to(device)
 
     def mask_to_latent_space(self, mask, latent_shape):
@@ -196,5 +197,6 @@ class FluxKleinAdapter(ModelAdapter):
             pil = self.pipe.image_processor.postprocess(img, output_type="pil")
 
         self.pipe.vae.to("cpu")
-        torch.cuda.empty_cache()
+        from modl_worker.device import empty_cache
+        empty_cache()
         return pil[0] if isinstance(pil, list) else pil

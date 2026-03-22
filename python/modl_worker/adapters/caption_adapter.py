@@ -56,7 +56,9 @@ def _load_florence2(emitter: EventEmitter, model_path: str | None = None) -> Tup
         torch_dtype=torch.float16,
         trust_remote_code=True,
         attn_implementation="eager",
-    ).to("cuda")
+    )
+    from modl_worker.device import get_device
+    model = model.to(get_device())
 
     return model, processor
 
@@ -121,7 +123,9 @@ def _load_blip(emitter: EventEmitter, model_path: str | None = None) -> Tuple:
     model = Blip2ForConditionalGeneration.from_pretrained(
         model_id,
         torch_dtype=torch.float16,
-    ).to("cuda")
+    )
+    from modl_worker.device import get_device
+    model = model.to(get_device())
 
     return model, processor
 

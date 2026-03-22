@@ -4,6 +4,8 @@ use console::style;
 use crate::core::runtime;
 
 pub async fn run(reinstall: bool) -> Result<()> {
+    crate::core::preflight::check_device_for_training()?;
+
     println!(
         "{} Preparing training runtime ({})",
         style("→").cyan(),

@@ -93,7 +93,8 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
     output_dir = output_info.get("output_dir", ".")
     os.makedirs(output_dir, exist_ok=True)
 
-    generator = torch.Generator(device="cuda")
+    from modl_worker.device import get_generator_device
+    generator = torch.Generator(device=get_generator_device())
     if seed is not None:
         generator.manual_seed(seed)
 
@@ -103,9 +104,10 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
 
     if arch in ("flux2_klein", "flux2_klein_9b"):
         # Klein: native image editing via the `image` parameter.
+        # Supports multiple input images (e.g. source + reference).
         # No guidance (distilled), no negative prompt.
         gen_kwargs = {
-            "image": source_images[0],
+            "image": source_images if len(source_images) > 1 else source_images[0],
             "prompt": prompt,
             "num_inference_steps": steps,
             "height": source_images[0].size[1],

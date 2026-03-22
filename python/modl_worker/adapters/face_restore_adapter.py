@@ -65,6 +65,8 @@ def run_face_restore(config_path: Path, emitter: EventEmitter, model_cache: dict
     emitter.info(f"Found {total} image(s) to restore (fidelity={fidelity})")
     emitter.job_started(config=str(config_path))
 
+    from modl_worker.device import get_device
+
     # Try to use facexlib/codeformer
     try:
         import torch
@@ -94,7 +96,8 @@ def run_face_restore(config_path: Path, emitter: EventEmitter, model_cache: dict
             from basicsr.utils.registry import ARCH_REGISTRY
             net = ARCH_REGISTRY.get("CodeFormer")(
                 dim_embd=512, codebook_size=1024, n_head=8, n_layers=9, connect_list=["32", "64", "128", "256"]
-            ).to("cuda")
+            )
+            net = net.to(get_device())
             checkpoint = torch.load(codeformer_path, map_location="cpu", weights_only=False)
             net.load_state_dict(checkpoint.get("params_ema", checkpoint.get("params", checkpoint)))
             net.eval()
@@ -105,7 +108,7 @@ def run_face_restore(config_path: Path, emitter: EventEmitter, model_cache: dict
                 crop_ratio=(1, 1),
                 det_model="retinaface_resnet50",
                 save_ext="png",
-                device="cuda",
+                device=get_device(),
             )
 
             if model_cache is not None:
@@ -152,7 +155,7 @@ def run_face_restore(config_path: Path, emitter: EventEmitter, model_cache: dict
 
                 for cropped_face in face_helper.cropped_faces:
                     face_tensor = torch.from_numpy(cropped_face.transpose(2, 0, 1)).float().unsqueeze(0) / 255.0
-                    face_tensor = face_tensor.to("cuda")
+                    face_tensor = face_tensor.to(get_device())
 
                     with torch.no_grad():
                         output_face = net(face_tensor, w=fidelity, adain=True)[0]
