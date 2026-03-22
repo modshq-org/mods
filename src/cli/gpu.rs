@@ -209,19 +209,14 @@ pub async fn agent(session_token: &str, api_base: &str) -> Result<()> {
     // no venv needed. Try the runtime setup first, fall back to system Python.
     println!("[agent] Setting up local executor...");
     let mut executor = match LocalExecutor::from_runtime_setup().await {
-        Ok(mut e) => {
-            e.hf_offline = false; // Agent needs HF access to download models
-            e
-        }
+        Ok(e) => e,
         Err(_) => {
             // Fall back to system Python (vastai/pytorch has torch globally)
             let python = std::path::PathBuf::from("/usr/bin/python3");
             let runtime_root = crate::core::paths::modl_root().join("runtime");
             std::fs::create_dir_all(&runtime_root).ok();
             println!("[agent] Using system Python: {}", python.display());
-            let mut e = LocalExecutor::new(python, runtime_root);
-            e.hf_offline = false;
-            e
+            LocalExecutor::new(python, runtime_root)
         }
     };
 
@@ -384,14 +379,29 @@ async fn identify_session(
     )
 }
 
-/// Strip local paths from a spec so the remote instance resolves its own paths.
-/// The CLI sends `base_model_path` from the local machine's store, which won't
-/// exist on the Vast.ai instance. Setting it to null forces the Python worker
-/// to fall back to `resolve_model_path(base_model_id)`.
+/// Fix up a job spec for remote execution on the agent.
+///
+/// The CLI sends `base_model_path` from the user's local store, which doesn't
+/// exist on the Vast.ai instance. We resolve it to the *agent's* local store
+/// path (after `modl pull`) so the Python worker can load from disk with
+/// HF_HUB_OFFLINE=1. If the model isn't in the agent's store, we clear the
+/// path and let the worker fall back to resolve_model_path (HF repo ID).
 fn fixup_spec_for_remote(spec: &serde_json::Value) -> serde_json::Value {
     let mut spec = spec.clone();
     if let Some(model) = spec.get_mut("model").and_then(|m| m.as_object_mut()) {
-        model.remove("base_model_path");
+        // Try to resolve base_model_path on the agent's store
+        let resolved = model
+            .get("base_model_id")
+            .and_then(|v| v.as_str())
+            .and_then(resolve_agent_model_path);
+        match resolved {
+            Some(local_path) => {
+                model.insert("base_model_path".to_string(), serde_json::json!(local_path));
+            }
+            None => {
+                model.remove("base_model_path");
+            }
+        }
     }
     // Also fix lora paths — the remote instance won't have local LoRA files
     if let Some(lora) = spec.get_mut("lora").and_then(|l| l.as_object_mut()) {
@@ -405,6 +415,24 @@ fn fixup_spec_for_remote(spec: &serde_json::Value) -> serde_json::Value {
         );
     }
     spec
+}
+
+/// Resolve a model ID to the agent's local store path (after `modl pull`).
+/// Returns None if the model is not installed locally.
+fn resolve_agent_model_path(model_id: &str) -> Option<String> {
+    let db = crate::core::db::Database::open().ok()?;
+    let installed = db.list_installed(None).ok()?;
+    let gen_types = ["checkpoint", "diffusion_model"];
+
+    for model in &installed {
+        if (model.name == model_id || model.id == model_id)
+            && gen_types.contains(&model.asset_type.as_str())
+        {
+            return Some(model.store_path.clone());
+        }
+    }
+
+    None
 }
 
 /// Run a job locally and collect all events.
