@@ -613,6 +613,8 @@ pub struct RuntimeRef {
 pub enum ExecutionTarget {
     Local,
     Cloud,
+    /// Remote GPU instance (Vast.ai via orchestrator)
+    Remote,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
