@@ -377,44 +377,21 @@ def run_generate_with_pipeline(
         _cn_wrapper.set_control(list(ctrl_latent.unbind(dim=0)), scale=pending["scale"])
 
     # -------------------------------------------------------------------
-    # Step callback infrastructure (latent-space primitives)
+    # Mask blend: custom denoising loop (replaces pipe(**gen_kwargs))
     # -------------------------------------------------------------------
-    callback_primitives = []
+    _use_custom_loop = use_mask_blend and init_img is not None and mask_img is not None
 
-    # Latent mask blend: universal inpainting via per-step callback.
-    # Returns (initial_latents, callback) — we pass initial_latents to the
-    # pipeline and the callback handles per-step re-blending.
-    if use_mask_blend and init_img is not None and mask_img is not None:
-        from .callbacks import prepare_mask_blend
+    if not _use_custom_loop:
+        # Standard path: wire callbacks for non-mask-blend modes
+        callback_primitives = []
+        if steps >= 20:
+            from .callbacks import StepProgress
+            callback_primitives.append(StepProgress(emitter, steps, 0, count))
 
-        initial_latents, mask_blend_cb = prepare_mask_blend(
-            pipe, init_img, mask_img, generator, arch, width, height, emitter,
-        )
-        callback_primitives.append(mask_blend_cb)
-        # initial_latents may be None (let pipeline generate noise) or pre-filled
-        if initial_latents is not None:
-            gen_kwargs["latents"] = initial_latents
-
-    # Per-step progress for long inference runs
-    if steps >= 20:
-        from .callbacks import StepProgress
-        callback_primitives.append(StepProgress(emitter, steps, 0, count))
-
-    callback_fn, callback_inputs = build_step_callback(callback_primitives)
-    if callback_fn is not None:
-        gen_kwargs["callback_on_step_end"] = callback_fn
-        gen_kwargs["callback_on_step_end_tensor_inputs"] = callback_inputs
-
-    # -------------------------------------------------------------------
-    # Split image routing: condition_image → text encoder, init_image → VAE
-    # -------------------------------------------------------------------
-    if condition_img is not None and use_mask_blend:
-        # For vision-conditioned models (Qwen-Image-Edit, Klein), the
-        # condition_image goes to the pipeline's `image` param (vision encoder)
-        # while init_image is already VAE-encoded in the mask_blend primitive.
-        if arch in ("qwen_image", "qwen_image_edit", "flux2_klein", "flux2_klein_9b"):
-            gen_kwargs["image"] = condition_img
-            emitter.info("Split routing: condition_image → vision encoder, init_image → VAE (mask blend)")
+        callback_fn, callback_inputs = build_step_callback(callback_primitives)
+        if callback_fn is not None:
+            gen_kwargs["callback_on_step_end"] = callback_fn
+            gen_kwargs["callback_on_step_end_tensor_inputs"] = callback_inputs
 
     artifact_paths = []
 
@@ -422,8 +399,27 @@ def run_generate_with_pipeline(
         t0 = time.time()
 
         try:
-            result = pipe(**gen_kwargs)
-            image = result.images[0]
+            if _use_custom_loop:
+                # Custom denoising loop with proper latent seeding
+                from .mask_blend_loop import run_mask_blend
+
+                neg = gen_kwargs.get("negative_prompt", "")
+                image = run_mask_blend(
+                    pipe=pipe,
+                    prompt=prompt,
+                    init_image=init_img,
+                    mask_image=mask_img,
+                    condition_image=condition_img,
+                    width=width, height=height,
+                    steps=steps, guidance=guidance,
+                    seed=(seed + i) if seed is not None else None,
+                    arch=arch, emitter=emitter,
+                    negative_prompt=neg if isinstance(neg, str) else "",
+                    gen_kwargs=gen_kwargs,
+                )
+            else:
+                result = pipe(**gen_kwargs)
+                image = result.images[0]
         except Exception as exc:
             emitter.error(
                 "GENERATION_FAILED",
