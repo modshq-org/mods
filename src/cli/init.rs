@@ -173,8 +173,9 @@ pub async fn run(defaults: bool, root_override: Option<&str>) -> Result<()> {
     );
 
     // Model download offer
+    let mut model_installed = false;
     if !defaults {
-        offer_starter_model(&gpu_info).await?;
+        model_installed = offer_starter_model(&gpu_info).await?;
     }
 
     // Service install offer
@@ -184,12 +185,24 @@ pub async fn run(defaults: bool, root_override: Option<&str>) -> Result<()> {
 
     println!();
     println!("Next steps:");
-    println!("  {} Fetch the model registry", style("modl update").cyan());
-    println!(
-        "  {} Install a model",
-        style("modl pull flux-schnell").cyan()
-    );
-    println!("  {} Launch the web UI", style("modl serve").cyan());
+    if model_installed {
+        println!(
+            "  {} Generate an image",
+            style("modl generate \"a cat in space\"").cyan()
+        );
+        println!("  {} Launch the web UI", style("modl serve").cyan());
+        println!("  {} Browse all models", style("modl search flux").cyan());
+    } else {
+        println!(
+            "  {} Browse available models",
+            style("modl search flux").cyan()
+        );
+        println!(
+            "  {} Install a model",
+            style("modl pull flux-schnell").cyan()
+        );
+        println!("  {} Launch the web UI", style("modl serve").cyan());
+    }
 
     Ok(())
 }
@@ -312,7 +325,7 @@ fn detect_tool_targets() -> Result<Vec<TargetConfig>> {
     Ok(targets)
 }
 
-async fn offer_starter_model(gpu_info: &Option<gpu::GpuInfo>) -> Result<()> {
+async fn offer_starter_model(gpu_info: &Option<gpu::GpuInfo>) -> Result<bool> {
     println!();
     let download = Confirm::new()
         .with_prompt("Would you like to download a starter model?")
@@ -320,7 +333,7 @@ async fn offer_starter_model(gpu_info: &Option<gpu::GpuInfo>) -> Result<()> {
         .interact()?;
 
     if !download {
-        return Ok(());
+        return Ok(false);
     }
 
     let vram_mb = gpu_info.as_ref().map(|g| g.vram_mb).unwrap_or(0);
@@ -352,7 +365,7 @@ async fn offer_starter_model(gpu_info: &Option<gpu::GpuInfo>) -> Result<()> {
 
     if selected >= STARTER_MODELS.len() {
         // User chose "Skip"
-        return Ok(());
+        return Ok(false);
     }
 
     let model_id = STARTER_MODELS[selected].id;
@@ -413,7 +426,7 @@ async fn offer_starter_model(gpu_info: &Option<gpu::GpuInfo>) -> Result<()> {
         model_id
     );
 
-    Ok(())
+    Ok(true)
 }
 
 async fn offer_service_install() -> Result<()> {

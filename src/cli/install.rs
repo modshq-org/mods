@@ -21,13 +21,32 @@ pub async fn run(id: &str, variant: Option<&str>, dry_run: bool, force: bool) ->
     let index = RegistryIndex::load_or_fetch().await?;
     let db = Database::open()?;
 
-    let (mut plan, vram) = install::resolve_plan(id, variant, &index, &db)?;
+    // Try exact match first, then fuzzy-resolve the ID if not found
+    let resolved_id = if index.find(id).is_some() {
+        id.to_string()
+    } else {
+        try_resolve_alias(id, &index)
+    };
+
+    let (mut plan, vram) = install::resolve_plan(&resolved_id, variant, &index, &db)?;
+
+    // Show alias resolution if we resolved to a different ID
+    if resolved_id != id {
+        println!(
+            "{} {} → {}",
+            style("→").cyan(),
+            style(id).dim(),
+            style(&resolved_id).bold()
+        );
+    }
 
     // Interactive variant selection for the primary model (if it has multiple variants
     // and the user didn't specify --variant)
     if variant.is_none() {
         for item in &mut plan.items {
-            if item.manifest.id == id && !item.already_installed && item.manifest.variants.len() > 1
+            if item.manifest.id == resolved_id
+                && !item.already_installed
+                && item.manifest.variants.len() > 1
             {
                 let selected = prompt_variant_selection(&item.manifest, vram)?;
                 item.variant_id = Some(selected);
@@ -39,13 +58,13 @@ pub async fn run(id: &str, variant: Option<&str>, dry_run: bool, force: bool) ->
     println!(
         "{} Install plan for {}:",
         style("→").cyan(),
-        style(id).bold()
+        style(&resolved_id).bold()
     );
     println!();
 
     let mut total_download: u64 = 0;
     for item in &plan.items {
-        let effective_variant = if item.manifest.id == id {
+        let effective_variant = if item.manifest.id == resolved_id {
             item.variant_id.as_deref().or(variant)
         } else {
             item.variant_id.as_deref()
@@ -104,7 +123,7 @@ pub async fn run(id: &str, variant: Option<&str>, dry_run: bool, force: bool) ->
 
     // Download each item
     for item in &items_to_install {
-        let effective_variant = if item.manifest.id == id {
+        let effective_variant = if item.manifest.id == resolved_id {
             item.variant_id.as_deref().or(variant)
         } else {
             item.variant_id.as_deref()
@@ -168,7 +187,7 @@ pub async fn run(id: &str, variant: Option<&str>, dry_run: bool, force: bool) ->
     println!(
         "{} Installed {} successfully.",
         style("✓").green().bold(),
-        style(id).bold()
+        style(&resolved_id).bold()
     );
 
     Ok(())
@@ -289,4 +308,50 @@ fn prompt_variant_selection(manifest: &Manifest, vram: Option<u64>) -> Result<St
         .interact()?;
 
     Ok(manifest.variants[selection].id.clone())
+}
+
+/// Try to resolve a user-typed ID to a registry ID.
+///
+/// Handles common aliases: "sdxl" → "sdxl-base-1.0", "klein" → "flux2-klein-4b", etc.
+/// Falls back to substring search on the registry index.
+/// Returns the original ID if no match is found (the resolver will then produce
+/// a nice error with suggestions).
+fn try_resolve_alias(id: &str, index: &RegistryIndex) -> String {
+    let lower = id.to_lowercase();
+
+    // 1. Try single-result substring match on registry IDs
+    //    e.g. "sdxl" matches "sdxl-base-1.0", "klein-4b" matches "flux2-klein-4b"
+    let matches: Vec<_> = index
+        .items
+        .iter()
+        .filter(|m| {
+            let mid = m.id.to_lowercase();
+            mid.contains(&lower) || lower.contains(&mid)
+        })
+        .collect();
+
+    if matches.len() == 1 {
+        return matches[0].id.clone();
+    }
+
+    // 2. Try model_family fuzzy resolve → map family ID to registry ID
+    if let Some(info) = crate::core::model_family::resolve_model(id) {
+        // The family ID (e.g. "sdxl") may differ from registry ID (e.g. "sdxl-base-1.0")
+        // Try exact match first
+        if index.find(info.id).is_some() {
+            return info.id.to_string();
+        }
+        // Then try substring match with the family ID
+        let family_matches: Vec<_> = index
+            .items
+            .iter()
+            .filter(|m| m.id.to_lowercase().contains(info.id))
+            .collect();
+        if family_matches.len() == 1 {
+            return family_matches[0].id.clone();
+        }
+    }
+
+    // No confident match — return original and let resolver show suggestions
+    id.to_string()
 }

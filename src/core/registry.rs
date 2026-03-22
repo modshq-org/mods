@@ -60,13 +60,55 @@ impl RegistryIndex {
             .collect()
     }
 
+    /// Suggest similar model IDs for a failed lookup.
+    ///
+    /// Tries substring matching, prefix matching, and edit distance
+    /// to find the closest matches in the registry.
+    pub fn suggest(&self, query: &str, max: usize) -> Vec<&Manifest> {
+        let q = query.to_lowercase();
+
+        // 1. Substring match on ID (e.g. "sdx" matches "sdxl-base-1.0")
+        let mut candidates: Vec<(&Manifest, usize)> = self
+            .items
+            .iter()
+            .filter_map(|m| {
+                let id = m.id.to_lowercase();
+                let name = m.name.to_lowercase();
+                if id.contains(&q) || q.contains(&id) || name.contains(&q) {
+                    // Score: shorter edit distance = better
+                    Some((m, edit_distance(&q, &id)))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // 2. If no substring matches, try edit distance on all items
+        if candidates.is_empty() {
+            candidates = self
+                .items
+                .iter()
+                .map(|m| {
+                    let id_dist = edit_distance(&q, &m.id.to_lowercase());
+                    let name_dist = edit_distance(&q, &m.name.to_lowercase());
+                    (m, id_dist.min(name_dist))
+                })
+                .filter(|(_, dist)| *dist <= q.len().max(3))
+                .collect();
+        }
+
+        candidates.sort_by_key(|(_, dist)| *dist);
+        candidates.into_iter().take(max).map(|(m, _)| m).collect()
+    }
+
     /// The URL to fetch the latest index from.
     ///
-    /// Uses registry.modl.run (Cloudflare-cached) as primary,
-    /// with raw GitHub as fallback. Override via MODL_REGISTRY_URL env var.
+    /// Uses raw GitHub as primary. Override via MODL_REGISTRY_URL env var.
+    /// TODO: switch primary to registry.modl.run once the CDN is deployed.
     pub fn remote_url() -> String {
-        std::env::var("MODL_REGISTRY_URL")
-            .unwrap_or_else(|_| "https://registry.modl.run/index.json".to_string())
+        std::env::var("MODL_REGISTRY_URL").unwrap_or_else(|_| {
+            "https://raw.githubusercontent.com/modl-org/modl-registry/main/index.json".to_string()
+        })
     }
 
     /// Fallback URL if the primary registry is unreachable
@@ -170,4 +212,29 @@ impl RegistryIndex {
             Self::load()
         }
     }
+}
+
+/// Simple Levenshtein edit distance for typo suggestions.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a_len = a.len();
+    let b_len = b.len();
+    let mut matrix = vec![vec![0usize; b_len + 1]; a_len + 1];
+
+    for (i, row) in matrix.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in matrix[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+
+    for (i, ca) in a.chars().enumerate() {
+        for (j, cb) in b.chars().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            matrix[i + 1][j + 1] = (matrix[i][j + 1] + 1)
+                .min(matrix[i + 1][j] + 1)
+                .min(matrix[i][j] + cost);
+        }
+    }
+
+    matrix[a_len][b_len]
 }

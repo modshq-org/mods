@@ -128,12 +128,14 @@ pub async fn run(
     // Skip HF search if user used registry-only filters
     let skip_hf = for_model.is_some() || min_rating.is_some();
 
+    let mut hf_printed = false;
     if !skip_hf {
         let auth_store = AuthStore::load().unwrap_or_default();
         let hf_token = auth_store.token_for("huggingface");
 
         match huggingface::search(query, hf_token.as_deref(), 10).await {
             Ok(hf_results) if !hf_results.is_empty() => {
+                hf_printed = true;
                 println!("\n{} HuggingFace results:\n", style("→").cyan(),);
 
                 let mut hf_table = Table::new();
@@ -163,20 +165,25 @@ pub async fn run(
 
                 println!("{hf_table}");
             }
-            Ok(_) => {} // No HF results, just skip
+            Ok(_) => {}
             Err(e) => {
-                // Don't fail the whole search if HF is unreachable
                 if results.is_empty() {
-                    println!("No results for '{}'.", query);
                     eprintln!("  {} HuggingFace search failed: {}", style("!").yellow(), e);
                 }
             }
         }
     }
 
-    if results.is_empty() {
-        // Already printed HF results above if any, so only print "no results"
-        // if we haven't printed anything at all
+    if results.is_empty() && !hf_printed {
+        println!("\nNo results for '{}'.\n", query);
+        println!(
+            "  Popular models: {}, {}, {}, {}",
+            style("flux-schnell").cyan(),
+            style("flux-dev").cyan(),
+            style("sdxl").cyan(),
+            style("z-image-turbo").cyan(),
+        );
+        println!("  Browse all:     {}", style("modl search flux").cyan());
     }
 
     Ok(())

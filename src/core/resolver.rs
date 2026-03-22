@@ -45,9 +45,26 @@ fn resolve_recursive(
     }
     visited.insert(id.to_string());
 
-    let manifest = index
-        .find(id)
-        .ok_or_else(|| anyhow::anyhow!("Model '{}' not found in registry", id))?;
+    let manifest = index.find(id).ok_or_else(|| {
+        let suggestions = index.suggest(id, 5);
+        if suggestions.is_empty() {
+            anyhow::anyhow!(
+                "Model '{}' not found in registry.\n\n  Try: modl search {}",
+                id,
+                id
+            )
+        } else {
+            let suggestion_list: Vec<String> = suggestions
+                .iter()
+                .map(|m| format!("  {} — {}", m.id, m.name))
+                .collect();
+            anyhow::anyhow!(
+                "Model '{}' not found in registry. Similar models:\n\n{}\n\n  Install with: modl pull <id>",
+                id,
+                suggestion_list.join("\n")
+            )
+        }
+    })?;
 
     // Resolve dependencies first (depth-first)
     for dep in &manifest.requires {
