@@ -87,13 +87,15 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
     base_model_path = model_info.get("base_model_path")
     lora_info = spec.get("lora")
 
-    # Detect generation mode for cold-start pipeline selection
+    # Detect generation mode for cold-start pipeline selection.
+    # mask_blend uses txt2img pipeline with a callback — not the inpaint pipeline.
     params = spec.get("params", {})
     init_image_path = params.get("init_image")
     mask_path = params.get("mask")
-    if mask_path and init_image_path:
+    use_mask_blend_cold = params.get("inpaint_method") == "mask_blend"
+    if mask_path and init_image_path and not use_mask_blend_cold:
         cold_mode = "inpaint"
-    elif init_image_path:
+    elif init_image_path and not use_mask_blend_cold:
         cold_mode = "img2img"
     else:
         cold_mode = "txt2img"

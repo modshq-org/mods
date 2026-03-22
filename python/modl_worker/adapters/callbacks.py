@@ -188,21 +188,31 @@ def prepare_mask_blend(
 
     emitter.info("Preparing latent mask blend...")
 
-    device = pipe._execution_device if hasattr(pipe, '_execution_device') else "cuda"
+    # Resolve device — with model_cpu_offload the execution device is set
+    # on the pipeline but individual components may be on CPU until called.
+    device = getattr(pipe, '_execution_device', None)
+    if device is None:
+        import torch as _t
+        device = "cuda" if _t.cuda.is_available() else "cpu"
     dtype = pipe.vae.dtype if hasattr(pipe, 'vae') else torch.bfloat16
 
-    # VAE scale factor
+    # VAE scale factor (for image preprocessing — NOT including latent packing)
     vae_scale = getattr(pipe, 'vae_scale_factor', 8)
-    # Some architectures (Flux, Z-Image) use 2x packing
+    # DiT models (Flux, Z-Image, Qwen, Chroma) pack 2x2 spatial into channels
     packing_factor = 2 if arch not in ("sdxl", "sd15") else 1
-    effective_scale = vae_scale * packing_factor
 
-    img_processor = VaeImageProcessor(vae_scale_factor=effective_scale)
+    img_processor = VaeImageProcessor(vae_scale_factor=vae_scale)
 
-    # Encode init image to latents
+    # Encode init image to latents.
+    # Move VAE to execution device explicitly — with model_cpu_offload,
+    # the VAE may still be on CPU at this point.
     init_resized = init_image.resize((width, height), Image.LANCZOS)
     init_tensor = img_processor.preprocess(init_resized, height=height, width=width)
     init_tensor = init_tensor.to(device=device, dtype=dtype)
+
+    vae_was_on_cpu = next(pipe.vae.parameters()).device.type == "cpu"
+    if vae_was_on_cpu:
+        pipe.vae.to(device)
 
     with torch.no_grad():
         latent_dist = pipe.vae.encode(init_tensor)
@@ -211,15 +221,33 @@ def prepare_mask_blend(
         else:
             clean_latents = latent_dist.mode()
 
+    if vae_was_on_cpu:
+        pipe.vae.to("cpu")
+        torch.cuda.empty_cache()
+
     # Apply VAE scaling
     if hasattr(pipe.vae.config, 'scaling_factor'):
         clean_latents = clean_latents * pipe.vae.config.scaling_factor
     if hasattr(pipe.vae.config, 'shift_factor'):
         clean_latents = clean_latents - pipe.vae.config.shift_factor
 
-    # Pack latents for Flux/Z-Image/Qwen (2x2 spatial → channel packing)
-    if packing_factor == 2:
-        clean_latents = _pack_latents(clean_latents)
+    # Determine if this is a Flux-style DiT (sequence format) or UNet (spatial format).
+    # Flux, Chroma, Z-Image, Qwen all use DiT with sequence-packed latents.
+    is_flux_dit = arch not in ("sdxl", "sd15")
+
+    # Pack latents to match the format used inside the pipeline's denoising loop.
+    if is_flux_dit and packing_factor == 2:
+        # Flux sequence format: (B, H/2*W/2, C*4)
+        latent_h = clean_latents.shape[2] // 2
+        latent_w = clean_latents.shape[3] // 2
+        clean_latents = _pack_latents_flux(clean_latents)
+    elif packing_factor == 2:
+        latent_h = clean_latents.shape[2] // 2
+        latent_w = clean_latents.shape[3] // 2
+        clean_latents = _pack_latents_spatial(clean_latents)
+    else:
+        latent_h = clean_latents.shape[2]
+        latent_w = clean_latents.shape[3]
 
     # Prepare mask in latent space
     mask_resized = mask_image.convert("L").resize((width, height), Image.NEAREST)
@@ -228,17 +256,31 @@ def prepare_mask_blend(
     mask_np = (mask_np > 0.5).astype(np.float32)
     mask_tensor = torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0)
 
-    # Downsample mask to latent resolution
-    latent_h, latent_w = clean_latents.shape[-2], clean_latents.shape[-1]
+    # Downsample mask to the pre-packing latent resolution
     mask_latent = torch.nn.functional.interpolate(
         mask_tensor, size=(latent_h, latent_w), mode="nearest"
     )
-    # Expand mask to match latent channels
+
+    # Pack mask to match latent format
+    if is_flux_dit and packing_factor == 2:
+        # Flux sequence format: (B, 1, H, W) → (B, H/2*W/2, 1*4) → broadcast
+        # Simpler: just flatten spatial dims to sequence
+        # mask shape: (B, 1, latent_h, latent_w) where latent_h/w are already halved
+        # We need: (B, latent_h * latent_w, 1) to broadcast against (B, seq, C*4)
+        mask_latent = mask_latent.squeeze(1).reshape(1, latent_h * latent_w, 1)
+    # For spatial format, expand channels normally
     mask_latent = mask_latent.expand_as(clean_latents).to(device=device, dtype=clean_latents.dtype)
 
-    # Generate noise
+    # Generate noise — use CPU generator for compatibility (CUDA generators
+    # can't be used with device="cpu" tensors).
+    cpu_gen = torch.Generator(device="cpu")
+    if generator.device.type == "cpu":
+        cpu_gen.set_state(generator.get_state())
+    else:
+        # Seed CPU gen from the current CUDA generator's initial seed
+        cpu_gen.manual_seed(generator.initial_seed())
     noise = torch.randn(
-        clean_latents.shape, generator=generator, device="cpu", dtype=torch.float32,
+        clean_latents.shape, generator=cpu_gen, device="cpu", dtype=torch.float32,
     ).to(device=device, dtype=clean_latents.dtype)
 
     emitter.info(f"Mask blend ready: latent shape={list(clean_latents.shape)}, "
@@ -247,8 +289,24 @@ def prepare_mask_blend(
     return LatentMaskBlend(clean_latents, mask_latent, noise, pipe.scheduler)
 
 
-def _pack_latents(latents):
-    """Pack latents from (B, C, H, W) to (B, C*4, H//2, W//2) for Flux-style models."""
+def _pack_latents_flux(latents):
+    """Pack latents from (B, C, H, W) to Flux sequence format (B, H/2*W/2, C*4).
+
+    This matches FluxPipeline._pack_latents exactly — the format latents are in
+    during the denoising loop (and thus inside callback_on_step_end).
+    """
+    b, c, h, w = latents.shape
+    latents = latents.view(b, c, h // 2, 2, w // 2, 2)
+    latents = latents.permute(0, 2, 4, 1, 3, 5)
+    latents = latents.reshape(b, (h // 2) * (w // 2), c * 4)
+    return latents
+
+
+def _pack_latents_spatial(latents):
+    """Pack latents from (B, C, H, W) to (B, C*4, H//2, W//2).
+
+    Used by non-Flux architectures that keep spatial dims (e.g. UNet-based).
+    """
     b, c, h, w = latents.shape
     latents = latents.reshape(b, c, h // 2, 2, w // 2, 2)
     latents = latents.permute(0, 1, 3, 5, 2, 4).reshape(b, c * 4, h // 2, w // 2)
