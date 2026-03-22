@@ -239,7 +239,7 @@ def run_mask_blend(
         cl = clean_latents.to(device=lat_dev, dtype=lat_dt)
         ns = noise.to(device=lat_dev, dtype=lat_dt)
         mk = latent_mask.to(device=lat_dev, dtype=lat_dt).expand_as(cl)
-        noised_orig = _renoise(cl, ns, pipe_ref.scheduler, step_index, timestep, is_flow, lat_dev, lat_dt)
+        noised_orig = _renoise(cl, ns, pipe_ref.scheduler, step_index, timestep, is_flow, lat_dev, lat_dt, emitter)
 
         if latents.dim() == 3:
             # Sequence format: extract our channels → unpack → blend → repack
@@ -295,7 +295,7 @@ def run_mask_blend(
     return image
 
 
-def _renoise(clean, noise, scheduler, step_index, timestep, is_flow, device, dtype):
+def _renoise(clean, noise, scheduler, step_index, timestep, is_flow, device, dtype, emitter=None):
     """Re-noise clean latents to the current noise level."""
     if is_flow:
         sigmas = scheduler.sigmas
@@ -304,6 +304,7 @@ def _renoise(clean, noise, scheduler, step_index, timestep, is_flow, device, dty
             sigma = sigmas[next_idx].to(device=device, dtype=dtype)
         else:
             sigma = torch.tensor(0.0, device=device, dtype=dtype)
+
         sigma = sigma.reshape(1, 1, 1, 1)
         return sigma * noise + (1.0 - sigma) * clean
     else:
