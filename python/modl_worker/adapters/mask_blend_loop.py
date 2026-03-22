@@ -53,13 +53,31 @@ def seq_to_spatial(latents, h, w):
 # VAE scaling — must be exact inverse of decode: (lat / scale) + shift
 # ---------------------------------------------------------------------------
 
-def _scale_latents(latents, vae_config):
-    """Encode direction: raw → scaled. Inverse of decode."""
-    lat = latents.clone()
-    if hasattr(vae_config, 'shift_factor') and vae_config.shift_factor:
-        lat = lat - vae_config.shift_factor
-    if hasattr(vae_config, 'scaling_factor') and vae_config.scaling_factor:
-        lat = lat * vae_config.scaling_factor
+def _encode_and_scale(pipe, image_tensor, generator):
+    """VAE encode + scale using the pipeline's own method.
+
+    Different pipelines scale differently:
+    - Klein: patchify → BN normalize (no scaling_factor/shift_factor)
+    - Flux/Z-Image: (raw - shift_factor) * scaling_factor
+    - SDXL: raw * scaling_factor
+
+    Uses the pipeline's _encode_vae_image if available to match exactly.
+    """
+    # Use pipeline's own encode method if available (Klein, Flux2)
+    if hasattr(pipe, '_encode_vae_image'):
+        with torch.no_grad():
+            return pipe._encode_vae_image(image=image_tensor, generator=generator)
+
+    # Fallback: manual encode + standard scaling
+    with torch.no_grad():
+        enc = pipe.vae.encode(image_tensor)
+        raw = enc.latent_dist.mode() if hasattr(enc, 'latent_dist') else enc.mode()
+
+    lat = raw.clone()
+    if hasattr(pipe.vae.config, 'shift_factor') and pipe.vae.config.shift_factor:
+        lat = lat - pipe.vae.config.shift_factor
+    if hasattr(pipe.vae.config, 'scaling_factor') and pipe.vae.config.scaling_factor:
+        lat = lat * pipe.vae.config.scaling_factor
     return lat
 
 
@@ -138,43 +156,54 @@ def run_mask_blend(
     padded_tensor = img_processor.preprocess(padded_pil, height=height, width=width).to(device=device, dtype=dtype)
     clean_tensor = img_processor.preprocess(init_resized, height=height, width=width).to(device=device, dtype=dtype)
 
-    with torch.no_grad():
-        enc_p = pipe.vae.encode(padded_tensor)
-        padded_latents = _scale_latents(
-            enc_p.latent_dist.mode() if hasattr(enc_p, 'latent_dist') else enc_p.mode(),
-            pipe.vae.config,
-        )
-        enc_c = pipe.vae.encode(clean_tensor)
-        clean_latents = _scale_latents(
-            enc_c.latent_dist.mode() if hasattr(enc_c, 'latent_dist') else enc_c.mode(),
-            pipe.vae.config,
-        )
+    padded_latents = _encode_and_scale(pipe, padded_tensor, generator)
+    clean_latents = _encode_and_scale(pipe, clean_tensor, generator)
 
-    # These are at FULL VAE resolution: (B, C_vae, H/8, W/8)
-    c_vae = clean_latents.shape[1]  # 16
-    latent_h = clean_latents.shape[2]  # H/8
-    latent_w = clean_latents.shape[3]  # W/8
+    # The encode may return raw VAE output (B, 16, 64, 64) or already-folded
+    # pipeline format (B, 128, 32, 32) depending on whether _encode_vae_image
+    # was used. Detect by checking if the spatial dims are half of expected.
+    c_enc = clean_latents.shape[1]
+    h_enc = clean_latents.shape[2]
+    w_enc = clean_latents.shape[3]
+    expected_h = height // vae_scale  # e.g. 64 for 512px
+    already_folded = (h_enc < expected_h)  # 32 < 64 → already folded
 
-    emitter.info(f"VAE latents: ({c_vae}, {latent_h}, {latent_w}), "
-                 f"mean={clean_latents.mean():.4f} std={clean_latents.std():.4f}")
+    if already_folded:
+        # Pipeline's _encode_vae_image already patchified/BN-normalized
+        # Latents are in pipeline's internal spatial format
+        c_vae = c_enc // 4   # 128 // 4 = 32 (Klein's effective VAE channels)
+        latent_h = h_enc      # folded spatial
+        latent_w = w_enc
+        c_folded = c_enc      # already folded channel count
+        hh, hw = h_enc, w_enc
+        emitter.info(f"Encoded latents (pre-folded): ({c_enc}, {h_enc}, {w_enc}), "
+                     f"mean={clean_latents.mean():.4f} std={clean_latents.std():.4f}")
+    else:
+        # Raw VAE output — need to fold for sequence-packing pipelines
+        c_vae = c_enc          # 16
+        latent_h = h_enc       # full spatial
+        latent_w = w_enc
+        c_folded = c_vae * 4   # 64 after fold
+        hh = h_enc // 2
+        hw = w_enc // 2
+        emitter.info(f"Encoded latents (raw): ({c_enc}, {h_enc}, {w_enc}), "
+                     f"mean={clean_latents.mean():.4f} std={clean_latents.std():.4f}")
 
-    # Mask at full VAE spatial resolution
+    # Mask at the encoded spatial resolution
     mask_tensor = torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0)
     latent_mask = torch.nn.functional.interpolate(
-        mask_tensor, size=(latent_h, latent_w), mode="bilinear", align_corners=False,
+        mask_tensor, size=(h_enc, w_enc), mode="bilinear", align_corners=False,
     ).to(device=device, dtype=clean_latents.dtype)
 
-    # Noise at full VAE resolution
+    # Noise at encoded resolution
     noise = torch.randn(
         clean_latents.shape, generator=generator, device="cpu", dtype=torch.float32,
     ).to(device=device, dtype=clean_latents.dtype)
 
     # Seeded: preserved = encoded original, masked = noise
     seeded_latents = latent_mask * noise + (1.0 - latent_mask) * padded_latents
-    c_folded = c_vae * 4  # 64 after 2x2 fold
-    hh, hw = latent_h // 2, latent_w // 2  # folded spatial dims
 
-    emitter.info(f"Packing: {packing}, mask coverage: {mask_np.mean():.0%}")
+    emitter.info(f"Packing: {packing}, already_folded: {already_folded}, mask coverage: {mask_np.mean():.0%}")
 
     # --- 3. Monkey-patch prepare_latents ---
     real_prepare = pipe.prepare_latents
@@ -184,13 +213,15 @@ def run_mask_blend(
         packed = result[0] if isinstance(result, tuple) else result
 
         if packed.dim() == 3:
-            # Sequence format: fold VAE latents → pack to seq → inject
-            folded = vae_to_transformer(seeded_latents, c_vae)  # (B, 64, 32, 32)
-            sl_seq = spatial_to_seq(folded)  # (B, 1024, 64)
+            # Sequence format: get to spatial → seq → inject
+            if already_folded:
+                sl_spatial = seeded_latents  # already in (B, C_folded, H, W)
+            else:
+                sl_spatial = vae_to_transformer(seeded_latents, c_vae)
+            sl_seq = spatial_to_seq(sl_spatial)
             sl_seq = sl_seq.to(device=packed.device, dtype=packed.dtype)
             packed[:, :, :sl_seq.shape[-1]] = sl_seq
         else:
-            # Spatial format: direct copy
             packed.copy_(seeded_latents.to(device=packed.device, dtype=packed.dtype))
 
         return result
@@ -205,35 +236,33 @@ def run_mask_blend(
         lat_dev = latents.device
         lat_dt = latents.dtype
 
+        cl = clean_latents.to(device=lat_dev, dtype=lat_dt)
+        ns = noise.to(device=lat_dev, dtype=lat_dt)
+        mk = latent_mask.to(device=lat_dev, dtype=lat_dt).expand_as(cl)
+        noised_orig = _renoise(cl, ns, pipe_ref.scheduler, step_index, timestep, is_flow, lat_dev, lat_dt)
+
         if latents.dim() == 3:
-            # Sequence format: extract VAE channels → unpack → unfold → blend → refold → repack
+            # Sequence format: extract our channels → unpack → blend → repack
             b, seq_len, c_total = latents.shape
 
-            vae_seq = latents[:, :, :c_folded]  # (B, seq, 64)
-            vae_spatial_folded = seq_to_spatial(vae_seq, hh, hw)  # (B, 64, 32, 32)
-            vae_full = transformer_to_vae(vae_spatial_folded, c_vae)  # (B, 16, 64, 64)
+            vae_seq = latents[:, :, :c_folded]
+            vae_spatial = seq_to_spatial(vae_seq, hh, hw)  # (B, c_folded, hh, hw)
 
-            # Blend at full VAE resolution
-            cl = clean_latents.to(device=lat_dev, dtype=lat_dt)
-            ns = noise.to(device=lat_dev, dtype=lat_dt)
-            mk = latent_mask.to(device=lat_dev, dtype=lat_dt).expand_as(cl)
+            if already_folded:
+                # Blend directly at folded resolution (clean/noise/mask match)
+                blended = mk * vae_spatial + (1.0 - mk) * noised_orig
+                blended_seq = spatial_to_seq(blended).to(lat_dt)
+            else:
+                # Unfold → blend at full VAE res → refold
+                vae_full = transformer_to_vae(vae_spatial, c_vae)
+                blended = mk * vae_full + (1.0 - mk) * noised_orig
+                blended_folded = vae_to_transformer(blended, c_vae)
+                blended_seq = spatial_to_seq(blended_folded).to(lat_dt)
 
-            noised_orig = _renoise(cl, ns, pipe_ref.scheduler, step_index, timestep, is_flow, lat_dev, lat_dt)
-            blended = mk * vae_full + (1.0 - mk) * noised_orig
-
-            # Repack: fold → seq → write back
-            blended_folded = vae_to_transformer(blended, c_vae)
-            blended_seq = spatial_to_seq(blended_folded).to(lat_dt)
             latents[:, :, :c_folded] = blended_seq
             callback_kwargs["latents"] = latents
-
         else:
             # 4D spatial: blend directly
-            cl = clean_latents.to(device=lat_dev, dtype=lat_dt)
-            ns = noise.to(device=lat_dev, dtype=lat_dt)
-            mk = latent_mask.to(device=lat_dev, dtype=lat_dt).expand_as(cl)
-
-            noised_orig = _renoise(cl, ns, pipe_ref.scheduler, step_index, timestep, is_flow, lat_dev, lat_dt)
             callback_kwargs["latents"] = mk * latents + (1.0 - mk) * noised_orig
 
         return callback_kwargs
