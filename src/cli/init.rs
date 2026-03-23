@@ -458,7 +458,7 @@ async fn offer_service_install() -> Result<()> {
         return Ok(());
     }
 
-    super::serve::install_service(3333).await?;
+    super::serve::install_service(3939).await?;
     Ok(())
 }
 
