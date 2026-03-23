@@ -12,9 +12,10 @@ from modl_worker.adapters import (
 )
 from modl_worker.protocol import EventEmitter, fatal
 
+from typing import Callable
 
 # All commands that take --config + --job-id and dispatch to a run_* function
-_CONFIG_COMMANDS: dict[str, tuple[callable, str]] = {
+_CONFIG_COMMANDS: dict[str, tuple[Callable, str]] = {
     "train":        (run_train,        "Run training adapter"),
     "generate":     (run_generate,     "Run inference/generation adapter"),
     "edit":         (run_edit,         "Run image editing adapter"),

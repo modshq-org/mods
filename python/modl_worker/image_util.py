@@ -87,7 +87,6 @@ def save_and_emit_artifact(
             from PIL.PngImagePlugin import PngInfo
             pnginfo = PngInfo()
             pnginfo.add_text("Software", "modl.run")
-            pnginfo.add_text("Comment", f"{stage}d with modl.run")
             pnginfo.add_text("modl_metadata", json.dumps(metadata, separators=(",", ":")))
             save_kwargs["pnginfo"] = pnginfo
         except Exception:
