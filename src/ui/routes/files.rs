@@ -4,9 +4,12 @@ use axum::{
     http::{StatusCode, header},
     response::{Html, IntoResponse},
 };
+use include_dir::{Dir, include_dir};
 use serde::Deserialize;
 
 use crate::core::paths::modl_root;
+
+static DIST_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/ui/dist/assets");
 
 /// Serve files from ~/.modl/ (images, samples, etc.)
 pub async fn serve_file(
@@ -140,18 +143,15 @@ async fn serve_thumbnail(source: &std::path::Path, width: u32) -> axum::response
 
 /// Serve bundled UI assets embedded at compile time.
 pub async fn serve_ui_asset(Path(path): Path<String>) -> impl IntoResponse {
-    match path.as_str() {
-        "app.js" => (
-            [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-            include_str!("../dist/assets/app.js"),
-        )
-            .into_response(),
-        "index.css" => (
-            [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-            include_str!("../dist/assets/index.css"),
-        )
-            .into_response(),
-        _ => (StatusCode::NOT_FOUND, "Not found").into_response(),
+    let content_type = match path.rsplit('.').next().unwrap_or("") {
+        "js" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        _ => "application/octet-stream",
+    };
+
+    match DIST_ASSETS.get_file(&path) {
+        Some(file) => ([(header::CONTENT_TYPE, content_type)], file.contents()).into_response(),
+        None => (StatusCode::NOT_FOUND, "Not found").into_response(),
     }
 }
 

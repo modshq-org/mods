@@ -64,6 +64,9 @@ open = "5"
 # Image processing (thumbnails)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
+# Embedded assets
+include_dir = "0.7"
+
 # Misc
 chrono = { version = "0.4", features = ["serde"] }
 shellexpand = "3"
