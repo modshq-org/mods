@@ -252,17 +252,40 @@ async fn run_hf_pull(repo_id: &str, dry_run: bool, force: bool) -> Result<()> {
 
 /// Show an interactive menu for the user to pick a variant
 fn prompt_variant_selection(manifest: &Manifest, vram: Option<u64>) -> Result<String> {
+    let is_mps = crate::core::gpu::detect()
+        .map(|g| g.device == crate::core::gpu::DeviceType::Mps)
+        .unwrap_or(false);
+
+    // Filter out MPS-incompatible variants (fp8 needs CUDA float8, GGUF needs ggml kernels)
+    let visible_variants: Vec<_> = manifest
+        .variants
+        .iter()
+        .filter(|v| {
+            if is_mps {
+                let id = v.id.to_lowercase();
+                !id.contains("fp8") && !id.contains("gguf")
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    let variants_for_selection = if visible_variants.is_empty() {
+        // Fallback: show all if filtering removed everything
+        manifest.variants.iter().collect::<Vec<_>>()
+    } else {
+        visible_variants
+    };
+
     let auto_selected = vram.and_then(|vram_mb| {
-        let variant_info: Vec<(String, u64)> = manifest
-            .variants
+        let variant_info: Vec<(String, u64)> = variants_for_selection
             .iter()
             .map(|v| (v.id.clone(), v.vram_required.unwrap_or(0)))
             .collect();
         crate::core::gpu::select_variant(vram_mb, &variant_info)
     });
 
-    let items: Vec<String> = manifest
-        .variants
+    let items: Vec<String> = variants_for_selection
         .iter()
         .map(|v| {
             let recommended = auto_selected.as_ref().map(|s| s == &v.id).unwrap_or(false);
@@ -293,7 +316,7 @@ fn prompt_variant_selection(manifest: &Manifest, vram: Option<u64>) -> Result<St
 
     let default_idx = auto_selected
         .as_ref()
-        .and_then(|s| manifest.variants.iter().position(|v| &v.id == s))
+        .and_then(|s| variants_for_selection.iter().position(|v| &v.id == s))
         .unwrap_or(0);
 
     println!(
@@ -307,7 +330,7 @@ fn prompt_variant_selection(manifest: &Manifest, vram: Option<u64>) -> Result<St
         .default(default_idx)
         .interact()?;
 
-    Ok(manifest.variants[selection].id.clone())
+    Ok(variants_for_selection[selection].id.clone())
 }
 
 /// Try to resolve a user-typed ID to a registry ID.
