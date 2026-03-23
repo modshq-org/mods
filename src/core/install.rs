@@ -54,8 +54,8 @@ pub fn select_variant<'a>(
     }
 
     if let Some(vram_mb) = vram {
-        // On MPS (Apple Silicon), exclude fp8 and GGUF variants — they require
-        // CUDA-specific kernels (float8 dtype, ggml quantization).
+        // On MPS (Apple Silicon), exclude fp8 variants — float8 dtype requires CUDA.
+        // GGUF is fine: weights are dequantized to float16/bfloat16 at load time.
         let is_mps = gpu::detect()
             .map(|g| g.device == gpu::DeviceType::Mps)
             .unwrap_or(false);
@@ -66,12 +66,8 @@ pub fn select_variant<'a>(
             .filter(|v| {
                 if is_mps {
                     let id = v.id.to_lowercase();
-                    let fmt = v.format.as_deref().unwrap_or("").to_lowercase();
                     let prec = v.precision.as_deref().unwrap_or("").to_lowercase();
-                    !id.contains("fp8")
-                        && !id.contains("gguf")
-                        && fmt != "gguf"
-                        && !prec.contains("fp8")
+                    !id.contains("fp8") && !prec.contains("fp8")
                 } else {
                     true
                 }

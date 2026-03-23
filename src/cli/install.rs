@@ -256,19 +256,16 @@ fn prompt_variant_selection(manifest: &Manifest, vram: Option<u64>) -> Result<St
         .map(|g| g.device == crate::core::gpu::DeviceType::Mps)
         .unwrap_or(false);
 
-    // Filter out MPS-incompatible variants (fp8 needs CUDA float8, GGUF needs ggml kernels)
+    // Filter out MPS-incompatible variants (fp8 needs CUDA float8 dtype).
+    // GGUF is fine on MPS: weights are dequantized to float16/bfloat16 at load time.
     let visible_variants: Vec<_> = manifest
         .variants
         .iter()
         .filter(|v| {
             if is_mps {
                 let id = v.id.to_lowercase();
-                let fmt = v.format.as_deref().unwrap_or("").to_lowercase();
                 let prec = v.precision.as_deref().unwrap_or("").to_lowercase();
-                !id.contains("fp8")
-                    && !id.contains("gguf")
-                    && fmt != "gguf"
-                    && !prec.contains("fp8")
+                !id.contains("fp8") && !prec.contains("fp8")
             } else {
                 true
             }
