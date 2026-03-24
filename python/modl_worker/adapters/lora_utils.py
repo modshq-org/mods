@@ -104,9 +104,13 @@ def load_lora_with_conversion(
     lora_file = os.path.basename(lora_path)
 
     try:
-        pipeline.load_lora_weights(lora_dir, weight_name=lora_file)
-        pipeline.fuse_lora(lora_scale=lora_weight)
+        pipeline.load_lora_weights(lora_dir, weight_name=lora_file, adapter_name="default")
+        # Apply deferred fp8 casting (base weights → fp8 storage).
+        # Keep LoRA UNfused: PEFT computes bf16 base + bf16 LoRA delta at
+        # runtime.  Fusing then quantizing to fp8 loses the LoRA signal.
         _apply_deferred_fp8_casting(pipeline, emitter)
+        # Set adapter scale (PEFT handles this at forward time)
+        pipeline.set_adapters(["default"], adapter_weights=[lora_weight])
         return True
     except Exception as first_err:
         if emitter:
@@ -127,9 +131,10 @@ def load_lora_with_conversion(
             pipeline.load_lora_weights(
                 os.path.dirname(tmp_path),
                 weight_name=os.path.basename(tmp_path),
+                adapter_name="default",
             )
-            pipeline.fuse_lora(lora_scale=lora_weight)
             _apply_deferred_fp8_casting(pipeline, emitter)
+            pipeline.set_adapters(["default"], adapter_weights=[lora_weight])
             return True
         except Exception as second_err:
             _warn_lora_failed(emitter, str(second_err))

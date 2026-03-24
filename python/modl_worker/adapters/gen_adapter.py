@@ -204,8 +204,10 @@ def run_generate_with_pipeline(
 
     # Apply scheduler overrides (Lightning mode: distilled with different shift values)
     sched_overrides = params.get("scheduler_overrides")
+    lightning_sigmas = None
     if sched_overrides and hasattr(pipeline, "scheduler"):
         _apply_scheduler_overrides(pipeline, sched_overrides, emitter)
+        lightning_sigmas = _compute_lightning_sigmas(steps)
 
     # ControlNet params
     cn_inputs = params.get("controlnet", [])
@@ -257,6 +259,11 @@ def run_generate_with_pipeline(
         "num_inference_steps": steps,
         "generator": generator,
     }
+
+    # Lightning mode: use ComfyUI-style simple linear sigmas instead of diffusers'
+    # default timestep spacing which produces wrong noise levels for distilled models.
+    if lightning_sigmas is not None:
+        gen_kwargs["sigmas"] = lightning_sigmas
 
     # QwenImagePipeline/QwenImageEditPlusPipeline use true_cfg_scale (not guidance_scale).
     # negative_prompt=" " (space) is required to enable true CFG — without it quality degrades.
@@ -461,26 +468,55 @@ def run_generate_with_pipeline(
 
 
 def _apply_scheduler_overrides(pipeline, overrides: dict, emitter) -> None:
-    """Reconstruct the pipeline's scheduler with patched config values.
+    """Reconstruct the pipeline's scheduler for Lightning LoRA inference.
 
-    Lightning LoRAs are distilled with different scheduler settings (e.g.
-    shift=3 instead of dynamic shifting). This patches the scheduler config
-    and recreates it so the inference uses the correct noise schedule.
+    Lightning LoRAs are distilled with a fixed shift=3, simple linear schedule
+    (matching ComfyUI's ModelSamplingAuraFlow + simple scheduler).  Diffusers'
+    default dynamic shifting produces very different sigma values that make
+    Lightning results look undercooked / muddy.
+
+    This switches to static shift mode which, combined with the custom sigmas
+    injected by the caller, reproduces the ComfyUI schedule exactly.
     """
+    import math
+
     sched = pipeline.scheduler
     config = dict(sched.config)
 
-    for key, value in overrides.items():
-        if value is None:
-            # JSON null → remove the key (e.g. shift_terminal=null)
-            config.pop(key, None)
-        else:
-            config[key] = value
+    # Determine the effective shift from overrides (e.g. base_shift=log(3) → shift=3)
+    shift_val = None
+    for key in ("base_shift", "max_shift"):
+        v = overrides.get(key)
+        if v is not None:
+            shift_val = math.exp(float(v))  # log(3) → 3.0
 
-    # Reconstruct scheduler from patched config
+    if shift_val is not None:
+        # Disable dynamic shifting and use fixed shift instead.
+        # This matches ComfyUI's ModelSamplingAuraFlow approach.
+        config["use_dynamic_shifting"] = False
+        config["shift"] = shift_val
+        config.pop("shift_terminal", None)
+    else:
+        # Fallback: apply overrides as-is
+        for key, value in overrides.items():
+            if value is None:
+                config.pop(key, None)
+            else:
+                config[key] = value
+
     sched_class = type(sched)
     pipeline.scheduler = sched_class.from_config(config)
-    emitter.info(f"Scheduler overrides applied: {overrides}")
+    emitter.info(f"Scheduler overrides applied: shift={shift_val}")
+
+
+def _compute_lightning_sigmas(steps: int) -> list[float]:
+    """Compute raw (unshifted) sigma schedule matching ComfyUI's simple scheduler.
+
+    ComfyUI uses evenly-spaced timesteps [1, (N-1)/N, ..., 1/N].  The shift
+    (e.g. shift=3 via ModelSamplingAuraFlow) is applied by the scheduler's
+    ``set_timesteps`` method, so we return raw linear values here.
+    """
+    return [1.0 - i / steps for i in range(steps)]
 
 
 def _cleanup_tmp_files(*paths: str | None) -> None:

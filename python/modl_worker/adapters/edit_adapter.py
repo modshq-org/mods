@@ -75,9 +75,11 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
 
     # Apply scheduler overrides (Lightning mode)
     sched_overrides = params.get("scheduler_overrides")
+    lightning_sigmas = None
     if sched_overrides and hasattr(pipeline, "scheduler"):
-        from .gen_adapter import _apply_scheduler_overrides
+        from .gen_adapter import _apply_scheduler_overrides, _compute_lightning_sigmas
         _apply_scheduler_overrides(pipeline, sched_overrides, emitter)
+        lightning_sigmas = _compute_lightning_sigmas(steps)
     image_paths = params.get("image_paths", [])
 
     if not image_paths:
@@ -134,6 +136,10 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
             gen_kwargs["width"] = params["width"]
         if params.get("height"):
             gen_kwargs["height"] = params["height"]
+
+    # Lightning mode: use ComfyUI-style simple linear sigmas.
+    if lightning_sigmas is not None:
+        gen_kwargs["sigmas"] = lightning_sigmas
 
     artifact_paths = []
 
