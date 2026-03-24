@@ -579,9 +579,12 @@ pub enum Commands {
         /// Style type: style, face, content (SDXL IP-Adapter variants only)
         #[arg(long)]
         style_type: Option<String>,
-        /// Use Lightning distillation LoRA for faster generation (fewer steps)
-        #[arg(long)]
-        fast: bool,
+        /// Lightning LoRA for ~10x faster generation (4 or 8 steps instead of 40-50).
+        /// Use --fast for 4-step (fastest) or --fast 8 for 8-step (higher quality).
+        /// Auto-applies a model-specific distillation LoRA. Cannot combine with --lora.
+        /// Supported: qwen-image, qwen-image-edit.
+        #[arg(long, num_args = 0..=1, default_missing_value = "4", value_name = "STEPS")]
+        fast: Option<u32>,
         /// Force one-shot mode (skip persistent worker, cold start every time)
         #[arg(long)]
         no_worker: bool,
@@ -626,9 +629,11 @@ pub enum Commands {
         /// Output size (e.g. "16:9", "1820x1024") — larger than source for outpainting
         #[arg(long)]
         size: Option<String>,
-        /// Use Lightning distillation LoRA for fast editing (fewer steps)
-        #[arg(long)]
-        fast: bool,
+        /// Lightning LoRA for ~10x faster editing (4 or 8 steps instead of 40-50).
+        /// Use --fast for 4-step (fastest) or --fast 8 for 8-step (higher quality).
+        /// Supported: qwen-image-edit.
+        #[arg(long, num_args = 0..=1, default_missing_value = "4", value_name = "STEPS")]
+        fast: Option<u32>,
         /// Run on cloud
         #[arg(long)]
         cloud: bool,

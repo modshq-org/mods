@@ -72,6 +72,12 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
     guidance = params.get("guidance", 4.0)
     seed = params.get("seed")
     count = params.get("count", 1)
+
+    # Apply scheduler overrides (Lightning mode)
+    sched_overrides = params.get("scheduler_overrides")
+    if sched_overrides and hasattr(pipeline, "scheduler"):
+        from .gen_adapter import _apply_scheduler_overrides
+        _apply_scheduler_overrides(pipeline, sched_overrides, emitter)
     image_paths = params.get("image_paths", [])
 
     if not image_paths:

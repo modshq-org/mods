@@ -398,27 +398,29 @@ def assemble_pipeline(
                     )
 
                 if use_fp8_inference:
-                    # fp8 inference: create model from config with empty weights,
-                    # convert checkpoint keys, load fp8 state dict directly.
-                    # Layerwise casting (fp8 storage, bf16 compute) is applied
-                    # AFTER enable_model_cpu_offload so hooks fire in the
-                    # right order: move-to-GPU → cast-fp8→bf16 → forward.
+                    # fp8 inference: dequant fp8 → bf16, load, then mark for
+                    # deferred layerwise casting. The cast happens AFTER LoRA
+                    # fuse so that fuse operates on bf16 weights (fp8 addmm
+                    # is not supported by CUDA). After fuse, layerwise casting
+                    # stores the fused weights as fp8, compute stays bf16.
                     convert_fn = _get_checkpoint_converter(model_class_name)
                     config_dict = ModelClass.load_config(str(config_dir))
                     with init_empty_weights():
                         model = ModelClass.from_config(config_dict)
                     converted = convert_fn(checkpoint)
-                    del checkpoint  # free memory
+                    del checkpoint
+                    for k, v in converted.items():
+                        if v.dtype == torch.float8_e4m3fn:
+                            converted[k] = v.to(torch.bfloat16)
                     model.load_state_dict(converted, strict=False, assign=True)
                     del converted
                     _materialize_meta_tensors(model)
-                    # Cast small params (norms, biases) to bf16 and add
-                    # per-layer hooks for Linear weights (fp8→bf16 on
-                    # forward, restore after).
-                    n_hooked, n_cast = _prepare_fp8_model(model)
+                    model = model.to(torch.bfloat16)
+                    # Mark for deferred fp8 casting (applied after LoRA fuse
+                    # in lora_utils.py, or immediately if no LoRA is used)
+                    model._modl_needs_fp8_casting = True
                     emitter.info(
-                        f"  → fp8 model prepared: {n_hooked} linear layers "
-                        f"hooked, {n_cast} small params cast to bf16"
+                        f"  → fp8 model loaded as bf16 (fp8 casting deferred for LoRA compat)"
                     )
                 elif has_comfy_fp8_scales:
                     # Small fp8 model dequantized to bf16: the in-memory

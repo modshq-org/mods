@@ -1,7 +1,11 @@
-"""Shared LoRA key conversion utilities.
+"""Shared LoRA key conversion and fp8-compatible loading utilities.
 
 Handles the diffusion_model.* -> transformer.* key prefix conversion
 required when loading ai-toolkit or some CivitAI LoRAs with diffusers.
+
+Also handles deferred fp8 casting: fp8 models are loaded as bf16 so that
+LoRA fuse works (bf16 + bf16), then layerwise casting is applied after
+fuse to get fp8 storage / bf16 compute on GPU.
 """
 
 from __future__ import annotations
@@ -54,6 +58,31 @@ def convert_lora_keys_if_needed(lora_path: str) -> tuple[str | None, str | None]
         return None, str(exc)
 
 
+def _apply_deferred_fp8_casting(pipeline, emitter=None) -> None:
+    """Apply deferred fp8 layerwise casting on the transformer.
+
+    fp8 models are loaded as bf16 (so LoRA fuse works). After fuse,
+    this applies enable_layerwise_casting to get fp8 storage / bf16
+    compute, saving ~50% VRAM. Only acts if the transformer was
+    marked with ``_modl_needs_fp8_casting``.
+    """
+    import torch
+
+    transformer = getattr(pipeline, "transformer", None)
+    if transformer is None:
+        return
+    if not getattr(transformer, "_modl_needs_fp8_casting", False):
+        return
+
+    transformer.enable_layerwise_casting(
+        storage_dtype=torch.float8_e4m3fn,
+        compute_dtype=torch.bfloat16,
+    )
+    del transformer._modl_needs_fp8_casting
+    if emitter:
+        emitter.info("  → Applied deferred fp8 layerwise casting")
+
+
 def load_lora_with_conversion(
     pipeline,
     lora_path: str,
@@ -66,6 +95,9 @@ def load_lora_with_conversion(
     (diffusion_model.* -> transformer.*).  On second failure, logs a warning
     and returns False so the caller can continue without LoRA.
 
+    After successful fuse, applies deferred fp8 casting if the model was
+    loaded as bf16 for LoRA compatibility.
+
     Returns True if the LoRA was successfully loaded and fused, False otherwise.
     """
     lora_dir = os.path.dirname(lora_path)
@@ -74,6 +106,7 @@ def load_lora_with_conversion(
     try:
         pipeline.load_lora_weights(lora_dir, weight_name=lora_file)
         pipeline.fuse_lora(lora_scale=lora_weight)
+        _apply_deferred_fp8_casting(pipeline, emitter)
         return True
     except Exception as first_err:
         if emitter:
@@ -96,6 +129,7 @@ def load_lora_with_conversion(
                 weight_name=os.path.basename(tmp_path),
             )
             pipeline.fuse_lora(lora_scale=lora_weight)
+            _apply_deferred_fp8_casting(pipeline, emitter)
             return True
         except Exception as second_err:
             _warn_lora_failed(emitter, str(second_err))
@@ -111,7 +145,7 @@ def apply_lora_from_spec(pipeline, spec: dict, emitter) -> bool:
     """Load and fuse a LoRA based on the job spec's ``lora`` block.
 
     Handles:
-      - Skipping when no LoRA is specified
+      - Skipping when no LoRA is specified (applies deferred fp8 if needed)
       - GGUF incompatibility guard (raises RuntimeError)
       - Missing file warning
       - Key conversion fallback via ``load_lora_with_conversion``
@@ -120,6 +154,8 @@ def apply_lora_from_spec(pipeline, spec: dict, emitter) -> bool:
     """
     lora_info = spec.get("lora")
     if not lora_info:
+        # No LoRA — apply deferred fp8 casting now (was deferred for LoRA compat)
+        _apply_deferred_fp8_casting(pipeline, emitter)
         return False
 
     lora_path = lora_info.get("path")
@@ -136,11 +172,13 @@ def apply_lora_from_spec(pipeline, spec: dict, emitter) -> bool:
         )
 
     if not lora_path:
+        _apply_deferred_fp8_casting(pipeline, emitter)
         return False
 
     if not os.path.exists(lora_path):
         if emitter:
             emitter.warning("LORA_NOT_FOUND", f"LoRA file not found: {lora_path}")
+        _apply_deferred_fp8_casting(pipeline, emitter)
         return False
 
     if emitter:

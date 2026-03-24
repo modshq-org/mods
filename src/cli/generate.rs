@@ -245,7 +245,7 @@ pub struct GenerateArgs<'a> {
     pub style_ref: &'a [String],
     pub style_strength: f32,
     pub style_type: Option<&'a str>,
-    pub fast: bool,
+    pub fast: Option<u32>,
     pub cloud: bool,
     pub provider: Option<CloudProvider>,
     pub no_worker: bool,
@@ -315,7 +315,8 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     // -------------------------------------------------------------------
     // Resolve --fast (Lightning LoRA)
     // -------------------------------------------------------------------
-    let (fast_lora, fast_steps, fast_guidance) = if fast {
+    let (fast_lora, fast_steps, fast_guidance, scheduler_overrides) = if let Some(fast_steps) = fast
+    {
         if lora.is_some() {
             anyhow::bail!(
                 "--fast and --lora cannot be used together. \
@@ -335,17 +336,38 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
             )
         })?;
 
+        let (variant, resolved_steps) = lightning.resolve(fast_steps);
         let lora_ref = resolve_lora(lightning.lora_registry_id, 1.0, &db).with_context(|| {
             format!(
                 "Lightning LoRA '{}' is not installed.\n\n  \
                  Install it:\n\n    modl pull {} --variant {}\n",
-                lightning.lora_registry_id, lightning.lora_registry_id, lightning.lora_variant,
+                lightning.lora_registry_id, lightning.lora_registry_id, variant,
             )
         })?;
 
-        (lora_ref, Some(lightning.steps), Some(lightning.guidance))
+        let sched_overrides: std::collections::HashMap<String, serde_json::Value> = lightning
+            .scheduler_overrides
+            .iter()
+            .map(|(k, v)| {
+                let val = if *v == "null" {
+                    serde_json::Value::Null
+                } else if let Ok(f) = v.parse::<f64>() {
+                    serde_json::json!(f)
+                } else {
+                    serde_json::Value::String(v.to_string())
+                };
+                (k.to_string(), val)
+            })
+            .collect();
+
+        (
+            lora_ref,
+            Some(resolved_steps),
+            Some(lightning.guidance),
+            sched_overrides,
+        )
     } else {
-        (None, None, None)
+        (None, None, None, std::collections::HashMap::new())
     };
 
     // -------------------------------------------------------------------
@@ -612,6 +634,7 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
             init_image: init_image.map(|s| s.to_string()),
             mask: mask.map(|s| s.to_string()),
             strength,
+            scheduler_overrides,
             controlnet: cn_inputs,
             style_ref: style_inputs,
             inpaint_method: resolved_inpaint_method.map(|s| s.to_string()),
@@ -648,14 +671,14 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         );
         println!("  Prompt: {}", style(prompt).italic());
         println!("  Model:  {}", effective_model);
-        if fast {
+        if fast.is_some() {
             println!(
                 "  Mode:   {}",
                 style("fast (Lightning LoRA)").green().bold()
             );
         }
         if let Some(ref lr) = lora_ref
-            && !fast
+            && fast.is_none()
         {
             println!("  LoRA:   {} (strength: {:.2})", lr.name, lr.weight);
         }

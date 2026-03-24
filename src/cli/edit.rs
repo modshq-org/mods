@@ -22,7 +22,7 @@ pub struct EditArgs<'a> {
     pub guidance: Option<f32>,
     pub count: u32,
     pub size: Option<&'a str>,
-    pub fast: bool,
+    pub fast: Option<u32>,
     pub cloud: bool,
     pub provider: Option<CloudProvider>,
     pub no_worker: bool,
@@ -190,7 +190,8 @@ pub async fn run(args: EditArgs<'_>) -> Result<()> {
     // -------------------------------------------------------------------
     // Resolve --fast (Lightning LoRA)
     // -------------------------------------------------------------------
-    let (fast_lora, fast_steps, fast_guidance) = if fast {
+    let (fast_lora, fast_steps, fast_guidance, scheduler_overrides) = if let Some(fast_steps) = fast
+    {
         let lightning = model_family::lightning_config(&base_model).with_context(|| {
             let supported: Vec<&str> = model_family::LIGHTNING_CONFIGS
                 .iter()
@@ -203,17 +204,38 @@ pub async fn run(args: EditArgs<'_>) -> Result<()> {
             )
         })?;
 
+        let (variant, resolved_steps) = lightning.resolve(fast_steps);
         let lora_ref = resolve_lora(lightning.lora_registry_id, 1.0, &db).with_context(|| {
             format!(
                 "Lightning LoRA '{}' is not installed.\n\n  \
                  Install it:\n\n    modl pull {} --variant {}\n",
-                lightning.lora_registry_id, lightning.lora_registry_id, lightning.lora_variant,
+                lightning.lora_registry_id, lightning.lora_registry_id, variant,
             )
         })?;
 
-        (lora_ref, Some(lightning.steps), Some(lightning.guidance))
+        let sched_overrides: std::collections::HashMap<String, serde_json::Value> = lightning
+            .scheduler_overrides
+            .iter()
+            .map(|(k, v)| {
+                let val = if *v == "null" {
+                    serde_json::Value::Null
+                } else if let Ok(f) = v.parse::<f64>() {
+                    serde_json::json!(f)
+                } else {
+                    serde_json::Value::String(v.to_string())
+                };
+                (k.to_string(), val)
+            })
+            .collect();
+
+        (
+            lora_ref,
+            Some(resolved_steps),
+            Some(lightning.guidance),
+            sched_overrides,
+        )
     } else {
-        (None, None, None)
+        (None, None, None, std::collections::HashMap::new())
     };
 
     // -------------------------------------------------------------------
@@ -271,6 +293,7 @@ pub async fn run(args: EditArgs<'_>) -> Result<()> {
             count,
             width: output_size.map(|(w, _)| w),
             height: output_size.map(|(_, h)| h),
+            scheduler_overrides,
         },
         runtime: RuntimeRef {
             profile: runtime::resolved_generation_profile().to_string(),
@@ -291,7 +314,7 @@ pub async fn run(args: EditArgs<'_>) -> Result<()> {
         println!("{} Editing image(s)...", style("→").cyan());
         println!("  Prompt: {}", style(prompt).italic());
         println!("  Model:  {}", base_model);
-        if fast {
+        if fast.is_some() {
             println!(
                 "  Mode:   {}",
                 style("fast (Lightning LoRA)").green().bold()

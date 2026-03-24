@@ -362,6 +362,9 @@ pub struct EditParams {
     pub width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
+    /// Scheduler overrides for Lightning mode
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub scheduler_overrides: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -399,6 +402,9 @@ pub struct GenerateParams {
     /// Denoising strength for img2img (0.0 = no change, 1.0 = full denoise)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<f32>,
+    /// Scheduler overrides for Lightning mode (e.g. shift values for distilled LoRAs)
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub scheduler_overrides: std::collections::HashMap<String, serde_json::Value>,
     /// ControlNet inputs
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub controlnet: Vec<ControlNetInput>,

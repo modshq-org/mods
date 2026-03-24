@@ -202,6 +202,11 @@ def run_generate_with_pipeline(
     from .arch_config import detect_arch
     arch = detect_arch(base_model_id)
 
+    # Apply scheduler overrides (Lightning mode: distilled with different shift values)
+    sched_overrides = params.get("scheduler_overrides")
+    if sched_overrides and hasattr(pipeline, "scheduler"):
+        _apply_scheduler_overrides(pipeline, sched_overrides, emitter)
+
     # ControlNet params
     cn_inputs = params.get("controlnet", [])
 
@@ -453,6 +458,29 @@ def run_generate_with_pipeline(
         return 1
 
     return 0
+
+
+def _apply_scheduler_overrides(pipeline, overrides: dict, emitter) -> None:
+    """Reconstruct the pipeline's scheduler with patched config values.
+
+    Lightning LoRAs are distilled with different scheduler settings (e.g.
+    shift=3 instead of dynamic shifting). This patches the scheduler config
+    and recreates it so the inference uses the correct noise schedule.
+    """
+    sched = pipeline.scheduler
+    config = dict(sched.config)
+
+    for key, value in overrides.items():
+        if value is None:
+            # JSON null → remove the key (e.g. shift_terminal=null)
+            config.pop(key, None)
+        else:
+            config[key] = value
+
+    # Reconstruct scheduler from patched config
+    sched_class = type(sched)
+    pipeline.scheduler = sched_class.from_config(config)
+    emitter.info(f"Scheduler overrides applied: {overrides}")
 
 
 def _cleanup_tmp_files(*paths: str | None) -> None:

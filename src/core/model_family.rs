@@ -535,24 +535,57 @@ pub struct LightningConfig {
     pub base_model_id: &'static str,
     /// Registry ID of the Lightning LoRA
     pub lora_registry_id: &'static str,
-    /// Recommended variant for `modl pull`
-    pub lora_variant: &'static str,
-    /// Override steps
-    pub steps: u32,
-    /// Override guidance
+    /// Variant for 4-step mode (fastest)
+    pub variant_4step: &'static str,
+    /// Variant for 8-step mode (higher quality)
+    pub variant_8step: &'static str,
+    /// Override guidance (typically 1.0 for Lightning)
     pub guidance: f32,
+    /// Scheduler overrides for Lightning mode (key-value pairs applied to scheduler config).
+    /// Lightning LoRAs are distilled with shift=3 (log(3)≈1.0986), not the base scheduler shift.
+    pub scheduler_overrides: &'static [(&'static str, &'static str)],
 }
+
+impl LightningConfig {
+    /// Get the variant and step count for a given fast step setting.
+    pub fn resolve(&self, fast_steps: u32) -> (&'static str, u32) {
+        if fast_steps <= 4 {
+            (self.variant_4step, 4)
+        } else {
+            (self.variant_8step, 8)
+        }
+    }
+}
+
+/// Scheduler overrides for Qwen Lightning LoRAs:
+/// Distilled with shift=3 → base_shift=log(3), max_shift=log(3), shift_terminal=null.
+const QWEN_LIGHTNING_SCHED: &[(&str, &str)] = &[
+    ("base_shift", "1.0986"),
+    ("max_shift", "1.0986"),
+    ("shift_terminal", "null"),
+];
 
 pub static LIGHTNING_CONFIGS: &[LightningConfig] = &[
     LightningConfig {
+        base_model_id: "qwen-image",
+        lora_registry_id: "qwen-image-2512-lightning",
+        variant_4step: "4step-bf16",
+        variant_8step: "8step-bf16",
+        guidance: 1.0,
+        scheduler_overrides: QWEN_LIGHTNING_SCHED,
+        // NOTE: If using fp8 base model, install the fp8-specific variant instead:
+        //   modl pull qwen-image-edit-lightning --variant fp8-gen-4step-v1-bf16
+        // and apply manually with --lora. The bf16 LoRA causes float8 errors on fp8 base.
+    },
+    LightningConfig {
         base_model_id: "qwen-image-edit",
         lora_registry_id: "qwen-image-edit-lightning",
-        lora_variant: "edit-8step-v1-bf16",
-        steps: 8,
+        // fp8-specific variants: trained on fp8 base to avoid Float8 addmm errors
+        variant_4step: "fp8-gen-4step-v1-bf16",
+        variant_8step: "edit-8step-v1-bf16",
         guidance: 1.0,
+        scheduler_overrides: QWEN_LIGHTNING_SCHED,
     },
-    // qwen-image (standalone gen): needs Qwen-Image-2512 model + safetensors variant
-    // qwen-image-2512-lightning exists in registry but model version mismatch blocks it
     // Future: sdxl-lightning, flux-lightning, etc.
 ];
 
