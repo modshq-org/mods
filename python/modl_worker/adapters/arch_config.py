@@ -476,7 +476,7 @@ ARCH_CONFIGS: dict[str, dict] = {
         "sample": {"sampler": "flowmatch", "steps": 25, "guidance": 3.0, "neg": ""},
     },
     "qwen_image_edit": {
-        "pipeline_class": "QwenImageEditPlusPipeline",
+        "pipeline_class": "QwenImageEditPipeline",
         "gen_components": {
             "transformer": {
                 "model_class": "QwenImageTransformer2DModel",
