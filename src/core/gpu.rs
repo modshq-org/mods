@@ -132,6 +132,24 @@ pub fn detect_device_str() -> String {
         .unwrap_or_else(|| "cpu".to_string())
 }
 
+/// Returns true if the detected device is Apple Silicon (MPS).
+pub fn is_mps() -> bool {
+    detect()
+        .map(|g| g.device == DeviceType::Mps)
+        .unwrap_or(false)
+}
+
+/// Returns true if the given variant precision is compatible with MPS.
+/// MPS does not support float8 — only fp16, bf16, fp32, and GGUF (dequantized at load).
+pub fn variant_compatible_with_device(variant_id: &str, precision: Option<&str>) -> bool {
+    if !is_mps() {
+        return true;
+    }
+    let id = variant_id.to_lowercase();
+    let prec = precision.unwrap_or("").to_lowercase();
+    !id.contains("fp8") && !prec.contains("fp8")
+}
+
 /// Select best variant based on available VRAM
 pub fn select_variant(vram_mb: u64, variants: &[(String, u64)]) -> Option<String> {
     // variants: [(variant_id, vram_required_mb)]

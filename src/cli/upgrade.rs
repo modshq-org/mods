@@ -144,8 +144,9 @@ pub async fn run() -> Result<()> {
     pb.finish_and_clear();
     println!("  {} Downloaded", style("\u{2713}").green());
 
-    // Extract the binary from the tarball
-    extract_binary(&tmp_archive, &tmp_binary).context("Failed to extract binary from archive")?;
+    // Extract the binary and python worker from the tarball
+    let tmp_python = tmp_dir.join("modl-upgrade-python");
+    extract_archive(&tmp_archive, &tmp_binary, &tmp_python).context("Failed to extract archive")?;
 
     // Clean up the archive
     std::fs::remove_file(&tmp_archive).ok();
@@ -153,6 +154,9 @@ pub async fn run() -> Result<()> {
     // Try to replace the current binary
     match replace_binary(&current_exe, &tmp_binary) {
         Ok(()) => {
+            // Install python worker next to the binary
+            install_python_worker(&current_exe, &tmp_python);
+
             println!();
             println!(
                 "{} Updated to {} successfully!",
@@ -171,10 +175,16 @@ pub async fn run() -> Result<()> {
             println!();
             println!("  Run this to finish the update:");
             println!();
+            let bin_dir = current_exe
+                .parent()
+                .unwrap_or(std::path::Path::new("/usr/local/bin"));
             println!(
-                "    sudo install {} {}",
+                "    sudo install {} {} && sudo rm -rf {}/python && sudo mv {} {}/python",
                 tmp_binary.display(),
-                current_exe.display()
+                current_exe.display(),
+                bin_dir.display(),
+                tmp_python.display(),
+                bin_dir.display(),
             );
             println!();
         }
@@ -183,36 +193,128 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-/// Extract the `modl` binary from a .tar.gz archive
-fn extract_binary(archive_path: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+/// Extract the `modl` binary and `python/` worker from a .tar.gz archive
+fn extract_archive(
+    archive_path: &std::path::Path,
+    binary_dest: &std::path::Path,
+    python_dest: &std::path::Path,
+) -> Result<()> {
     let file = std::fs::File::open(archive_path)?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
 
+    // Clean any previous extraction
+    if python_dest.exists() {
+        std::fs::remove_dir_all(python_dest).ok();
+    }
+
+    let mut found_binary = false;
+
     for entry in archive.entries()? {
         let mut entry = entry?;
-        let path = entry.path()?;
+        let path = entry.path()?.to_path_buf();
+        let path_str = path.to_string_lossy().to_string();
+
+        // Extract the modl binary
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
-
-        if name == "modl" || name == "modl.exe" {
-            let mut out = std::fs::File::create(dest)?;
+        if (name == "modl" || name == "modl.exe") && !path_str.contains("python") {
+            let mut out = std::fs::File::create(binary_dest)?;
             std::io::copy(&mut entry, &mut out)?;
 
-            // Preserve executable permission on Unix
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
+                std::fs::set_permissions(binary_dest, std::fs::Permissions::from_mode(0o755))?;
             }
 
-            return Ok(());
+            found_binary = true;
+            continue;
+        }
+
+        // Extract python/ directory contents
+        if path_str.starts_with("python/") || path_str.starts_with("./python/") {
+            let relative = path_str
+                .trim_start_matches("./")
+                .strip_prefix("python/")
+                .unwrap_or(&path_str);
+            let dest_path = python_dest.join(relative);
+
+            if entry.header().entry_type().is_dir() {
+                std::fs::create_dir_all(&dest_path).ok();
+            } else {
+                if let Some(parent) = dest_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut out = std::fs::File::create(&dest_path)?;
+                std::io::copy(&mut entry, &mut out)?;
+            }
         }
     }
 
-    anyhow::bail!("Could not find modl binary inside the archive")
+    if !found_binary {
+        anyhow::bail!("Could not find modl binary inside the archive");
+    }
+
+    Ok(())
+}
+
+/// Install the python worker directory next to the binary
+fn install_python_worker(binary_path: &std::path::Path, extracted_python: &std::path::Path) {
+    // Only proceed if we actually extracted python files
+    if !extracted_python.exists()
+        || extracted_python
+            .read_dir()
+            .map_or(true, |mut d| d.next().is_none())
+    {
+        return;
+    }
+
+    let bin_dir = match binary_path.parent() {
+        Some(d) => d,
+        None => return,
+    };
+    let target = bin_dir.join("python");
+
+    // Remove old python worker
+    if target.exists() {
+        std::fs::remove_dir_all(&target).ok();
+    }
+
+    // Move extracted python into place
+    if std::fs::rename(extracted_python, &target).is_err() {
+        // Cross-filesystem: fall back to copy
+        if let Err(e) = copy_dir_recursive(extracted_python, &target) {
+            eprintln!(
+                "  {} Could not install python worker: {}",
+                console::style("!").yellow(),
+                e
+            );
+            eprintln!(
+                "  Set MODL_WORKER_PYTHON_ROOT to {} as a workaround",
+                extracted_python.display()
+            );
+        } else {
+            std::fs::remove_dir_all(extracted_python).ok();
+        }
+    }
+}
+
+/// Recursively copy a directory
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let dest_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest_path)?;
+        } else {
+            std::fs::copy(entry.path(), &dest_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Replace the running binary atomically

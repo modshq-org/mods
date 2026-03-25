@@ -98,6 +98,24 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
     # -------------------------------------------------------------------
     # 1. Load pipeline (cold start)
     # -------------------------------------------------------------------
+
+    # Warn about known-broken model/device combos
+    from modl_worker.device import is_mps
+    from modl_worker.adapters.arch_config import detect_arch
+    arch = detect_arch(base_model_id)
+    _MPS_UNSUPPORTED_ARCHS = {
+        "flux2", "flux2_klein", "flux2_klein_base", "flux2_klein_9b", "flux2_klein_base_9b",
+    }
+    if is_mps() and arch in _MPS_UNSUPPORTED_ARCHS:
+        emitter.error(
+            "MPS_UNSUPPORTED",
+            f"{base_model_id} does not yet work on Apple Silicon (MPS). "
+            f"Flux 2 pipelines produce blank images on non-CUDA devices. "
+            f"Use a Flux 1 model (flux-dev, flux-schnell) or SDXL instead.",
+            recoverable=False,
+        )
+        return 1
+
     emitter.info(f"Loading pipeline for {base_model_id} (mode={cold_mode})...")
     count = params.get("count", 1)
     emitter.progress(stage="load", step=0, total_steps=count)
