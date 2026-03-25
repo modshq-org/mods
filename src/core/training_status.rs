@@ -46,6 +46,8 @@ pub struct TrainingProgress {
     pub latest_samples: Vec<String>,
     /// Latest checkpoint file
     pub latest_checkpoint: Option<String>,
+    /// Whether the run is currently generating sample images
+    pub is_sampling: bool,
 }
 
 /// Get status of all training runs, or just active ones.
@@ -153,6 +155,7 @@ fn parse_log_progress(name: &str, log_path: &Path) -> TrainingProgress {
         log_updated_at: None,
         latest_samples: vec![],
         latest_checkpoint: None,
+        is_sampling: false,
     };
 
     if !log_path.exists() {

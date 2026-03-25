@@ -127,6 +127,7 @@ export type TrainingStatusRun = {
   arch?: string
   trigger_word?: string
   latest_checkpoint?: string
+  is_sampling?: boolean
 }
 
 export type DatasetImage = {

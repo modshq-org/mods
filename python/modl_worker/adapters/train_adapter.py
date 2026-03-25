@@ -173,17 +173,20 @@ def _run_single_phase(
         if step_match:
             step = int(step_match.group(1))
             phase_total = int(step_match.group(2))
-            if last_step != step:
-                loss = None
-                loss_match = _LOSS_RE.search(line)
-                if loss_match:
-                    try:
-                        loss = float(loss_match.group(1))
-                    except ValueError:
-                        pass
-                # Report progress relative to overall training, not just this phase.
-                # Subtract step_base because ai-toolkit counts from start_step,
-                # not from 0, when resuming from a checkpoint.
+
+            loss = None
+            loss_match = _LOSS_RE.search(line)
+            if loss_match:
+                try:
+                    loss = float(loss_match.group(1))
+                except ValueError:
+                    pass
+
+            if loss is not None and last_step != step:
+                # Training step (has loss) — report progress relative to
+                # overall training, not just this phase.
+                # Subtract step_base because ai-toolkit counts from
+                # start_step, not from 0, when resuming.
                 global_step = step_offset + (step - step_base)
                 global_total = total_steps_override or (step_offset + phase_total - step_base)
                 emitter.progress(
@@ -193,6 +196,16 @@ def _run_single_phase(
                     loss=loss,
                 )
                 last_step = step
+            elif loss is None and phase_total <= 50:
+                # Sample generation (no loss, small total like 11 prompts
+                # or 4-30 denoising steps) — emit as sampling stage so
+                # the UI can show "Generating samples..." instead of
+                # confusing it with training progress.
+                emitter.progress(
+                    stage="sample",
+                    step=step,
+                    total_steps=phase_total,
+                )
 
     code = process.wait()
     if code != 0:

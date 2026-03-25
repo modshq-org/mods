@@ -317,7 +317,11 @@ export const TrainingRunCard = memo(function TrainingRunCard({
           <Badge variant="outline" className={`shrink-0 ${statusInfo.badge}`}>
             {statusInfo.label}
           </Badge>
-          {isRunning && currentStatus?.current_step != null && currentStatus?.total_steps ? (
+          {isRunning && currentStatus?.is_sampling ? (
+            <span className="shrink-0 text-xs text-amber-400">
+              generating samples…
+            </span>
+          ) : isRunning && currentStatus?.current_step != null && currentStatus?.total_steps ? (
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
               {currentStatus.current_step.toLocaleString()}/{currentStatus.total_steps.toLocaleString()}
               {' '}

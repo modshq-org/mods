@@ -463,37 +463,44 @@ async fn execute_training(
     for event in rx {
         match &event.event {
             EventPayload::Progress {
+                stage,
                 step,
                 total_steps,
                 loss,
                 ..
             } => {
-                if !got_first_step {
-                    got_first_step = true;
-                    pb.set_message("".to_string());
-                }
-                pb.set_length(*total_steps as u64);
-                pb.set_position(*step as u64);
-                if let Some(l) = loss {
-                    pb.set_message(format!("loss: {l:.4}"));
-                }
+                if stage == "sample" {
+                    // Sample generation — show separate message, don't
+                    // overwrite training progress bar position.
+                    pb.set_message(format!("generating samples ({}/{})", step, total_steps));
+                } else {
+                    if !got_first_step {
+                        got_first_step = true;
+                        pb.set_message("".to_string());
+                    }
+                    pb.set_length(*total_steps as u64);
+                    pb.set_position(*step as u64);
+                    if let Some(l) = loss {
+                        pb.set_message(format!("loss: {l:.4}"));
+                    }
 
-                // Write tqdm-style line to log file for the preview server
-                if let Some(ref mut f) = log_file {
-                    let pct = if *total_steps > 0 {
-                        (*step as f32 / *total_steps as f32) * 100.0
-                    } else {
-                        0.0
-                    };
-                    let loss_str = loss.map(|l| format!(" loss: {l:.3e}")).unwrap_or_default();
-                    let _ = write!(
-                        f,
-                        "\r{name}: {pct:5.1}%| {step}/{total} [00:00<00:00,{loss_str}]",
-                        name = spec.output.lora_name,
-                        step = step,
-                        total = total_steps,
-                    );
-                    let _ = f.flush();
+                    // Write tqdm-style line to log file for the preview server
+                    if let Some(ref mut f) = log_file {
+                        let pct = if *total_steps > 0 {
+                            (*step as f32 / *total_steps as f32) * 100.0
+                        } else {
+                            0.0
+                        };
+                        let loss_str = loss.map(|l| format!(" loss: {l:.3e}")).unwrap_or_default();
+                        let _ = write!(
+                            f,
+                            "\r{name}: {pct:5.1}%| {step}/{total} [00:00<00:00,{loss_str}]",
+                            name = spec.output.lora_name,
+                            step = step,
+                            total = total_steps,
+                        );
+                        let _ = f.flush();
+                    }
                 }
             }
             EventPayload::Artifact { path, .. } => {
