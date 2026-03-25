@@ -173,17 +173,20 @@ def _run_single_phase(
         if step_match:
             step = int(step_match.group(1))
             phase_total = int(step_match.group(2))
-            if last_step != step:
-                loss = None
-                loss_match = _LOSS_RE.search(line)
-                if loss_match:
-                    try:
-                        loss = float(loss_match.group(1))
-                    except ValueError:
-                        pass
-                # Report progress relative to overall training, not just this phase.
-                # Subtract step_base because ai-toolkit counts from start_step,
-                # not from 0, when resuming from a checkpoint.
+
+            loss = None
+            loss_match = _LOSS_RE.search(line)
+            if loss_match:
+                try:
+                    loss = float(loss_match.group(1))
+                except ValueError:
+                    pass
+
+            if loss is not None and last_step != step:
+                # Training step (has loss) — report progress relative to
+                # overall training, not just this phase.
+                # Subtract step_base because ai-toolkit counts from
+                # start_step, not from 0, when resuming.
                 global_step = step_offset + (step - step_base)
                 global_total = total_steps_override or (step_offset + phase_total - step_base)
                 emitter.progress(
@@ -193,6 +196,16 @@ def _run_single_phase(
                     loss=loss,
                 )
                 last_step = step
+            elif loss is None and phase_total <= 50:
+                # Sample generation (no loss, small total like 11 prompts
+                # or 4-30 denoising steps) — emit as sampling stage so
+                # the UI can show "Generating samples..." instead of
+                # confusing it with training progress.
+                emitter.progress(
+                    stage="sample",
+                    step=step,
+                    total_steps=phase_total,
+                )
 
     code = process.wait()
     if code != 0:
@@ -256,6 +269,22 @@ def _write_phase_config(
     if resume_from:
         phase_spec["params"]["resume_from"] = resume_from
         resume_step = _step_from_checkpoint_path(resume_from) or 0
+
+        # Final checkpoints (e.g. maxi-zimage.safetensors) have no step suffix.
+        # Infer the step from the highest numbered checkpoint in the same dir.
+        if resume_step == 0:
+            from pathlib import Path as _P
+            ckpt_dir = _P(resume_from).parent
+            if ckpt_dir.exists():
+                max_step = 0
+                for f in ckpt_dir.glob("*.safetensors"):
+                    s = _step_from_checkpoint_path(str(f))
+                    if s and s > max_step:
+                        max_step = s
+                if max_step > 0:
+                    resume_step = max_step
+                    print(f"[modl] Inferred resume step {resume_step} from directory checkpoints")
+
         phase_spec["params"]["steps"] = resume_step + phase_steps
         if resume_step:
             print(f"[modl] Phase target: step {resume_step} + {phase_steps} = {resume_step + phase_steps}")
@@ -329,6 +358,25 @@ def run_train(config_path: Path, emitter: EventEmitter) -> int:
 
     from .arch_config import detect_arch
     arch_key = detect_arch(base_model_id)
+
+    # Klein models need the Qwen tokenizer cached for ai-toolkit.
+    # modl pull only installs the safetensors weights; the tokenizer
+    # (config.json, tokenizer.json, etc.) must come from HuggingFace.
+    _klein_tokenizer_repos = {
+        "flux2_klein": "Qwen/Qwen3-4B",
+        "flux2_klein_base": "Qwen/Qwen3-4B",
+        "flux2_klein_9b": "Qwen/Qwen3-8B",
+        "flux2_klein_base_9b": "Qwen/Qwen3-8B",
+    }
+    if arch_key in _klein_tokenizer_repos:
+        _tok_repo = _klein_tokenizer_repos[arch_key]
+        try:
+            from transformers import AutoTokenizer
+            emitter.info(f"Ensuring {_tok_repo} tokenizer is cached...")
+            AutoTokenizer.from_pretrained(_tok_repo, trust_remote_code=True)
+        except Exception as e:
+            emitter.warning("TOKENIZER_CACHE", f"Failed to cache {_tok_repo} tokenizer: {e}")
+
     strategy = resolve_strategy(arch_key, lora_type)
 
     if strategy.is_multiphase:

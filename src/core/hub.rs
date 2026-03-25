@@ -109,6 +109,10 @@ pub struct PushStartResponse {
     pub r2_key: String,
     pub version_id: String,
     pub version: u32,
+    #[serde(default)]
+    pub samples_upload_url: Option<String>,
+    #[serde(default)]
+    pub samples_r2_key: Option<String>,
 }
 
 #[allow(dead_code)]

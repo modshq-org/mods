@@ -113,15 +113,20 @@ function shortenPrompt(prompt: string): string {
 
 function deriveRunStatus(run?: TrainingRun, isLiveRunning?: boolean): string {
   if (isLiveRunning) return 'running'
+
+  // If a final LoRA file exists on disk, training completed regardless
+  // of what stale DB job records say.
+  if (run?.lora_path) return 'completed'
+
   const statuses = run?.lineage?.jobs?.map((job) => job.status.toLowerCase()) ?? []
   if (statuses.length === 0) {
-    // No jobs in DB -- check if LoRA file exists
-    return run?.lora_path ? 'completed' : 'unknown'
+    return 'unknown'
   }
+  // Prefer "completed" if any job completed (handles stale "running" jobs)
+  if (statuses.includes('completed')) return 'completed'
   const latest = statuses[statuses.length - 1]
   if (latest === 'running') {
-    // DB says running but no live process -- check LoRA to distinguish
-    return run?.lora_path ? 'completed' : 'interrupted'
+    return 'interrupted'
   }
   return latest
 }
@@ -317,7 +322,11 @@ export const TrainingRunCard = memo(function TrainingRunCard({
           <Badge variant="outline" className={`shrink-0 ${statusInfo.badge}`}>
             {statusInfo.label}
           </Badge>
-          {isRunning && currentStatus?.current_step != null && currentStatus?.total_steps ? (
+          {isRunning && currentStatus?.is_sampling ? (
+            <span className="shrink-0 text-xs text-amber-400">
+              generating samples…
+            </span>
+          ) : isRunning && currentStatus?.current_step != null && currentStatus?.total_steps ? (
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
               {currentStatus.current_step.toLocaleString()}/{currentStatus.total_steps.toLocaleString()}
               {' '}

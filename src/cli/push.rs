@@ -84,6 +84,11 @@ pub async fn run(
             )
             .await?;
 
+            // Resolve samples directory from training output
+            let samples_dir = detect_run_name_for_source(source, &files)
+                .map(|run_name| run_manifest::run_inner_dir_for_name(&run_name).join("samples"))
+                .filter(|p| p.exists());
+
             println!(
                 "{} Pushing {} file(s) to {}/{}",
                 style("→").cyan(),
@@ -103,7 +108,14 @@ pub async fn run(
                 {
                     merge_value_object(&mut metadata, &local);
                 }
-                push_one_file(&client, &username, name, path, Some(metadata)).await?;
+                // Only upload samples with the final checkpoint
+                let is_last = idx == files.len() - 1;
+                let samples = if is_last {
+                    samples_dir.as_deref()
+                } else {
+                    None
+                };
+                push_one_file(&client, &username, name, path, Some(metadata), samples).await?;
             }
         }
         "dataset" => {
@@ -187,6 +199,7 @@ pub async fn run(
                 name,
                 &archive_path,
                 Some(metadata.clone()),
+                None, // datasets don't have sample images
             )
             .await?;
 
@@ -260,6 +273,7 @@ async fn push_one_file(
     slug: &str,
     path: &Path,
     metadata: Option<Value>,
+    samples_dir: Option<&Path>,
 ) -> Result<()> {
     let size_bytes = std::fs::metadata(path)
         .with_context(|| format!("Failed to stat {}", path.display()))?
@@ -276,6 +290,51 @@ async fn push_one_file(
 
     upload_file_presigned(&start.upload_url, path, "application/octet-stream").await?;
 
+    // Upload sample images if available
+    let mut final_metadata = metadata.unwrap_or(Value::Object(Map::new()));
+    if let (Some(samples_dir), Some(samples_url)) = (samples_dir, &start.samples_upload_url)
+        && samples_dir.exists()
+    {
+        let sample_files: Vec<_> = std::fs::read_dir(samples_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext == "jpg" || ext == "png")
+            })
+            .collect();
+
+        if !sample_files.is_empty() {
+            let temp_zip = std::env::temp_dir().join(format!(
+                "modl-samples-{}-{}.zip",
+                slug,
+                chrono::Utc::now().timestamp()
+            ));
+            create_zip_from_dir(samples_dir, &temp_zip)?;
+
+            let zip_size = std::fs::metadata(&temp_zip).map(|m| m.len()).unwrap_or(0);
+            println!(
+                "  {} {} sample images ({:.1} MB)",
+                style("↑").cyan(),
+                sample_files.len(),
+                zip_size as f64 / 1_048_576.0,
+            );
+
+            upload_file_presigned(samples_url, &temp_zip, "application/zip").await?;
+            let _ = std::fs::remove_file(&temp_zip);
+
+            if let Some(ref r2_key) = start.samples_r2_key
+                && let Value::Object(ref mut obj) = final_metadata
+            {
+                obj.insert("samples_r2_key".to_string(), Value::String(r2_key.clone()));
+                obj.insert("samples_count".to_string(), Value::from(sample_files.len()));
+            }
+        }
+    }
+
     client
         .push_complete(
             username,
@@ -283,7 +342,7 @@ async fn push_one_file(
             &start.version_id,
             size_bytes,
             &sha256,
-            metadata,
+            Some(final_metadata),
         )
         .await?;
     Ok(())

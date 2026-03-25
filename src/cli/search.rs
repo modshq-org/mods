@@ -4,6 +4,7 @@ use console::style;
 use indicatif::HumanBytes;
 
 use crate::auth::AuthStore;
+use crate::core::gpu;
 use crate::core::huggingface;
 use crate::core::manifest::AssetType;
 use crate::core::registry::RegistryIndex;
@@ -83,8 +84,15 @@ pub async fn run(
         ]);
 
         for m in &results {
-            let size = if !m.variants.is_empty() {
-                let sizes: Vec<u64> = m.variants.iter().map(|v| v.size).collect();
+            // Filter variants to those compatible with the current device
+            let compatible_variants: Vec<_> = m
+                .variants
+                .iter()
+                .filter(|v| gpu::variant_compatible_with_device(&v.id, v.precision.as_deref()))
+                .collect();
+
+            let size = if !compatible_variants.is_empty() {
+                let sizes: Vec<u64> = compatible_variants.iter().map(|v| v.size).collect();
                 let min_s = sizes.iter().min().unwrap_or(&0);
                 let max_s = sizes.iter().max().unwrap_or(&0);
                 if min_s == max_s {
@@ -98,9 +106,8 @@ pub async fn run(
                 "\u{2014}".to_string()
             };
 
-            let name_display = if m.variants.len() > 1 {
-                let variant_list = m
-                    .variants
+            let name_display = if compatible_variants.len() > 1 {
+                let variant_list = compatible_variants
                     .iter()
                     .map(|v| v.id.as_str())
                     .collect::<Vec<_>>()

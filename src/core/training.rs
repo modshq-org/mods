@@ -27,22 +27,34 @@ pub fn resolve_worker_python_root() -> Result<PathBuf> {
         );
     }
 
-    // Resolve relative to the actual binary (following symlinks)
     if let Ok(exe) = env::current_exe() {
-        let exe = exe.canonicalize().unwrap_or(exe);
-        if let Some(bin_dir) = exe.parent() {
-            // <bin>/python (installed layout)
+        // Check next to the original path first (before following symlinks).
+        // On macOS, /usr/local/bin/modl may be a symlink — the python worker
+        // is installed next to the symlink, not next to the target.
+        let candidates_from = |p: &std::path::Path| -> Option<PathBuf> {
+            let bin_dir = p.parent()?;
             let candidate = bin_dir.join("python");
             if candidate.exists() {
-                return Ok(candidate);
+                return Some(candidate);
             }
-            // <bin>/../python (symlink into repo: target/release/../python)
-            if let Some(parent) = bin_dir.parent() {
-                let candidate = parent.join("python");
-                if candidate.exists() {
-                    return Ok(candidate);
-                }
+            let candidate = bin_dir.parent()?.join("python");
+            if candidate.exists() {
+                return Some(candidate);
             }
+            None
+        };
+
+        // 1. Original exe path (symlink location)
+        if let Some(path) = candidates_from(&exe) {
+            return Ok(path);
+        }
+
+        // 2. Canonicalized path (symlink target)
+        if let Ok(resolved) = exe.canonicalize()
+            && resolved != exe
+            && let Some(path) = candidates_from(&resolved)
+        {
+            return Ok(path);
         }
     }
 

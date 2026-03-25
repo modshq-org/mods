@@ -304,8 +304,14 @@ def spec_to_aitoolkit_config(spec: dict, train_overrides: dict | None = None) ->
     base_model_id = model.get("base_model_id", "")
     lora_type = params.get("lora_type", "character")
 
-    # Detect model architecture
+    # Detect model architecture.
+    # Klein: remap to base (undistilled) arch for training.
+    _klein_arch_remap = {
+        "flux2_klein": "flux2_klein_base",
+        "flux2_klein_9b": "flux2_klein_base_9b",
+    }
     arch_key = detect_arch(base_model_id)
+    arch_key = _klein_arch_remap.get(arch_key, arch_key)
     arch = ARCH_CONFIGS[arch_key]
 
     # Resolve model path: prefer local base_model_path if available,
@@ -315,12 +321,24 @@ def spec_to_aitoolkit_config(spec: dict, train_overrides: dict | None = None) ->
     # fall back to HF hub path so ai-toolkit downloads the diffusers layout.
     import os
     local_path = model.get("base_model_path")
+
+    # Klein: train on base (undistilled), generate with distilled.
+    # Remap distilled model IDs to base repos for training.
+    _train_model_id = base_model_id
+    _klein_train_remap = {
+        "flux2-klein-4b": "flux2-klein-base-4b",
+        "flux2-klein-9b": "flux2-klein-base-9b",
+    }
+    if base_model_id in _klein_train_remap:
+        _train_model_id = _klein_train_remap[base_model_id]
+        print(f"[modl] Klein: remapping to base model for training ({base_model_id} → {_train_model_id})")
+
     if local_path and os.path.isdir(local_path):
         model_path = local_path
     else:
         if local_path:
             print(f"[modl] NOTE: Store path is a single file, falling back to HF hub for training")
-        model_path = resolve_model_path(base_model_id)
+        model_path = resolve_model_path(_train_model_id)
 
     # -- Model config from the arch table --
     model_config = {"name_or_path": model_path}
