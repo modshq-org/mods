@@ -304,10 +304,11 @@ async fn execute_train_job(
                     Ok(hub_ref) => {
                         eprintln!("  {} Published to hub: {}", style("✓").green(), hub_ref);
                         // Report hub registration event
+                        sequence += 1;
                         let hub_event = serde_json::json!({
                             "schema_version": "v1",
                             "job_id": job.job_id,
-                            "sequence": sequence + 1,
+                            "sequence": sequence,
                             "timestamp": chrono::Utc::now().to_rfc3339(),
                             "source": "modl_agent",
                             "event": {
