@@ -243,16 +243,23 @@ async fn execute_train_job(
             artifact_paths.push((path.clone(), sha256.clone(), *size_bytes));
         }
 
-        let is_terminal = matches!(
-            event.event,
-            EventPayload::Completed { .. } | EventPayload::Error { .. } | EventPayload::Cancelled
-        );
-
         if matches!(
             event.event,
             EventPayload::Error { .. } | EventPayload::Cancelled
         ) {
             final_status = "failed";
+        }
+
+        let is_terminal = matches!(
+            event.event,
+            EventPayload::Completed { .. } | EventPayload::Error { .. } | EventPayload::Cancelled
+        );
+
+        // Hold back the Completed event — we'll send it after hub push
+        // so the CLI sees hub_registered before completed.
+        if matches!(event.event, EventPayload::Completed { .. }) {
+            // Don't add to batch yet — will be sent after hub push
+            break;
         }
 
         // Build cloud event envelope with the remote job_id
@@ -334,6 +341,20 @@ async fn execute_train_job(
                 }
             }
         }
+    }
+
+    // Now send the completed event (held back until after hub push)
+    if final_status == "completed" {
+        sequence += 1;
+        let completed_event = serde_json::json!({
+            "schema_version": "v1",
+            "job_id": job.job_id,
+            "sequence": sequence,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "source": "modl_agent",
+            "event": { "type": "completed", "message": "Training completed" },
+        });
+        let _ = report_events(client, api_base, auth, &job.job_id, &[completed_event]).await;
     }
 
     // Update job status
