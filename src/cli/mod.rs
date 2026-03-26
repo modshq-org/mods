@@ -552,10 +552,10 @@ pub enum Commands {
         #[arg(long, default_value = "1")]
         count: u32,
         /// Run generation on a cloud provider instead of locally
-        #[arg(long)]
+        #[arg(long, hide = true)]
         cloud: bool,
         /// Cloud provider to use (modal, replicate, runpod)
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, hide = true)]
         provider: Option<CloudProvider>,
         /// Source image for img2img or inpainting (use with --mask for inpainting)
         #[arg(long)]
@@ -646,10 +646,10 @@ pub enum Commands {
         #[arg(long, num_args = 0..=1, default_missing_value = "4", value_name = "STEPS")]
         fast: Option<u32>,
         /// Run on cloud
-        #[arg(long)]
+        #[arg(long, hide = true)]
         cloud: bool,
         /// Cloud provider
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, hide = true)]
         provider: Option<CloudProvider>,
         /// Force one-shot mode
         #[arg(long)]
@@ -724,10 +724,10 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
         /// Run training on a cloud provider instead of locally
-        #[arg(long)]
+        #[arg(long, hide = true)]
         cloud: bool,
         /// Cloud provider to use (modal, replicate, runpod)
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, hide = true)]
         provider: Option<CloudProvider>,
     },
 
@@ -870,6 +870,7 @@ pub enum Commands {
 
     // ── Remote GPU ───────────────────────────────────────────────────
     /// Manage remote GPU sessions
+    #[command(hide = true)]
     Gpu {
         #[command(subcommand)]
         command: GpuCommands,
