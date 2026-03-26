@@ -1,8 +1,8 @@
 use axum::{Json, extract::Path, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 
-use crate::core::db::{Database, LibraryLoraRecord};
-use crate::core::training::{self, parse_step_from_filename};
+use crate::core::db::Database;
+use crate::core::training;
 use crate::core::training_status;
 
 use crate::core::paths::modl_root;
@@ -472,7 +472,42 @@ pub struct StartTrainingRequest {
     class_word: Option<String>,
 }
 
+impl StartTrainingRequest {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(steps) = self.steps
+            && (steps == 0 || steps > 100_000)
+        {
+            return Err(format!("steps must be between 1 and 100000, got {steps}"));
+        }
+        if let Some(rank) = self.rank
+            && (rank == 0 || rank > 256)
+        {
+            return Err(format!("rank must be between 1 and 256, got {rank}"));
+        }
+        if let Some(lr) = self.lr
+            && (lr <= 0.0 || lr > 1.0)
+        {
+            return Err(format!("lr must be between 0 and 1, got {lr}"));
+        }
+        if self.name.is_empty() {
+            return Err("name is required".to_string());
+        }
+        if self.dataset.is_empty() {
+            return Err("dataset is required".to_string());
+        }
+        Ok(())
+    }
+}
+
 pub async fn api_start_training(Json(req): Json<StartTrainingRequest>) -> impl IntoResponse {
+    if let Err(msg) = req.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response();
+    }
+
     let modl_bin = std::env::current_exe().unwrap_or_else(|_| "modl".into());
 
     let result = tokio::task::spawn_blocking(move || {
@@ -715,176 +750,33 @@ pub struct PromoteLoraRequest {
 
 /// POST /api/library/loras — promote a LoRA to the library
 pub async fn api_promote_lora(Json(req): Json<PromoteLoraRequest>) -> impl IntoResponse {
+    use crate::core::artifacts::{PromoteLoraParams, promote_lora};
+
     let result = tokio::task::spawn_blocking(move || {
-        let lora_path_str = req.lora_path.clone();
-        let lora_path = std::path::Path::new(&lora_path_str);
-
-        // Validate that lora_path is under the modl training_output directory
-        // to prevent path traversal attacks.
-        let allowed_dir = modl_root().join("training_output");
-        let canonical_lora = lora_path
-            .canonicalize()
-            .map_err(|e| anyhow::anyhow!("Invalid lora_path: {e}"))?;
-        let canonical_allowed = allowed_dir.canonicalize().unwrap_or(allowed_dir.clone());
-        if !canonical_lora.starts_with(&canonical_allowed) {
-            anyhow::bail!(
-                "lora_path must be under {}, got {}",
-                canonical_allowed.display(),
-                canonical_lora.display()
-            );
-        }
-
-        let size_bytes = lora_path.metadata().map(|m| m.len()).unwrap_or(0);
-
-        // Auto-resolve thumbnail from training samples when not provided
-        let thumbnail = req.thumbnail.or_else(|| {
-            let run_name = req.training_run.as_deref()?;
-            let samples_dir = modl_root()
-                .join("training_output")
-                .join(run_name)
-                .join(run_name)
-                .join("samples");
-            if !samples_dir.exists() {
-                return None;
-            }
-            // Find the sample image with the highest step number
-            let mut best: Option<(u64, String)> = None;
-            if let Ok(entries) = std::fs::read_dir(&samples_dir) {
-                for entry in entries.flatten() {
-                    let fname = entry.file_name().to_string_lossy().to_string();
-                    if let Some(step) = parse_step_from_filename(&fname)
-                        && best.as_ref().is_none_or(|(s, _)| step > *s)
-                    {
-                        let rel = format!("training_output/{run_name}/{run_name}/samples/{fname}");
-                        best = Some((step, rel));
-                    }
-                }
-            }
-            best.map(|(_, path)| path)
-        });
-
-        let id = format!(
-            "lib:{}:{}",
-            slug(&req.name),
-            &uuid::Uuid::new_v4().to_string()[..8]
-        );
-
-        // Fetch job spec for reproducibility metadata (dataset, LR, rank, etc.)
-        let job_spec = req.training_run.as_deref().and_then(|run_name| {
-            let db = Database::open().ok()?;
-            let jobs = db.find_jobs_by_lora_name(run_name).ok()?;
-            let spec: serde_json::Value = serde_json::from_str(&jobs.first()?.spec_json).ok()?;
-            Some(spec)
-        });
-
-        // Merge ai-toolkit config + job spec into one JSON blob for
-        // full reproducibility.  The job spec has dataset ref, LR,
-        // rank, lora_type, preset — everything needed to re-run.
-        let merged_config = {
-            let mut obj = serde_json::Map::new();
-            if let Some(ref cfg) = req.config_json
-                && let Ok(v) = serde_json::from_str::<serde_json::Value>(cfg)
-            {
-                obj.insert("toolkit_config".into(), v);
-            }
-            if let Some(ref spec) = job_spec {
-                obj.insert("job_spec".into(), spec.clone());
-            }
-            if obj.is_empty() {
-                None
-            } else {
-                Some(serde_json::Value::Object(obj).to_string())
-            }
-        };
-
-        let auto_tag = job_spec.as_ref().and_then(|spec| {
-            spec.pointer("/params/lora_type")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        });
-
-        let record = LibraryLoraRecord {
-            id: id.clone(),
+        promote_lora(PromoteLoraParams {
             name: req.name,
             trigger_word: req.trigger_word,
             base_model: req.base_model,
             lora_path: req.lora_path,
-            thumbnail,
+            thumbnail: req.thumbnail,
             step: req.step,
-            training_run: req.training_run.clone(),
-            config_json: merged_config,
-            tags: req.tags.or(auto_tag),
-            notes: None,
-            size_bytes,
-            created_at: String::new(), // DB default
-        };
-
-        let db = Database::open()?;
-        db.insert_library_lora(&record)?;
-
-        // Copy to content-addressed store so the LoRA survives training
-        // run deletion, then register in installed + artifacts so it
-        // appears in the generate LoRA picker.
-        let install_id = record.id.clone(); // "lib:name:hash"
-        let already_installed = db.is_installed(&install_id).unwrap_or(true);
-        if !already_installed {
-            let file_name = lora_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("checkpoint.safetensors");
-
-            let sha256 = crate::core::store::Store::hash_file(lora_path)
-                .unwrap_or_else(|_| "unknown".to_string());
-
-            // Copy into content-addressed store (~/.modl/store/lora/<sha>/<file>)
-            let store = crate::core::store::Store::new(modl_root().join("store"));
-            let store_path =
-                store.path_for(&crate::core::manifest::AssetType::Lora, &sha256, file_name);
-            store.ensure_dir(&store_path)?;
-            if !store_path.exists() {
-                std::fs::copy(lora_path, &store_path)?;
-            }
-            let store_path_str = store_path.to_string_lossy();
-
-            // Update library record to point to store path (not training dir)
-            db.update_library_lora_path(&record.id, &store_path_str)?;
-
-            db.insert_installed(&crate::core::db::InstalledModelRecord {
-                id: &install_id,
-                name: &record.name,
-                asset_type: "lora",
-                variant: None,
-                sha256: &sha256,
-                size: size_bytes,
-                file_name,
-                store_path: &store_path_str,
-            })?;
-
-            let meta = serde_json::json!({
-                "base_model": record.base_model,
-                "trigger_word": record.trigger_word,
-                "lora_name": record.name,
-            });
-            db.insert_artifact(
-                &install_id,
-                None,
-                "lora",
-                &store_path_str,
-                &sha256,
-                size_bytes,
-                Some(&meta.to_string()),
-            )?;
-        }
-
-        Ok::<_, anyhow::Error>(id)
+            training_run: req.training_run,
+            config_json: req.config_json,
+            tags: req.tags,
+        })
     })
     .await;
 
     match result {
         Ok(Ok(id)) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        _ => (
+        Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Failed to promote LoRA" })),
+            Json(serde_json::json!({ "error": format!("Failed to promote LoRA: {e}") })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }
@@ -939,18 +831,4 @@ pub async fn api_delete_library_lora(Path(id): Path<String>) -> impl IntoRespons
         )
             .into_response(),
     }
-}
-
-fn slug(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
 }

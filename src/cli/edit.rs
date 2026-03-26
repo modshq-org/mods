@@ -9,6 +9,7 @@ use crate::core::executor::{Executor, LocalExecutor};
 use crate::core::gpu_session;
 use crate::core::job::*;
 use crate::core::model_family;
+use crate::core::model_resolve;
 use crate::core::outputs::{SidecarMetadata, write_sidecar_yaml};
 use crate::core::preflight;
 use crate::core::remote_executor::RemoteExecutor;
@@ -81,69 +82,16 @@ fn url_extension(url: &str) -> Option<&str> {
     }
 }
 
-/// Resolve base model path from installed models.
 fn resolve_base_model_path(base_model: &str, db: &Database) -> Option<String> {
-    let installed = db.list_installed(None).ok()?;
-    for model in &installed {
-        if (model.name == base_model || model.id == base_model)
-            && (model.asset_type == "checkpoint" || model.asset_type == "diffusion_model")
-        {
-            return Some(model.store_path.clone());
-        }
-    }
-    None
+    model_resolve::resolve_base_model_path(base_model, db)
 }
 
-/// Resolve a LoRA name to its store path by looking in the DB.
 fn resolve_lora(name: &str, weight: f32, db: &Database) -> Result<Option<LoraRef>> {
-    let path = PathBuf::from(name);
-    if path.exists() && path.extension().is_some_and(|e| e == "safetensors") {
-        return Ok(Some(LoraRef {
-            name: path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-            path: path.to_string_lossy().to_string(),
-            weight,
-        }));
-    }
-
-    let installed = db.list_installed(None)?;
-    for model in &installed {
-        if (model.name == name || model.id == name) && model.asset_type == "lora" {
-            return Ok(Some(LoraRef {
-                name: model.name.clone(),
-                path: model.store_path.clone(),
-                weight,
-            }));
-        }
-    }
-    Ok(None)
+    model_resolve::resolve_lora(name, weight, db)
 }
-
-const SIZE_PRESETS: &[(&str, u32, u32)] = &[
-    ("1:1", 1024, 1024),
-    ("16:9", 1344, 768),
-    ("9:16", 768, 1344),
-    ("4:3", 1152, 896),
-    ("3:4", 896, 1152),
-];
 
 fn resolve_edit_size(size: &str) -> Result<(u32, u32)> {
-    for &(name, w, h) in SIZE_PRESETS {
-        if size == name {
-            return Ok((w, h));
-        }
-    }
-    if let Some((w, h)) = size.split_once('x') {
-        let w: u32 = w.parse().context("Invalid width in size")?;
-        let h: u32 = h.parse().context("Invalid height in size")?;
-        return Ok((w, h));
-    }
-    anyhow::bail!(
-        "Unknown size: {size}. Use a preset (1:1, 16:9, 9:16, 4:3, 3:4) or WxH (e.g. 1820x1024)"
-    );
+    model_resolve::resolve_size(size)
 }
 
 pub async fn run(args: EditArgs<'_>) -> Result<()> {

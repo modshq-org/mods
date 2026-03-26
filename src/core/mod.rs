@@ -19,6 +19,7 @@ pub mod job;
 pub mod llm;
 pub mod manifest;
 pub mod model_family;
+pub mod model_resolve;
 pub mod outputs;
 pub mod paths;
 pub mod preflight;

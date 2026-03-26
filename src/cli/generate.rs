@@ -10,6 +10,7 @@ use crate::core::executor::{Executor, LocalExecutor};
 use crate::core::gpu_session;
 use crate::core::job::*;
 use crate::core::model_family;
+use crate::core::model_resolve;
 use crate::core::outputs::{SidecarMetadata, write_sidecar_yaml};
 use crate::core::preflight;
 use crate::core::remote_executor::RemoteExecutor;
@@ -45,15 +46,6 @@ fn detect_control_type_from_filename(path: &str) -> Option<String> {
     None
 }
 
-/// Size presets: aspect ratio → (width, height)
-const SIZE_PRESETS: &[(&str, u32, u32)] = &[
-    ("1:1", 1024, 1024),
-    ("16:9", 1344, 768),
-    ("9:16", 768, 1344),
-    ("4:3", 1152, 896),
-    ("3:4", 896, 1152),
-];
-
 /// Read image dimensions from a file on disk.
 fn image_dimensions(path: &str) -> Result<(u32, u32)> {
     let reader = image::ImageReader::open(path)
@@ -66,58 +58,15 @@ fn image_dimensions(path: &str) -> Result<(u32, u32)> {
     Ok(dims)
 }
 
-/// Resolve a size preset string to (width, height).
-fn resolve_size(size: &str) -> Result<(u32, u32)> {
-    // Check presets
-    for &(name, w, h) in SIZE_PRESETS {
-        if size == name {
-            return Ok((w, h));
-        }
-    }
-
-    // Try WxH format
-    if let Some((w, h)) = size.split_once('x') {
-        let w: u32 = w.parse().context("Invalid width in size")?;
-        let h: u32 = h.parse().context("Invalid height in size")?;
-        return Ok((w, h));
-    }
-
-    anyhow::bail!(
-        "Unknown size: {size}. Use a preset (1:1, 16:9, 9:16, 4:3, 3:4) or WxH (e.g. 1024x1024)"
-    );
-}
-
 /// Resolve a LoRA name to its store path by looking in the DB.
 fn resolve_lora(name: &str, weight: f32, db: &Database) -> Result<Option<LoraRef>> {
-    // Check if the name is a direct path to a .safetensors file
-    let path = PathBuf::from(name);
-    if path.exists() && path.extension().is_some_and(|e| e == "safetensors") {
-        return Ok(Some(LoraRef {
-            name: path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-            path: path.to_string_lossy().to_string(),
-            weight,
-        }));
+    let result = model_resolve::resolve_lora(name, weight, db)?;
+    if result.is_none() {
+        anyhow::bail!(
+            "LoRA not found: {name}. Use `modl model ls --type lora` to see installed LoRAs, or provide a file path."
+        );
     }
-
-    // Look up in installed models (match by ID or display name)
-    let installed = db.list_installed(None)?;
-    for model in &installed {
-        if (model.name == name || model.id == name) && model.asset_type == "lora" {
-            return Ok(Some(LoraRef {
-                name: model.name.clone(),
-                path: model.store_path.clone(),
-                weight,
-            }));
-        }
-    }
-
-    anyhow::bail!(
-        "LoRA not found: {name}. Use `modl model ls --type lora` to see installed LoRAs, or provide a file path."
-    );
+    Ok(result)
 }
 
 /// Pick the best installed generation model, falling back to "flux-schnell".
@@ -152,37 +101,8 @@ fn default_guidance(base_model: &str) -> f32 {
     model_family::model_defaults(base_model).1
 }
 
-/// Resolve base model path from installed models (match by ID, display name, or family alias).
 fn resolve_base_model_path(base_model: &str, db: &Database) -> Option<String> {
-    let installed = db.list_installed(None).ok()?;
-    let gen_types = ["checkpoint", "diffusion_model"];
-
-    // Exact match by ID or display name
-    for model in &installed {
-        if (model.name == base_model || model.id == base_model)
-            && gen_types.contains(&model.asset_type.as_str())
-        {
-            return Some(model.store_path.clone());
-        }
-    }
-
-    // Fuzzy match via model_family (e.g. "sdxl" → "sdxl-base-1.0")
-    if let Some(family_info) = model_family::resolve_model(base_model) {
-        let family_id = family_info.id;
-        for model in &installed {
-            if gen_types.contains(&model.asset_type.as_str()) {
-                // Match if the installed model's ID contains the family ID or vice versa
-                if model.id == family_id
-                    || model.id.contains(family_id)
-                    || family_id.contains(&*model.id)
-                {
-                    return Some(model.store_path.clone());
-                }
-            }
-        }
-    }
-
-    None
+    model_resolve::resolve_base_model_path(base_model, db)
 }
 
 /// Check if a model ID is installed in the DB.
@@ -311,11 +231,11 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
     // Resolve size: explicit --size wins, otherwise use init-image dims
     // -------------------------------------------------------------------
     let (width, height) = if let Some(s) = size {
-        resolve_size(s)?
+        model_resolve::resolve_size(s)?
     } else if let Some(path) = init_image {
         image_dimensions(path)?
     } else {
-        resolve_size("1:1")?
+        model_resolve::resolve_size("1:1")?
     };
 
     // -------------------------------------------------------------------

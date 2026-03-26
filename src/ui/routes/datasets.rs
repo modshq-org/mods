@@ -60,12 +60,12 @@ pub async fn api_list_datasets() -> impl IntoResponse {
         }
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Error listing datasets: {e}"),
+            Json(serde_json::json!({ "error": format!("Error listing datasets: {e}") })),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }
@@ -116,12 +116,12 @@ pub async fn api_get_dataset(
         Ok(Ok(overview)) => Json(overview).into_response(),
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Error scanning dataset: {e}"),
+            Json(serde_json::json!({ "error": format!("Error scanning dataset: {e}") })),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }

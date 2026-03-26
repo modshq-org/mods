@@ -28,6 +28,9 @@ impl Database {
             std::fs::create_dir_all(parent).context("Failed to create database directory")?;
         }
         let conn = Connection::open(&path).context("Failed to open database")?;
+        // WAL mode allows concurrent reads and reduces lock contention when
+        // multiple requests open short-lived connections (e.g., web UI routes).
+        let _ = conn.pragma_update(None, "journal_mode", "WAL");
         let db = Self { conn };
         db.migrate()?;
         Ok(db)

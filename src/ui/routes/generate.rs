@@ -128,6 +128,75 @@ struct EnhanceApiResponse {
     backend: String,
 }
 
+impl GenerateRequest {
+    fn validate(&self) -> Result<(), String> {
+        if self.width == 0 || self.width > 4096 {
+            return Err(format!(
+                "width must be between 1 and 4096, got {}",
+                self.width
+            ));
+        }
+        if self.height == 0 || self.height > 4096 {
+            return Err(format!(
+                "height must be between 1 and 4096, got {}",
+                self.height
+            ));
+        }
+        if self.steps == 0 || self.steps > 200 {
+            return Err(format!(
+                "steps must be between 1 and 200, got {}",
+                self.steps
+            ));
+        }
+        if self.num_images == 0 || self.num_images > 100 {
+            return Err(format!(
+                "num_images must be between 1 and 100, got {}",
+                self.num_images
+            ));
+        }
+        if self.guidance < 0.0 || self.guidance > 100.0 {
+            return Err(format!(
+                "guidance must be between 0 and 100, got {}",
+                self.guidance
+            ));
+        }
+        if self.loras.len() > 10 {
+            return Err(format!(
+                "at most 10 LoRAs supported, got {}",
+                self.loras.len()
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl EditRequest {
+    fn validate(&self) -> Result<(), String> {
+        if self.steps == 0 || self.steps > 200 {
+            return Err(format!(
+                "steps must be between 1 and 200, got {}",
+                self.steps
+            ));
+        }
+        if self.num_images == 0 || self.num_images > 100 {
+            return Err(format!(
+                "num_images must be between 1 and 100, got {}",
+                self.num_images
+            ));
+        }
+        if self.guidance < 0.0 || self.guidance > 100.0 {
+            return Err(format!(
+                "guidance must be between 0 and 100, got {}",
+                self.guidance
+            ));
+        }
+        if self.images.is_empty() {
+            return Err("at least one image is required".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Run a single generation request, sending progress to the broadcast channel.
 async fn run_single_generate(sender: &broadcast::Sender<String>, req: GenerateRequest) {
     eprintln!(
@@ -310,6 +379,15 @@ pub async fn api_generate(
     State(state): State<UiState>,
     Json(req): Json<GenerateRequest>,
 ) -> impl IntoResponse {
+    // Validate request parameters
+    if let Err(msg) = req.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response();
+    }
+
     // Preflight: validate model + runtime before accepting
     if let Err(err) = crate::core::preflight::for_generation(&req.model_id) {
         let msg = format!("{err:#}");
@@ -392,6 +470,15 @@ pub async fn api_edit(
     State(state): State<UiState>,
     Json(req): Json<EditRequest>,
 ) -> impl IntoResponse {
+    // Validate request parameters
+    if let Err(msg) = req.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response();
+    }
+
     // Preflight: validate model
     if let Err(err) = crate::core::preflight::for_generation(&req.model_id) {
         let msg = format!("{err:#}");

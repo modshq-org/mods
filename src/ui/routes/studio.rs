@@ -181,12 +181,12 @@ pub async fn api_studio_delete_session(Path(id): Path<String>) -> impl IntoRespo
         Ok(Ok(())) => Json(serde_json::json!({ "deleted": true })).into_response(),
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to delete session: {e}"),
+            Json(serde_json::json!({ "error": format!("Failed to delete session: {e}") })),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }
@@ -198,7 +198,11 @@ pub async fn api_studio_upload_images(
 ) -> impl IntoResponse {
     let inputs_dir = modl_root().join("studio").join(&id).join("inputs");
     if !inputs_dir.exists() {
-        return (StatusCode::NOT_FOUND, "Session not found").into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session not found" })),
+        )
+            .into_response();
     }
 
     let mut uploaded = Vec::new();
@@ -214,7 +218,7 @@ pub async fn api_studio_upload_images(
             Err(e) => {
                 return (
                     StatusCode::BAD_REQUEST,
-                    format!("Failed to read upload: {e}"),
+                    Json(serde_json::json!({ "error": format!("Failed to read upload: {e}") })),
                 )
                     .into_response();
             }
@@ -224,7 +228,7 @@ pub async fn api_studio_upload_images(
         if let Err(e) = tokio::fs::write(&dest, &data).await {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to save file: {e}"),
+                Json(serde_json::json!({ "error": format!("Failed to save file: {e}") })),
             )
                 .into_response();
         }
@@ -271,12 +275,16 @@ pub async fn api_studio_start_session(
     {
         Ok(Ok(data)) => data,
         Ok(Err(e)) => {
-            return (StatusCode::NOT_FOUND, format!("{e}")).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
         }
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Task failed: {e}"),
+                Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
             )
                 .into_response();
         }
@@ -310,7 +318,7 @@ pub async fn api_studio_start_session(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to resolve LLM backend: {e}"),
+                Json(serde_json::json!({ "error": format!("Failed to resolve LLM backend: {e}") })),
             )
                 .into_response();
         }
