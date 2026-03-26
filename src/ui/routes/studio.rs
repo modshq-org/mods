@@ -64,12 +64,12 @@ pub async fn api_studio_create_session(Json(req): Json<CreateSessionRequest>) ->
             .into_response(),
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to create session: {e}"),
+            Json(serde_json::json!({ "error": format!("Failed to create session: {e}") })),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }
@@ -105,12 +105,12 @@ pub async fn api_studio_list_sessions() -> impl IntoResponse {
         Ok(Ok(sessions)) => Json(sessions).into_response(),
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Error listing sessions: {e}"),
+            Json(serde_json::json!({ "error": format!("Error listing sessions: {e}") })),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }
@@ -156,11 +156,11 @@ pub async fn api_studio_get_session(Path(id): Path<String>) -> impl IntoResponse
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            (status, msg).into_response()
+            (status, Json(serde_json::json!({ "error": msg }))).into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }

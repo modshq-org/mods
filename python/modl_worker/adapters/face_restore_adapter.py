@@ -17,23 +17,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from modl_worker.image_util import resolve_images
 from modl_worker.protocol import EventEmitter
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
-
-
-def _resolve_images(image_paths: list[str]) -> list[Path]:
-    """Expand directories and filter to valid image files."""
-    result = []
-    for p_str in image_paths:
-        p = Path(p_str)
-        if p.is_dir():
-            for f in sorted(p.iterdir()):
-                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
-                    result.append(f)
-        elif p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
-            result.append(p)
-    return result
 
 
 def run_face_restore(config_path: Path, emitter: EventEmitter, model_cache: dict | None = None) -> int:
@@ -56,7 +41,7 @@ def run_face_restore(config_path: Path, emitter: EventEmitter, model_cache: dict
     fidelity = spec.get("fidelity", 0.7)
     model_path = spec.get("model_path")
 
-    images = _resolve_images(image_paths)
+    images = resolve_images(image_paths)
     if not images:
         emitter.error("NO_IMAGES", "No valid images found", recoverable=False)
         return 2
@@ -98,7 +83,7 @@ def run_face_restore(config_path: Path, emitter: EventEmitter, model_cache: dict
                 dim_embd=512, codebook_size=1024, n_head=8, n_layers=9, connect_list=["32", "64", "128", "256"]
             )
             net = net.to(get_device())
-            checkpoint = torch.load(codeformer_path, map_location="cpu", weights_only=False)
+            checkpoint = torch.load(codeformer_path, map_location="cpu", weights_only=True)
             net.load_state_dict(checkpoint.get("params_ema", checkpoint.get("params", checkpoint)))
             net.eval()
 

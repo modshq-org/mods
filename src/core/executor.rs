@@ -36,6 +36,10 @@ pub trait Executor {
     fn cleanup(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// Remove completed job state (receiver already consumed) to prevent
+    /// unbounded growth of the jobs map during long-running sessions.
+    fn cleanup_finished_jobs(&mut self) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -98,8 +102,24 @@ impl LocalExecutor {
     }
 }
 
+/// Build the PYTHONPATH for the worker subprocess, including the worker root,
+/// ai-toolkit (if available), and any existing PYTHONPATH.
+fn build_python_path(worker_root: &std::path::Path) -> String {
+    let mut py_path = worker_root.to_string_lossy().to_string();
+    if let Ok(Some(aitk_dir)) = runtime::aitoolkit_path() {
+        py_path = format!("{}:{}", py_path, aitk_dir.display());
+    }
+    if let Ok(current) = env::var("PYTHONPATH")
+        && !current.trim().is_empty()
+    {
+        py_path = format!("{}:{}", py_path, current);
+    }
+    py_path
+}
+
 impl Executor for LocalExecutor {
     fn submit(&mut self, spec: &TrainJobSpec) -> Result<JobHandle> {
+        self.cleanup_finished_jobs();
         let job_id = format!(
             "job-{}-{}",
             spec.output.lora_name,
@@ -118,15 +138,7 @@ impl Executor for LocalExecutor {
 
         // Set up Python worker command
         let worker_root = resolve_worker_python_root()?;
-        let mut py_path = worker_root.to_string_lossy().to_string();
-        if let Ok(Some(aitk_dir)) = runtime::aitoolkit_path() {
-            py_path = format!("{}:{}", py_path, aitk_dir.display());
-        }
-        if let Ok(current) = env::var("PYTHONPATH")
-            && !current.trim().is_empty()
-        {
-            py_path = format!("{}:{}", py_path, current);
-        }
+        let py_path = build_python_path(&worker_root);
 
         let mut command = Command::new(&self.python_path);
         command
@@ -198,6 +210,7 @@ impl Executor for LocalExecutor {
     }
 
     fn submit_generate(&mut self, spec: &GenerateJobSpec) -> Result<JobHandle> {
+        self.cleanup_finished_jobs();
         let job_id = format!(
             "gen-{}-{:04x}",
             chrono::Utc::now().format("%Y%m%d-%H%M%S"),
@@ -225,6 +238,7 @@ impl Executor for LocalExecutor {
     }
 
     fn submit_edit(&mut self, spec: &EditJobSpec) -> Result<JobHandle> {
+        self.cleanup_finished_jobs();
         let job_id = format!(
             "edit-{}-{:04x}",
             chrono::Utc::now().format("%Y%m%d-%H%M%S"),
@@ -254,6 +268,13 @@ impl Executor for LocalExecutor {
             .receiver
             .take()
             .with_context(|| format!("Event receiver already consumed for job: {job_id}"))
+    }
+
+    fn cleanup_finished_jobs(&mut self) {
+        self.jobs.retain(|_id, state| {
+            // Keep jobs that still have an unconsumed receiver
+            state.receiver.is_some()
+        });
     }
 }
 
@@ -415,15 +436,7 @@ impl LocalExecutor {
             .with_context(|| format!("Failed to write spec: {}", spec_path.display()))?;
 
         let worker_root = resolve_worker_python_root()?;
-        let mut py_path = worker_root.to_string_lossy().to_string();
-        if let Ok(Some(aitk_dir)) = runtime::aitoolkit_path() {
-            py_path = format!("{}:{}", py_path, aitk_dir.display());
-        }
-        if let Ok(current) = env::var("PYTHONPATH")
-            && !current.trim().is_empty()
-        {
-            py_path = format!("{}:{}", py_path, current);
-        }
+        let py_path = build_python_path(&worker_root);
 
         let mut command = Command::new(&self.python_path);
         command
@@ -498,15 +511,7 @@ impl LocalExecutor {
 
         // Set up Python worker command
         let worker_root = resolve_worker_python_root()?;
-        let mut py_path = worker_root.to_string_lossy().to_string();
-        if let Ok(Some(aitk_dir)) = runtime::aitoolkit_path() {
-            py_path = format!("{}:{}", py_path, aitk_dir.display());
-        }
-        if let Ok(current) = env::var("PYTHONPATH")
-            && !current.trim().is_empty()
-        {
-            py_path = format!("{}:{}", py_path, current);
-        }
+        let py_path = build_python_path(&worker_root);
 
         let worker_subcommand = if spec.params.inpaint_method.as_deref() == Some("lanpaint") {
             "lanpaint"

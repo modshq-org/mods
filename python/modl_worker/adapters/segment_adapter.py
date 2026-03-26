@@ -71,7 +71,7 @@ def _mask_from_birefnet(
                 "ZhengPeng7/BiRefNet", trust_remote_code=True
             )
             # Load local weights
-            state_dict = torch.load(model_path, map_location="cpu", weights_only=False)
+            state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
             model.load_state_dict(state_dict, strict=False)
             model = model.to(get_device()).eval()
         except Exception:

@@ -11,29 +11,14 @@ Reads a describe job spec YAML containing:
 import time
 from pathlib import Path
 
+from modl_worker.image_util import resolve_images
 from modl_worker.protocol import EventEmitter
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 PROMPTS = {
     "brief": "Describe this image in one sentence.",
     "detailed": "Describe this image in detail, including all objects, people, and the setting.",
     "verbose": "Provide a comprehensive description of this image. Include every visible object, person, text, color, spatial relationship, lighting, mood, and any notable details. Be thorough.",
 }
-
-
-def _resolve_images(image_paths: list[str]) -> list[Path]:
-    """Expand directories and filter to valid image files."""
-    result = []
-    for p_str in image_paths:
-        p = Path(p_str)
-        if p.is_dir():
-            for f in sorted(p.iterdir()):
-                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
-                    result.append(f)
-        elif p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
-            result.append(p)
-    return result
 
 
 def run_describe(config_path: Path, emitter: EventEmitter) -> int:
@@ -56,7 +41,7 @@ def run_describe(config_path: Path, emitter: EventEmitter) -> int:
     detail = spec.get("detail", "detailed")
     model_id = spec.get("model") or "qwen25-vl-3b"
 
-    images = _resolve_images(image_paths)
+    images = resolve_images(image_paths)
     if not images:
         emitter.error("NO_IMAGES", "No valid images found", recoverable=False)
         return 2

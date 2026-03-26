@@ -47,11 +47,11 @@ pub async fn api_delete_output(Json(req): Json<DeleteOutputRequest>) -> impl Int
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            (status, msg).into_response()
+            (status, Json(serde_json::json!({ "error": msg }))).into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }
@@ -86,7 +86,7 @@ pub async fn api_batch_delete_outputs(
         .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }
@@ -115,11 +115,11 @@ pub async fn api_toggle_favorite(Json(req): Json<ToggleFavoriteRequest>) -> impl
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            (status, msg).into_response()
+            (status, Json(serde_json::json!({ "error": msg }))).into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task failed: {e}"),
+            Json(serde_json::json!({ "error": format!("Task failed: {e}") })),
         )
             .into_response(),
     }

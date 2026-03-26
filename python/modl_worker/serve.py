@@ -517,6 +517,7 @@ class WorkerDaemon:
         emitter = SocketEventEmitter(conn, job_id=job_id)
         emitter.job_accepted(worker_pid=os.getpid())
 
+        config_path = None
         try:
             # Write spec to temp file (adapters expect a config path)
             import tempfile
@@ -547,15 +548,15 @@ class WorkerDaemon:
 
             self._jobs_served += 1
 
-            # Clean up temp file
-            config_path.unlink(missing_ok=True)
-
         except Exception as exc:
             emitter.error(
                 "WORKER_ANALYSIS_ERROR",
                 f"{action} failed: {exc}",
                 recoverable=False,
             )
+        finally:
+            if config_path is not None:
+                config_path.unlink(missing_ok=True)
 
     def _handle_status(self, conn: socket.socket) -> None:
         """Return worker status as JSON."""

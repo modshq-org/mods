@@ -19,24 +19,8 @@ import torch
 from PIL import Image
 
 from modl_worker.device import get_device
-from modl_worker.image_util import load_image
+from modl_worker.image_util import load_image, resolve_images
 from modl_worker.protocol import EventEmitter
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
-
-
-def _resolve_images(image_paths: list[str]) -> list[Path]:
-    """Expand directories and filter to valid image files."""
-    result = []
-    for p_str in image_paths:
-        p = Path(p_str)
-        if p.is_dir():
-            for f in sorted(p.iterdir()):
-                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
-                    result.append(f)
-        elif p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
-            result.append(p)
-    return result
 
 
 def _load_clip(emitter: EventEmitter, model_path: str | None = None):
@@ -82,7 +66,7 @@ def run_compare(config_path: Path, emitter: EventEmitter, model_cache: dict | No
     reference_path = spec.get("reference_path")
     clip_model_path = spec.get("clip_model_path")
 
-    images = _resolve_images(image_paths)
+    images = resolve_images(image_paths)
     if not images:
         emitter.error("NO_IMAGES", "No valid images found", recoverable=False)
         return 2

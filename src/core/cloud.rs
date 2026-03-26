@@ -461,11 +461,29 @@ impl CloudExecutor {
             zip.finish()?;
         }
 
-        let zip_size = std::fs::metadata(&tmp)?.len();
+        let file_bytes = std::fs::read(&tmp)?;
+        let zip_size = file_bytes.len() as u64;
+        let sha256 = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&file_bytes);
+            format!("{:x}", hasher.finalize())
+        };
+
         eprintln!(
             "    Dataset zipped: {:.1} MB (images + captions only)",
             zip_size as f64 / 1_048_576.0
         );
+
+        // Check if the latest version has the same SHA — skip upload if unchanged
+        if let Ok(item_detail) = hub.get_item(username, &slug).await
+            && let Some(latest) = item_detail.versions.first()
+            && latest.sha256.as_deref() == Some(&sha256)
+        {
+            let _ = std::fs::remove_file(&tmp);
+            eprintln!("    Dataset unchanged, skipping upload");
+            return Ok(format!("{username}/{slug}"));
+        }
 
         // Push to hub
         let push_resp = hub.push_start(username, &slug).await?;
@@ -477,15 +495,6 @@ impl CloudExecutor {
         )
         .await
         .context("Failed to upload dataset to hub")?;
-
-        // Compute SHA256
-        let file_bytes = std::fs::read(&tmp)?;
-        let sha256 = {
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(&file_bytes);
-            format!("{:x}", hasher.finalize())
-        };
 
         let metadata = serde_json::json!({
             "source": "modl-cloud-training",
