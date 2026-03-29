@@ -109,6 +109,7 @@ def _run_single_phase(
     step_offset: int = 0,
     total_steps_override: int | None = None,
     step_base: int = 0,
+    loss_log_path: Path | None = None,
 ) -> int:
     """Run a single ai-toolkit training phase.  Returns exit code.
 
@@ -195,6 +196,10 @@ def _run_single_phase(
                     total_steps=global_total,
                     loss=loss,
                 )
+                # Append to loss CSV for analysis
+                if loss_log_path is not None:
+                    with open(loss_log_path, "a") as f:
+                        f.write(f"{global_step},{loss}\n")
                 last_step = step
             elif loss is None and phase_total <= 50:
                 # Sample generation (no loss, small total like 11 prompts
@@ -390,6 +395,15 @@ def run_train(config_path: Path, emitter: EventEmitter) -> int:
     step_offset = 0
     resume_from = params.get("resume_from")  # initial resume (user-provided)
 
+    # Loss CSV log — written alongside training output for post-hoc analysis
+    loss_log_path = None
+    if output_dir:
+        lora_name = spec.get("output", {}).get("lora_name", "lora")
+        loss_log_path = Path(output_dir) / lora_name / "loss.csv"
+        loss_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(loss_log_path, "w") as f:
+            f.write("step,loss\n")
+
     for i, (phase, phase_steps) in enumerate(zip(strategy.phases, phase_step_counts)):
         phase_num = i + 1
         is_last = phase_num == len(strategy.phases)
@@ -416,6 +430,7 @@ def run_train(config_path: Path, emitter: EventEmitter) -> int:
             step_offset=step_offset,
             total_steps_override=total_steps,
             step_base=resume_step,
+            loss_log_path=loss_log_path,
         )
 
         if code != 0:
