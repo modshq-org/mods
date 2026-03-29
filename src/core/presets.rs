@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 
-use crate::core::job::{LoraType, Optimizer, Preset, TrainingParams};
+use crate::core::job::{LoraType, NetworkType, Optimizer, Preset, TrainingParams};
 
 /// Dataset statistics needed for preset resolution
 #[derive(Debug, Clone)]
@@ -265,6 +265,7 @@ pub fn resolve_params(
         resume_from: None,
         class_word: None,
         sample_every: None,
+        network_type: NetworkType::default(),
     })
 }
 

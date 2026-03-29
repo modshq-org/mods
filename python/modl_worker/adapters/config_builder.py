@@ -384,11 +384,19 @@ def spec_to_aitoolkit_config(spec: dict, train_overrides: dict | None = None) ->
         alpha = rank
     else:
         alpha = 1
-    network_config = {
-        "type": "lora",
-        "linear": rank,
-        "linear_alpha": alpha,
-    }
+    network_type = params.get("network_type", "lora")
+    if network_type == "lokr":
+        network_config = {
+            "type": "lokr",
+            "linear": rank,
+            "linear_alpha": alpha,
+        }
+    else:
+        network_config = {
+            "type": "lora",
+            "linear": rank,
+            "linear_alpha": alpha,
+        }
 
     # Resume from checkpoint
     resume_from = params.get("resume_from")

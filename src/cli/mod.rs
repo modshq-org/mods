@@ -50,7 +50,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use console::style;
 
 use crate::core::cloud::CloudProvider;
-use crate::core::job::{LoraType, Optimizer, Preset};
+use crate::core::job::{LoraType, NetworkType, Optimizer, Preset};
 use crate::core::manifest::AssetType;
 
 /// Extended help text for `modl train` with recommended settings per model.
@@ -744,6 +744,9 @@ pub enum Commands {
         /// Sample image frequency (steps). 0 = only at the end. Default: auto (steps/10)
         #[arg(long)]
         sample_every: Option<u32>,
+        /// Network adapter type: lora (default), lokr (Kronecker product)
+        #[arg(long, value_enum)]
+        network_type: Option<NetworkType>,
         /// Load a full TrainJobSpec YAML (escape hatch)
         #[arg(long)]
         config: Option<String>,
@@ -1178,6 +1181,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             class_word,
             resume,
             sample_every,
+            network_type,
             config,
             dry_run,
             cloud,
@@ -1235,6 +1239,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                         class_word,
                         resume,
                         sample_every,
+                        network_type,
                     },
                     config.as_deref(),
                     dry_run,

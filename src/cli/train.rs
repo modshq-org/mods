@@ -31,6 +31,7 @@ pub struct TrainOverrides {
     pub class_word: Option<String>,
     pub resume: Option<String>,
     pub sample_every: Option<u32>,
+    pub network_type: Option<NetworkType>,
 }
 
 /// Run the train command. Arguments are all optional; missing ones trigger
@@ -269,6 +270,9 @@ pub async fn run(
     }
     if overrides.class_word.is_some() {
         params.class_word = overrides.class_word.clone();
+    }
+    if let Some(nt) = overrides.network_type {
+        params.network_type = nt;
     }
     if overrides.sample_every.is_some() {
         params.sample_every = overrides.sample_every;
