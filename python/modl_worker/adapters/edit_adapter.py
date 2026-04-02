@@ -73,6 +73,10 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
     seed = params.get("seed")
     count = params.get("count", 1)
 
+    # Detect architecture early — needed for scheduler and kwarg decisions
+    from .arch_config import detect_arch
+    arch = detect_arch(base_model_id)
+
     # Apply scheduler overrides (Lightning mode)
     sched_overrides = params.get("scheduler_overrides")
     lightning_sigmas = None
@@ -80,6 +84,20 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
         from .gen_adapter import _apply_scheduler_overrides, _compute_lightning_sigmas
         _apply_scheduler_overrides(pipeline, sched_overrides, emitter)
         lightning_sigmas = _compute_lightning_sigmas(steps)
+
+    # Qwen-Image-Edit-2511: always apply shift=3.1 and simple scheduler
+    # (matching ComfyUI's ModelSamplingAuraFlow node). Without this, the
+    # default dynamic shifting produces wrong sigma values and degraded quality.
+    if arch == "qwen_image_edit_2511" and hasattr(pipeline, "scheduler"):
+        sched = pipeline.scheduler
+        config = dict(sched.config)
+        config["use_dynamic_shifting"] = False
+        config["shift"] = 3.1
+        config.pop("shift_terminal", None)
+        sched_class = type(sched)
+        pipeline.scheduler = sched_class.from_config(config)
+        emitter.info("Qwen 2511: applied shift=3.1 (matching ComfyUI ModelSamplingAuraFlow)")
+
     image_paths = params.get("image_paths", [])
 
     if not image_paths:
@@ -106,9 +124,6 @@ def run_edit_with_pipeline(spec: dict, emitter: EventEmitter, pipeline: object) 
         generator.manual_seed(seed)
 
     # Build inference kwargs — different pipelines need different params
-    from .arch_config import detect_arch
-    arch = detect_arch(base_model_id)
-
     if arch in ("flux2_klein", "flux2_klein_9b"):
         # Klein: native image editing via the `image` parameter.
         # Supports multiple input images (e.g. source + reference).
