@@ -193,18 +193,44 @@ def _load_ltx2_pipeline(
     )
     emitter.info(f"Transformer loaded in {time.time()-t0:.1f}s")
 
-    # --- 2. Load rest of pipeline from HF repo ---
-    # Uses Lightricks/LTX-2 diffusers-format repo for text encoder, VAE,
-    # tokenizer, connector, scheduler. Downloads once then cached.
-    emitter.info("Loading text encoder + VAE + connector (from cache or Lightricks/LTX-2)...")
+    # --- 2. Load text encoder (Gemma 3 12B in 4-bit NF4, ~7.6GB) ---
+    # ComfyUI uses a custom FP4 format. For diffusers we use bitsandbytes NF4
+    # which gives similar size (~8GB) and fits alongside the GGUF transformer.
+    emitter.info("Loading Gemma 3 12B text encoder (4-bit NF4)...")
+    emitter.info("(First run downloads from HF, ~48GB cached, loaded as 4-bit)")
     t1 = time.time()
+
+    from transformers import Gemma3ForConditionalGeneration, BitsAndBytesConfig
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=dtype,
+        bnb_4bit_quant_type="nf4",
+    )
+    text_encoder = Gemma3ForConditionalGeneration.from_pretrained(
+        "Lightricks/LTX-2",
+        subfolder="text_encoder",
+        quantization_config=bnb_config,
+        dtype=dtype,
+    )
+    emitter.info(f"Text encoder loaded in {time.time()-t1:.1f}s")
+
+    # --- 3. Load rest of pipeline (VAE, connector, scheduler, tokenizer) ---
+    # Use from_pretrained but inject our transformer + text encoder to skip
+    # their downloads. The remaining components are small (~3GB total).
+    emitter.info("Loading VAE, connector, scheduler...")
+    t2 = time.time()
+
+    # Move transformer to CPU to free VRAM during pipeline assembly
+    transformer.to("cpu")
+    torch.cuda.empty_cache()
 
     pipe = LTX2Pipeline.from_pretrained(
         "Lightricks/LTX-2",
         transformer=transformer,
+        text_encoder=text_encoder,
         torch_dtype=dtype,
     )
-    emitter.info(f"Pipeline assembled in {time.time()-t1:.1f}s")
+    emitter.info(f"Pipeline assembled in {time.time()-t2:.1f}s")
 
     # --- 8. Memory optimization ---
     pipe.enable_model_cpu_offload()
