@@ -88,7 +88,10 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
     params = spec.get("params", {})
     init_image_path = params.get("init_image")
     mask_path = params.get("mask")
-    if mask_path and init_image_path:
+    num_frames = params.get("num_frames")
+    if num_frames:
+        cold_mode = "img2vid" if init_image_path else "txt2vid"
+    elif mask_path and init_image_path:
         cold_mode = "inpaint"
     elif init_image_path:
         cold_mode = "img2img"
@@ -130,6 +133,15 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
             base_model_id, base_model_path, cls_name, emitter,
             force_fp8=has_controlnet,
         )
+
+        # Video pipeline VRAM optimization
+        if cold_mode in ("txt2vid", "img2vid"):
+            if hasattr(pipe, "enable_model_cpu_offload"):
+                pipe.enable_model_cpu_offload()
+                emitter.info("Enabled model CPU offload for video pipeline")
+            if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_tiling"):
+                pipe.vae.enable_tiling()
+                emitter.info("Enabled VAE tiling for video pipeline")
 
         # Load LoRA if specified
         from modl_worker.adapters.lora_utils import apply_lora_from_spec
@@ -200,8 +212,14 @@ def run_generate_with_pipeline(
     mask_path = params.get("mask")
     strength = params.get("strength", 0.75)
 
+    # Video params
+    num_frames = params.get("num_frames")
+    video_fps = params.get("fps", 24)
+
     # Determine generation mode
-    if mask_path and init_image_path:
+    if num_frames:
+        mode = "img2vid" if init_image_path else "txt2vid"
+    elif mask_path and init_image_path:
         mode = "inpaint"
     elif init_image_path:
         mode = "img2img"
@@ -230,9 +248,9 @@ def run_generate_with_pipeline(
     # ControlNet params
     cn_inputs = params.get("controlnet", [])
 
-    # Switch pipeline if needed for img2img/inpaint via from_pipe()
+    # Switch pipeline if needed for img2img/inpaint/video via from_pipe()
     pipe = pipeline
-    if mode != "txt2img":
+    if mode not in ("txt2img", "txt2vid"):
         target_cls_name = resolve_pipeline_class_for_mode(base_model_id, mode)
         if target_cls_name != cls_name:
             emitter.info(f"Switching pipeline: {cls_name} -> {target_cls_name} (mode={mode})")
@@ -299,8 +317,15 @@ def run_generate_with_pipeline(
         gen_kwargs["negative_prompt"] = neg
 
     is_flux_fill = arch in ("flux_fill", "flux_fill_onereward")
+    is_video_mode = mode in ("txt2vid", "img2vid")
 
-    if mode == "txt2img":
+    if is_video_mode:
+        gen_kwargs["width"] = width
+        gen_kwargs["height"] = height
+        gen_kwargs["num_frames"] = num_frames
+        if mode == "img2vid" and init_img is not None:
+            gen_kwargs["image"] = init_img
+    elif mode == "txt2img":
         gen_kwargs["width"] = width
         gen_kwargs["height"] = height
     elif mode == "img2img":
@@ -405,24 +430,24 @@ def run_generate_with_pipeline(
 
         try:
             result = pipe(**gen_kwargs)
-            image = result.images[0]
         except Exception as exc:
+            noun = "video" if is_video_mode else "image"
             emitter.error(
                 "GENERATION_FAILED",
-                f"Generation failed on image {i + 1}/{count}: {exc}",
+                f"Generation failed on {noun} {i + 1}/{count}: {exc}",
                 recoverable=(i + 1 < count),
             )
             continue
 
         elapsed = time.time() - t0
 
-        # Advance seed for next image in batch
+        # Advance seed for next item in batch
         if seed is not None:
             generator.manual_seed(seed + i + 1)
 
         image_seed = seed + i if seed is not None else None
 
-        # Build provenance metadata for PNG text chunks
+        # Build provenance metadata
         model_files = {}
         if hasattr(pipe, "_modl_loaded_files"):
             for comp, info in pipe._modl_loaded_files.items():
@@ -455,13 +480,27 @@ def run_generate_with_pipeline(
             "count": count,
             "model_files": model_files or None,
             "controlnet": cn_meta,
+            "num_frames": num_frames,
+            "fps": video_fps,
         }
 
-        filepath = save_and_emit_artifact(
-            image, output_dir, emitter,
-            index=i, count=count, metadata=embedded_meta,
-            stage="generate", elapsed=elapsed,
-        )
+        if is_video_mode:
+            # Video output — export frames as MP4
+            from modl_worker.video_util import save_and_emit_video_artifact
+            video_frames = result.frames[0]  # LTX2Pipeline returns .frames
+            filepath = save_and_emit_video_artifact(
+                video_frames, video_fps, output_dir, emitter,
+                index=i, count=count, metadata=embedded_meta,
+                elapsed=elapsed,
+            )
+        else:
+            # Image output — save as PNG
+            image = result.images[0]
+            filepath = save_and_emit_artifact(
+                image, output_dir, emitter,
+                index=i, count=count, metadata=embedded_meta,
+                stage="generate", elapsed=elapsed,
+            )
         if filepath:
             artifact_paths.append(filepath)
 
@@ -473,11 +512,13 @@ def run_generate_with_pipeline(
     _cleanup_tmp_files(init_image_path, mask_path)
 
     if artifact_paths:
-        emitter.completed(f"Generated {len(artifact_paths)} image(s)")
+        noun = "video(s)" if is_video_mode else "image(s)"
+        emitter.completed(f"Generated {len(artifact_paths)} {noun}")
     else:
+        noun = "videos" if is_video_mode else "images"
         emitter.error(
-            "NO_IMAGES_GENERATED",
-            "All generation attempts failed",
+            "NO_OUTPUT_GENERATED",
+            f"All generation attempts failed — no {noun} produced",
             recoverable=False,
         )
         return 1

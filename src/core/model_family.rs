@@ -57,6 +57,12 @@ pub struct ModelInfo {
     /// Can render legible text in images
     pub text_rendering: bool,
 
+    // -- Video defaults (only meaningful when txt2vid or img2vid is true) --
+    /// Default number of video frames (must be 8*N+1, e.g. 121)
+    pub default_frames: u32,
+    /// Default video frame rate
+    pub default_fps: u32,
+
     // -- Description --
     pub description: &'static str,
 }
@@ -71,6 +77,10 @@ pub struct Capabilities {
     pub training: bool,
     /// Supports LanPaint training-free inpainting (no dedicated inpaint model needed)
     pub lanpaint_inpaint: bool,
+    /// Text-to-video generation
+    pub txt2vid: bool,
+    /// Image-to-video generation
+    pub img2vid: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +115,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 28,
                 default_guidance: 3.5,
@@ -112,6 +124,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 4,
                 speed: 2,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "High quality, strong prompt following, 28 steps",
             },
             ModelInfo {
@@ -132,6 +146,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 4,
                 default_guidance: 1.0,
@@ -139,6 +155,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 3,
                 speed: 5,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Distilled, 4 steps, fast iteration",
             },
             ModelInfo {
@@ -159,6 +177,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 40,
                 default_guidance: 5.0,
@@ -166,6 +186,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 4,
                 speed: 2,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Apache 2.0 Flux fork, 8.9B, negative prompts, uncensored",
             },
         ],
@@ -197,6 +219,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: false,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 50,
                 default_guidance: 30.0,
@@ -204,6 +228,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 5,
                 speed: 2,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Dedicated inpainting model, 384-ch input, no boundary artifacts",
             },
             ModelInfo {
@@ -224,6 +250,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: false,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 50,
                 default_guidance: 30.0,
@@ -231,6 +259,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 5,
                 speed: 2,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "RLHF-tuned Fill, outperforms Flux Fill Pro, best inpainting",
             },
         ],
@@ -262,6 +292,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 28,
                 default_guidance: 4.0,
@@ -269,6 +301,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 5,
                 speed: 1,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Best quality, 46B total params, needs 80GB+ GPU",
             },
             ModelInfo {
@@ -289,6 +323,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: true,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 4,
                 default_guidance: 1.0,
@@ -296,6 +332,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 3,
                 speed: 5,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "4B distilled, fits on consumer GPUs, 4 steps",
             },
             ModelInfo {
@@ -316,6 +354,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: true,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 4,
                 default_guidance: 1.0,
@@ -323,6 +363,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 4,
                 speed: 4,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "9B distilled, good quality/size balance, 4 steps",
             },
         ],
@@ -354,6 +396,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: true,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 20,
                 default_guidance: 4.0,
@@ -361,6 +405,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 4,
                 speed: 2,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Strong aesthetics, 6B transformer, 20 steps",
             },
             ModelInfo {
@@ -381,6 +427,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: true,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 8,
                 default_guidance: 0.0,
@@ -388,6 +436,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 3,
                 speed: 4,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Distilled Z-Image, 8 steps, good speed/quality",
             },
         ],
@@ -419,6 +469,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 25,
                 default_guidance: 3.0,
@@ -426,6 +478,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 5,
                 speed: 2,
                 text_rendering: true,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Best text rendering, Chinese/English, 20B transformer",
             },
             ModelInfo {
@@ -446,6 +500,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: false,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 50,
                 default_guidance: 4.0,
@@ -453,6 +509,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 5,
                 speed: 1,
                 text_rendering: true,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Instruction-based editing, text editing, style transfer",
             },
         ],
@@ -484,6 +542,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 30,
                 default_guidance: 7.5,
@@ -491,6 +551,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 3,
                 speed: 2,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Mature ecosystem, huge LoRA library, needs negative prompts",
             },
             ModelInfo {
@@ -511,6 +573,8 @@ pub static FAMILIES: &[ModelFamily] = &[
                     lora: true,
                     training: true,
                     lanpaint_inpaint: false,
+                    txt2vid: false,
+                    img2vid: false,
                 },
                 default_steps: 30,
                 default_guidance: 7.5,
@@ -518,7 +582,82 @@ pub static FAMILIES: &[ModelFamily] = &[
                 quality: 2,
                 speed: 4,
                 text_rendering: false,
+                default_frames: 0,
+                default_fps: 0,
                 description: "Lightweight, runs on any GPU, dated quality",
+            },
+        ],
+    },
+    // -----------------------------------------------------------------------
+    // LTX Video (Lightricks, 2025)
+    // -----------------------------------------------------------------------
+    ModelFamily {
+        id: "ltx_video",
+        name: "LTX Video",
+        vendor: "Lightricks",
+        year: 2025,
+        models: &[
+            ModelInfo {
+                id: "ltx-video-dev",
+                name: "LTX Video 2.3 Dev",
+                arch_key: "ltx2_video",
+                transformer_b: 22.0,
+                text_encoder_name: "Gemma 3 12B",
+                text_encoder_b: 12.0,
+                total_b: 34.0,
+                vram_bf16_gb: 60,
+                vram_fp8_gb: 35,
+                capabilities: Capabilities {
+                    txt2img: false,
+                    img2img: false,
+                    inpaint: false,
+                    edit: false,
+                    lora: false,
+                    training: false,
+                    lanpaint_inpaint: false,
+                    txt2vid: true,
+                    img2vid: true,
+                },
+                default_steps: 30,
+                default_guidance: 3.0,
+                default_resolution: 768,
+                quality: 5,
+                speed: 1,
+                text_rendering: false,
+                default_frames: 121,
+                default_fps: 24,
+                description: "22B video+audio, 30 steps, high quality, needs 40GB+ VRAM",
+            },
+            ModelInfo {
+                id: "ltx-video-distilled",
+                name: "LTX Video 2.3 Distilled",
+                arch_key: "ltx2_video_distilled",
+                transformer_b: 22.0,
+                text_encoder_name: "Gemma 3 12B",
+                text_encoder_b: 12.0,
+                total_b: 34.0,
+                vram_bf16_gb: 60,
+                vram_fp8_gb: 35,
+                capabilities: Capabilities {
+                    txt2img: false,
+                    img2img: false,
+                    inpaint: false,
+                    edit: false,
+                    lora: false,
+                    training: false,
+                    lanpaint_inpaint: false,
+                    txt2vid: true,
+                    img2vid: true,
+                },
+                default_steps: 8,
+                default_guidance: 1.0,
+                default_resolution: 768,
+                quality: 4,
+                speed: 3,
+                text_rendering: false,
+                default_frames: 121,
+                default_fps: 24,
+                description: "Distilled 8-step variant, 4x faster, good quality",
             },
         ],
     },
@@ -683,6 +822,12 @@ pub fn resolve_model(model_id: &str) -> Option<&'static ModelInfo> {
     if lower.contains("sd-1.5") || lower.contains("sd15") || lower.contains("1.5") {
         return find_model("sd-1.5");
     }
+    if lower.contains("ltx") && lower.contains("distill") {
+        return find_model("ltx-video-distilled");
+    }
+    if lower.contains("ltx") {
+        return find_model("ltx-video-distilled"); // default to distilled (8 steps)
+    }
 
     None
 }
@@ -693,6 +838,21 @@ pub fn model_defaults(model_id: &str) -> (u32, f32) {
         Some(m) => (m.default_steps, m.default_guidance),
         None => (28, 3.5),
     }
+}
+
+/// Get default video parameters (frames, fps) for a model.
+/// Returns `None` if model doesn't support video.
+pub fn video_defaults(model_id: &str) -> Option<(u32, u32)> {
+    let info = resolve_model(model_id)?;
+    if !info.capabilities.txt2vid && !info.capabilities.img2vid {
+        return None;
+    }
+    Some((info.default_frames, info.default_fps))
+}
+
+/// Returns true if the model is a video generation model.
+pub fn is_video_model(model_id: &str) -> bool {
+    resolve_model(model_id).is_some_and(|m| m.capabilities.txt2vid || m.capabilities.img2vid)
 }
 
 /// Validate that a model supports the requested generation mode.
@@ -708,6 +868,8 @@ pub fn validate_mode(model_id: &str, mode: &str) -> Result<(), String> {
         "img2img" => info.capabilities.img2img,
         "inpaint" => info.capabilities.inpaint || info.capabilities.lanpaint_inpaint,
         "edit" => info.capabilities.edit,
+        "txt2vid" => info.capabilities.txt2vid,
+        "img2vid" => info.capabilities.img2vid,
         _ => return Ok(()),
     };
 
@@ -723,6 +885,8 @@ pub fn validate_mode(model_id: &str, mode: &str) -> Result<(), String> {
             "img2img" => m.capabilities.img2img,
             "inpaint" => m.capabilities.inpaint || m.capabilities.lanpaint_inpaint,
             "edit" => m.capabilities.edit,
+            "txt2vid" => m.capabilities.txt2vid,
+            "img2vid" => m.capabilities.img2vid,
             _ => false,
         })
         .map(|m| m.id)
@@ -939,6 +1103,8 @@ pub fn models_with_capability(capability: &str) -> Vec<&'static ModelInfo> {
             "lora" => m.capabilities.lora,
             "training" => m.capabilities.training,
             "text_rendering" => m.text_rendering,
+            "txt2vid" => m.capabilities.txt2vid,
+            "img2vid" => m.capabilities.img2vid,
             _ => false,
         })
         .collect()
