@@ -673,7 +673,7 @@ ARCH_CONFIGS: dict[str, dict] = {
             },
             "vae": {
                 "model_id": "ltx2-vae",
-                "model_class": "AutoencoderKLLTX2",
+                "model_class": "AutoencoderKLLTX2Video",
                 "config_dir": "ltx2-vae",
             },
             "scheduler": {
@@ -709,7 +709,7 @@ ARCH_CONFIGS: dict[str, dict] = {
             },
             "vae": {
                 "model_id": "ltx2-vae",
-                "model_class": "AutoencoderKLLTX2",
+                "model_class": "AutoencoderKLLTX2Video",
                 "config_dir": "ltx2-vae",
             },
             "scheduler": {

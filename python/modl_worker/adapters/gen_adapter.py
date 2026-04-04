@@ -98,6 +98,11 @@ def run_generate(config_path: Path, emitter: EventEmitter) -> int:
     else:
         cold_mode = "txt2img"
 
+    # Video mode: delegate to dedicated video adapter
+    if cold_mode in ("txt2vid", "img2vid"):
+        from modl_worker.adapters.video_adapter import run_generate_video
+        return run_generate_video(config_path, emitter)
+
     # -------------------------------------------------------------------
     # 1. Load pipeline (cold start)
     # -------------------------------------------------------------------
@@ -323,6 +328,7 @@ def run_generate_with_pipeline(
         gen_kwargs["width"] = width
         gen_kwargs["height"] = height
         gen_kwargs["num_frames"] = num_frames
+        gen_kwargs["frame_rate"] = float(video_fps)
         if mode == "img2vid" and init_img is not None:
             gen_kwargs["image"] = init_img
     elif mode == "txt2img":

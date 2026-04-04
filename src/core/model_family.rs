@@ -596,70 +596,37 @@ pub static FAMILIES: &[ModelFamily] = &[
         name: "LTX Video",
         vendor: "Lightricks",
         year: 2025,
-        models: &[
-            ModelInfo {
-                id: "ltx-video-dev",
-                name: "LTX Video 2.3 Dev",
-                arch_key: "ltx2_video",
-                transformer_b: 22.0,
-                text_encoder_name: "Gemma 3 12B",
-                text_encoder_b: 12.0,
-                total_b: 34.0,
-                vram_bf16_gb: 60,
-                vram_fp8_gb: 35,
-                capabilities: Capabilities {
-                    txt2img: false,
-                    img2img: false,
-                    inpaint: false,
-                    edit: false,
-                    lora: false,
-                    training: false,
-                    lanpaint_inpaint: false,
-                    txt2vid: true,
-                    img2vid: true,
-                },
-                default_steps: 30,
-                default_guidance: 3.0,
-                default_resolution: 768,
-                quality: 5,
-                speed: 1,
-                text_rendering: false,
-                default_frames: 121,
-                default_fps: 24,
-                description: "22B video+audio, 30 steps, high quality, needs 40GB+ VRAM",
+        models: &[ModelInfo {
+            id: "ltx-video-dev",
+            name: "LTX Video 2 Dev",
+            arch_key: "ltx2_video",
+            transformer_b: 19.0,
+            text_encoder_name: "Gemma 3 12B",
+            text_encoder_b: 12.0,
+            total_b: 31.0,
+            vram_bf16_gb: 50,
+            vram_fp8_gb: 30,
+            capabilities: Capabilities {
+                txt2img: false,
+                img2img: false,
+                inpaint: false,
+                edit: false,
+                lora: true,
+                training: false,
+                lanpaint_inpaint: false,
+                txt2vid: true,
+                img2vid: true,
             },
-            ModelInfo {
-                id: "ltx-video-distilled",
-                name: "LTX Video 2.3 Distilled",
-                arch_key: "ltx2_video_distilled",
-                transformer_b: 22.0,
-                text_encoder_name: "Gemma 3 12B",
-                text_encoder_b: 12.0,
-                total_b: 34.0,
-                vram_bf16_gb: 60,
-                vram_fp8_gb: 35,
-                capabilities: Capabilities {
-                    txt2img: false,
-                    img2img: false,
-                    inpaint: false,
-                    edit: false,
-                    lora: false,
-                    training: false,
-                    lanpaint_inpaint: false,
-                    txt2vid: true,
-                    img2vid: true,
-                },
-                default_steps: 8,
-                default_guidance: 1.0,
-                default_resolution: 768,
-                quality: 4,
-                speed: 3,
-                text_rendering: false,
-                default_frames: 121,
-                default_fps: 24,
-                description: "Distilled 8-step variant, 4x faster, good quality",
-            },
-        ],
+            default_steps: 8,
+            default_guidance: 1.0,
+            default_resolution: 768,
+            quality: 4,
+            speed: 3,
+            text_rendering: false,
+            default_frames: 97,
+            default_fps: 24,
+            description: "19B video, 8-step distilled, GGUF Q4 fits 24GB VRAM",
+        }],
     },
 ];
 
@@ -822,11 +789,8 @@ pub fn resolve_model(model_id: &str) -> Option<&'static ModelInfo> {
     if lower.contains("sd-1.5") || lower.contains("sd15") || lower.contains("1.5") {
         return find_model("sd-1.5");
     }
-    if lower.contains("ltx") && lower.contains("distill") {
-        return find_model("ltx-video-distilled");
-    }
     if lower.contains("ltx") {
-        return find_model("ltx-video-distilled"); // default to distilled (8 steps)
+        return find_model("ltx-video-dev");
     }
 
     None
