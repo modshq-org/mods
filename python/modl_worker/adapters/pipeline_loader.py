@@ -233,6 +233,59 @@ def _get_checkpoint_converter(model_class_name: str):
     return _strip_comfy_prefix
 
 
+def _load_safetensors_lenient(filepath: str) -> dict:
+    """Load a safetensors file, tolerating trailing data beyond the header coverage.
+
+    Some safetensors files (e.g. Comfy-Org's Qwen 2.5 VL 7B) have extra bytes
+    at the end that aren't referenced by any tensor in the header.  The strict
+    ``safetensors.torch.load_file`` rejects these with "incomplete metadata,
+    file not fully covered".  This loader reads tensors manually via mmap,
+    skipping the coverage check.
+    """
+    import mmap
+    import struct
+    import torch
+
+    _DTYPE_MAP = {
+        "BF16": (torch.bfloat16, 2),
+        "F16": (torch.float16, 2),
+        "F32": (torch.float32, 4),
+        "F64": (torch.float64, 8),
+        "I8": (torch.int8, 1),
+        "I16": (torch.int16, 2),
+        "I32": (torch.int32, 4),
+        "I64": (torch.int64, 8),
+        "BOOL": (torch.bool, 1),
+        "F8_E4M3": (torch.float8_e4m3fn, 1),
+    }
+
+    with open(filepath, "rb") as f:
+        header_size = struct.unpack("<Q", f.read(8))[0]
+        header_bytes = f.read(header_size)
+        header = json.loads(header_bytes)
+        data_offset = 8 + header_size
+
+        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        try:
+            state_dict = {}
+            for key, info in header.items():
+                if key == "__metadata__":
+                    continue
+                start, end = info["data_offsets"]
+                shape = info["shape"]
+                dt_str = info["dtype"]
+                if dt_str not in _DTYPE_MAP:
+                    raise ValueError(f"Unsupported dtype {dt_str} for tensor {key}")
+                dt, _ = _DTYPE_MAP[dt_str]
+                raw = mm[data_offset + start : data_offset + end]
+                tensor = torch.frombuffer(bytearray(raw), dtype=dt).reshape(shape)
+                state_dict[key] = tensor
+        finally:
+            mm.close()
+
+    return state_dict
+
+
 def _detect_weight_dtype(filepath: str) -> str:
     """Detect the dominant weight dtype from a safetensors file header.
 
@@ -537,7 +590,10 @@ def assemble_pipeline(
                     # Fall back: load config → create model → load weights
                     config_dict = ModelClass.load_config(str(config_dir))
                     model = ModelClass.from_config(config_dict)
-                    state_dict = safetensors.torch.load_file(resolved_path)
+                    try:
+                        state_dict = safetensors.torch.load_file(resolved_path)
+                    except Exception:
+                        state_dict = _load_safetensors_lenient(resolved_path)
                     # Check key overlap before loading — zero overlap means
                     # the file has non-diffusers keys (e.g. ComfyUI/original format)
                     model_keys = set(model.state_dict().keys())
@@ -575,7 +631,14 @@ def assemble_pipeline(
                 config_obj = ModelClass.config_class.from_pretrained(str(config_dir))
                 with init_empty_weights():
                     model = ModelClass(config_obj)
-                state_dict = safetensors.torch.load_file(resolved_path)
+                try:
+                    state_dict = safetensors.torch.load_file(resolved_path)
+                except Exception:
+                    # Fallback: some safetensors files have trailing data
+                    # beyond the header coverage (e.g. Comfy-Org's Qwen VL
+                    # encoder). Use lenient loader that skips coverage check.
+                    emitter.info(f"  → Strict safetensors load failed, using lenient loader")
+                    state_dict = _load_safetensors_lenient(resolved_path)
                 model.load_state_dict(state_dict, strict=False, assign=True)
                 _materialize_meta_tensors(model)
                 # Always cast text encoders to inference dtype for numerical stability.
