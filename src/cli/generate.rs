@@ -251,7 +251,7 @@ pub async fn run(args: GenerateArgs<'_>) -> Result<()> {
         }
 
         let lightning = model_family::lightning_config(&base_model).with_context(|| {
-            let supported: Vec<&str> = model_family::LIGHTNING_CONFIGS
+            let supported: Vec<&str> = model_family::lightning_configs()
                 .iter()
                 .map(|c| c.base_model_id.as_str())
                 .collect();

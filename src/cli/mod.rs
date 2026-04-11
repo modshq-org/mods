@@ -1682,25 +1682,27 @@ fn print_train_info() {
 }
 
 fn dump_cli_schema() {
-    use crate::core::model_family::{self, CONTROLNET_SUPPORT, STYLE_REF_SUPPORT};
+    use crate::core::model_family;
 
     let cmd = Cli::command();
     let mut commands = Vec::new();
     collect_schema_commands(&cmd, "", &mut commands);
 
-    // Build model capability matrix from model_family.rs
-    let models: Vec<serde_json::Value> = model_family::FAMILIES
+    // Build model capability matrix from models.toml
+    let cn_list = model_family::controlnet_support_list();
+    let sr_list = model_family::style_ref_support_list();
+    let models: Vec<serde_json::Value> = model_family::families()
         .iter()
         .flat_map(|f| {
             f.models.iter().map(move |m| {
-                let has_controlnet = CONTROLNET_SUPPORT.iter().any(|c| c.base_model_id == m.id);
-                let controlnet_types: Vec<String> = CONTROLNET_SUPPORT
+                let has_controlnet = cn_list.iter().any(|c| c.base_model_id == m.id);
+                let controlnet_types: Vec<String> = cn_list
                     .iter()
                     .find(|c| c.base_model_id == m.id)
                     .map(|c| c.supported_types.to_vec())
                     .unwrap_or_default();
-                let has_style_ref = STYLE_REF_SUPPORT.iter().any(|s| s.base_model_id == m.id);
-                let style_ref_mechanism = STYLE_REF_SUPPORT
+                let has_style_ref = sr_list.iter().any(|s| s.base_model_id == m.id);
+                let style_ref_mechanism = sr_list
                     .iter()
                     .find(|s| s.base_model_id == m.id)
                     .map(|s| s.mechanism.as_str());

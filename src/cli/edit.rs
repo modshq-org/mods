@@ -151,7 +151,7 @@ pub async fn run(args: EditArgs<'_>) -> Result<()> {
     let (fast_lora, fast_steps, fast_guidance, scheduler_overrides) = if let Some(fast_steps) = fast
     {
         let lightning = model_family::lightning_config(&base_model).with_context(|| {
-            let supported: Vec<&str> = model_family::LIGHTNING_CONFIGS
+            let supported: Vec<&str> = model_family::lightning_configs()
                 .iter()
                 .map(|c| c.base_model_id.as_str())
                 .collect();
