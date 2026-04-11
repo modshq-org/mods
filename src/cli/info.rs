@@ -141,7 +141,7 @@ fn show_registry_model(
         if let Some(lightning) = model_family::lightning_config(id) {
             println!(
                 "    Fast mode:     --fast (4-step) or --fast 8 (8-step) via {}",
-                style(lightning.lora_registry_id).cyan()
+                style(&lightning.lora_registry_id).cyan()
             );
         }
     }

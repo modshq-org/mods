@@ -1694,7 +1694,7 @@ fn dump_cli_schema() {
         .flat_map(|f| {
             f.models.iter().map(move |m| {
                 let has_controlnet = CONTROLNET_SUPPORT.iter().any(|c| c.base_model_id == m.id);
-                let controlnet_types: Vec<&str> = CONTROLNET_SUPPORT
+                let controlnet_types: Vec<String> = CONTROLNET_SUPPORT
                     .iter()
                     .find(|c| c.base_model_id == m.id)
                     .map(|c| c.supported_types.to_vec())
@@ -1703,7 +1703,7 @@ fn dump_cli_schema() {
                 let style_ref_mechanism = STYLE_REF_SUPPORT
                     .iter()
                     .find(|s| s.base_model_id == m.id)
-                    .map(|s| s.mechanism);
+                    .map(|s| s.mechanism.as_str());
 
                 serde_json::json!({
                     "id": m.id,
