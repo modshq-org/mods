@@ -102,6 +102,7 @@ create_test_image() {
       --count 1 \
       --seed 12345 \
       --size 512x512 \
+      --no-worker \
       2>&1); then
     # Extract the output path (on its own line, indented)
     local img_path
@@ -138,6 +139,9 @@ check_output_size() {
     fi
   fi
 }
+
+# Generate test image BEFORE starting the worker (--no-worker, releases VRAM)
+create_test_image
 
 # Restart worker with MODL_MAX_MODELS=1 for clean VRAM between models
 $MODL worker stop &>/dev/null
@@ -299,10 +303,6 @@ run_fast_gen_test() {
 echo "=== modl smoke test ==="
 echo "  Generate: $GEN_PROMPT"
 echo "  Edit:     $EDIT_PROMPT"
-echo ""
-
-echo "--- setup ---"
-create_test_image
 echo ""
 
 echo "--- txt2img (default steps) ---"
