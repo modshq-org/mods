@@ -72,9 +72,7 @@ is_installed() {
   echo "$INSTALLED_MODELS" | grep -qP "┆ ${1}\s+│"
 }
 
-is_gguf_variant() {
-  echo "$INSTALLED_MODELS" | grep -P "┆ ${1}\s+│" | grep -qi "gguf"
-}
+
 
 # Generate a real test image using the first available model.
 # A real photo is much better for edit testing than a blank white image.
@@ -237,13 +235,6 @@ run_fast_edit_test() {
     return
   fi
 
-  # --fast requires LoRA which is incompatible with GGUF variants
-  if is_gguf_variant "$model"; then
-    echo "  SKIP  $label (GGUF variant, LoRA not supported)"
-    SKIPPED=$((SKIPPED + 1))
-    return
-  fi
-
   echo -n "  TEST  $label ... "
   local output
   if output=$($MODL edit "$EDIT_PROMPT" \
@@ -272,13 +263,6 @@ run_fast_gen_test() {
 
   if ! is_installed "$model"; then
     echo "  SKIP  $label (not installed)"
-    SKIPPED=$((SKIPPED + 1))
-    return
-  fi
-
-  # --fast requires LoRA which is incompatible with GGUF variants
-  if is_gguf_variant "$model"; then
-    echo "  SKIP  $label (GGUF variant, LoRA not supported)"
     SKIPPED=$((SKIPPED + 1))
     return
   fi
