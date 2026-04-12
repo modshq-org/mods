@@ -217,7 +217,8 @@ run_edit_test() {
 
 run_fast_edit_test() {
   local model="$1"
-  local label="edit/$model --fast"
+  local fast_steps="${2:-4}"
+  local label="edit/$model --fast $fast_steps"
 
   [[ -n "$FILTER" && "$model" != "$FILTER" ]] && return
 
@@ -238,7 +239,7 @@ run_fast_edit_test() {
   if output=$($MODL edit "$EDIT_PROMPT" \
       --image "$TEST_IMAGE" \
       --base "$model" \
-      --fast \
+      --fast "$fast_steps" \
       --count 1 \
       --seed 42 \
       2>&1) && echo "$output" | grep -q "Edited\|Generated"; then
@@ -255,7 +256,8 @@ run_fast_edit_test() {
 
 run_fast_gen_test() {
   local model="$1"
-  local label="generate/$model --fast"
+  local fast_steps="${2:-4}"
+  local label="generate/$model --fast $fast_steps"
 
   [[ -n "$FILTER" && "$model" != "$FILTER" ]] && return
 
@@ -269,7 +271,7 @@ run_fast_gen_test() {
   local output
   if output=$($MODL generate "$GEN_PROMPT" \
       --base "$model" \
-      --fast \
+      --fast "$fast_steps" \
       --count 1 \
       --seed 42 \
       2>&1) && echo "$output" | grep -q "Generated"; then
@@ -295,9 +297,15 @@ for model in "${GEN_MODELS[@]}"; do
 done
 
 echo ""
-echo "--- txt2img --fast (Lightning LoRA) ---"
+echo "--- txt2img --fast 4 (Lightning LoRA) ---"
 for model in "${FAST_GEN_MODELS[@]}"; do
-  run_fast_gen_test "$model"
+  run_fast_gen_test "$model" 4
+done
+
+echo ""
+echo "--- txt2img --fast 8 (Lightning LoRA) ---"
+for model in "${FAST_GEN_MODELS[@]}"; do
+  run_fast_gen_test "$model" 8
 done
 
 echo ""
@@ -307,9 +315,15 @@ for model in "${EDIT_MODELS[@]}"; do
 done
 
 echo ""
-echo "--- edit --fast (Lightning LoRA) ---"
+echo "--- edit --fast 4 (Lightning LoRA) ---"
 for model in "${FAST_EDIT_MODELS[@]}"; do
-  run_fast_edit_test "$model"
+  run_fast_edit_test "$model" 4
+done
+
+echo ""
+echo "--- edit --fast 8 (Lightning LoRA) ---"
+for model in "${FAST_EDIT_MODELS[@]}"; do
+  run_fast_edit_test "$model" 8
 done
 
 echo ""
