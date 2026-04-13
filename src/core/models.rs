@@ -354,6 +354,8 @@ fn build_fuzzy_patterns(families: &[ModelFamily]) -> Vec<(Vec<String>, String)> 
         (&["flux-2"], "flux2-dev"),
         (&["flux"], "flux-dev"),
         // LTX Video
+        (&["ltx", "2.3"], "ltx-video-2-3"),
+        (&["ltx", "2-3"], "ltx-video-2-3"),
         (&["ltx", "video"], "ltx-video-2-3"),
         (&["ltx", "dev"], "ltx-video-2-3"),
         (&["ltx2"], "ltx-video-2-3"),

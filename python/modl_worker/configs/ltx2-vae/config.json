@@ -5,10 +5,11 @@
     256,
     512,
     1024,
-    2048
+    1024
   ],
   "decoder_block_out_channels": [
     256,
+    512,
     512,
     1024
   ],
@@ -17,16 +18,19 @@
     false,
     false,
     false,
+    false,
     false
   ],
   "decoder_layers_per_block": [
-    5,
-    5,
-    5,
-    5
+    4,
+    6,
+    4,
+    2,
+    2
   ],
-  "decoder_spatial_padding_mode": "reflect",
+  "decoder_spatial_padding_mode": "zeros",
   "decoder_spatio_temporal_scaling": [
+    true,
     true,
     true,
     true
@@ -50,7 +54,7 @@
   "layers_per_block": [
     4,
     6,
-    6,
+    4,
     2,
     2
   ],
@@ -71,11 +75,19 @@
   "upsample_factor": [
     2,
     2,
+    1,
     2
   ],
   "upsample_residual": [
-    true,
-    true,
-    true
+    false,
+    false,
+    false,
+    false
+  ],
+  "upsample_type": [
+    "spatiotemporal",
+    "spatiotemporal",
+    "temporal",
+    "spatial"
   ]
 }

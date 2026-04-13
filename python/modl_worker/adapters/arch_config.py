@@ -694,17 +694,16 @@ ARCH_CONFIGS: dict[str, dict] = {
         "gen_components": {
             "transformer": {
                 "model_class": "LTX2VideoTransformer3DModel",
-                "config_dir": "ltx2-video-transformer",
+                "config_dir": "ltx2-transformer",
             },
             "text_encoder": {
                 "model_id": "ltx2-gemma3-12b",
                 "model_class": "Gemma3ForConditionalGeneration",
-                "config_dir": "gemma3-12b",
-                "hf_dir": True,
+                "config_dir": "ltx2-text-encoder",
             },
             "tokenizer": {
                 "model_class": "AutoTokenizer",
-                "config_dir": "gemma3-tokenizer",
+                "config_dir": "ltx2-tokenizer",
             },
             "vae": {
                 "model_id": "ltx2-vae",
@@ -713,7 +712,7 @@ ARCH_CONFIGS: dict[str, dict] = {
             },
             "scheduler": {
                 "model_class": "FlowMatchEulerDiscreteScheduler",
-                "config_dir": "ltx2-video-scheduler",
+                "config_dir": "ltx2-scheduler",
             },
         },
         "model_flags": {"is_video": True},
@@ -730,17 +729,16 @@ ARCH_CONFIGS: dict[str, dict] = {
         "gen_components": {
             "transformer": {
                 "model_class": "LTX2VideoTransformer3DModel",
-                "config_dir": "ltx2-video-distilled-transformer",
+                "config_dir": "ltx23-transformer",
             },
             "text_encoder": {
                 "model_id": "ltx2-gemma3-12b",
                 "model_class": "Gemma3ForConditionalGeneration",
-                "config_dir": "gemma3-12b",
-                "hf_dir": True,
+                "config_dir": "ltx2-text-encoder",
             },
             "tokenizer": {
                 "model_class": "AutoTokenizer",
-                "config_dir": "gemma3-tokenizer",
+                "config_dir": "ltx2-tokenizer",
             },
             "vae": {
                 "model_id": "ltx2-vae",
@@ -749,7 +747,7 @@ ARCH_CONFIGS: dict[str, dict] = {
             },
             "scheduler": {
                 "model_class": "FlowMatchEulerDiscreteScheduler",
-                "config_dir": "ltx2-video-scheduler",
+                "config_dir": "ltx2-scheduler",
             },
         },
         "model_flags": {"is_video": True, "is_distilled": True},
@@ -815,9 +813,10 @@ MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     "qwen_image_edit_2511":  ("qwen_image_edit_2511", "Qwen/Qwen-Image-Edit-2511"),
     "flux-fill-dev":            ("flux_fill",            "black-forest-labs/FLUX.1-Fill-dev"),
     "flux-fill-dev-onereward":  ("flux_fill_onereward",  "yichengup/flux.1-fill-dev-OneReward"),
-    "ltx-video-2-3":       ("ltx2_video_distilled", "Lightricks/LTX-2.3"),
-    "ltx-video-dev":       ("ltx2_video",           "Lightricks/LTX-2.3"),
-    "ltx-video-distilled": ("ltx2_video_distilled", "Lightricks/LTX-2.3"),
+    "ltx-2.3-22b":         ("ltx2_video_distilled", "dg845/LTX-2.3-Distilled-Diffusers"),
+    "ltx-video-2-3":       ("ltx2_video_distilled", "dg845/LTX-2.3-Distilled-Diffusers"),
+    "ltx-video-distilled": ("ltx2_video_distilled", "dg845/LTX-2.3-Distilled-Diffusers"),
+    "ltx-video-dev":       ("ltx2_video",           "Lightricks/LTX-2"),
     "sdxl-base-1.0":  ("sdxl",          "stabilityai/stable-diffusion-xl-base-1.0"),
     "sdxl-turbo":     ("sdxl",          "stabilityai/sdxl-turbo"),
     "sd-1.5":         ("sd15",          "stable-diffusion-v1-5/stable-diffusion-v1-5"),

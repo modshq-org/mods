@@ -1,14 +1,38 @@
 """Video generation adapter — loads LTX-2 pipeline and generates video.
 
-Uses GGUF quantized transformer + Gemma 3 FP4 text encoder + distilled LoRA
-for 24GB VRAM compatibility. Mirrors the proven ComfyUI approach.
+STATUS (2026-04-13): Loader scaffolding is in place but the backend is not
+yet producing videos on this architecture. Known blockers:
 
-Pipeline assembly:
-  1. Transformer: GGUF via from_single_file + GGUFQuantizationConfig
-  2. Text encoder + connector: from the diffusers-format repo (Lightricks/LTX-2)
-  3. VAE: from_single_file
-  4. LoRA: distilled LoRA for fast 8-step generation
-  5. Sampling: manual sigmas matching ComfyUI distilled schedule
+  1. The community GGUF variants on HF (unsloth, QuantStack) are quantized
+     from the ComfyUI-format LTX-2 checkpoint, whose key layout does not
+     match diffusers' ``LTX2VideoTransformer3DModel``. Concretely the GGUF
+     has keys like ``adaln_single.*``, ``audio_embeddings_connector.*``
+     (connector baked into the transformer), while diffusers expects
+     ``time_embed.*``, ``av_cross_attn_audio_scale_shift.*`` and treats the
+     connector as a separate ``LTX2TextConnectors`` component. 982 keys in
+     GGUF have no model counterpart, 724 model keys are missing from GGUF.
+
+  2. Loading the bf16 diffusers-format transformer from ``dg845/LTX-2.3-
+     Distilled-Diffusers`` works but requires ~45 GB download and more
+     VRAM than the 24 GB target.
+
+  3. The ComfyUI NVFP4 Gemma 3 text encoder file uses Nvidia NVFP4 block
+     scales that diffusers' from_pretrained cannot consume directly;
+     ``comfy_fp4.py`` dequantises to bf16 but the result is ~23 GB on disk
+     and OOMs on load alongside the transformer.
+
+Follow-up options (tracked in PR description):
+  - Build a diffusers-format GGUF by quantising the dg845 safetensors with
+    a custom converter so keys match ``LTX2VideoTransformer3DModel``.
+  - Wire the existing ComfyUI REST API at :8188 as a video backend.
+  - Wait for diffusers to ship native GGUF text-encoder loading + an
+    LTX-2.3 GGUF conversion recipe.
+
+What is currently wired up (so this file is ready for the working path):
+  - Hybrid loader: local GGUF transformer + local fp4 text encoder +
+    ``LTX2Pipeline.from_pretrained`` for audio_vae/connectors/vocoder/etc.
+  - ComfyUI NVFP4 dequant helper in ``comfy_fp4.py``
+  - txt2vid / img2vid mode plumbing, distilled-LoRA fusing, MP4 export
 """
 
 import os
@@ -16,10 +40,6 @@ import time
 from pathlib import Path
 
 from modl_worker.protocol import EventEmitter
-
-
-# Distilled sigma schedule (8 steps) — matches ComfyUI workflow
-DISTILLED_SIGMAS = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 
 
 def run_generate_video(config_path: Path, emitter: EventEmitter) -> int:
@@ -72,8 +92,34 @@ def run_generate_video(config_path: Path, emitter: EventEmitter) -> int:
     emitter.info(f"Loading LTX-2 video pipeline for {base_model_id} (mode={mode})...")
     emitter.progress(stage="load", step=0, total_steps=count)
 
+    # --- Hybrid loading: local GGUF transformer + local fp4 text encoder + ---
+    # --- HF downloads for the rest (audio_vae, connectors, vocoder, etc.). ---
+    #
+    # LTX2Pipeline requires 9 components (scheduler, vae, audio_vae, text_encoder,
+    # tokenizer, connectors, transformer, vocoder, processor). We have the two big
+    # ones locally; the smaller ones (audio_vae ~200MB, connectors ~3GB, vocoder ~?)
+    # come from HF on first run.
     try:
-        pipe = _load_ltx2_pipeline(base_model_id, base_model_path, lora_info, mode, emitter)
+        from modl_worker.adapters.arch_config import detect_arch
+        arch = detect_arch(base_model_id, arch_key=model_info.get("arch_key"))
+        is_distilled = arch == "ltx2_video_distilled"
+
+        pipe = _load_ltx2_hybrid(
+            base_model_id, base_model_path, is_distilled, mode, emitter,
+        )
+
+        # Video-specific memory optimization
+        if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_tiling"):
+            pipe.vae.enable_tiling()
+            emitter.info("VAE tiling enabled")
+        if hasattr(pipe, "enable_model_cpu_offload"):
+            pipe.enable_model_cpu_offload()
+            emitter.info("Model CPU offload enabled")
+
+        # Apply distilled LoRA if we have a non-distilled base (19B Dev)
+        if not is_distilled:
+            _apply_distilled_lora(pipe, lora_info, emitter)
+
     except Exception as exc:
         emitter.error("PIPELINE_LOAD_FAILED", f"Failed to load video pipeline: {exc}", recoverable=False)
         import traceback
@@ -82,7 +128,7 @@ def run_generate_video(config_path: Path, emitter: EventEmitter) -> int:
 
     emitter.job_started(config=str(config_path))
 
-    # Generation loop
+    # --- Generation loop ---
     generator = torch.Generator(device="cpu")
     if seed is None:
         seed = generator.seed()
@@ -160,22 +206,21 @@ def run_generate_video(config_path: Path, emitter: EventEmitter) -> int:
     return 0
 
 
-def _load_ltx2_pipeline(
+def _load_ltx2_hybrid(
     base_model_id: str,
     base_model_path: str | None,
-    lora_info: dict | None,
+    is_distilled: bool,
     mode: str,
-    emitter: EventEmitter,
+    emitter,
 ):
-    """Load the LTX-2 pipeline with GGUF transformer for 24GB VRAM.
+    """Load LTX-2 pipeline with local transformer/text-encoder + HF for the rest.
 
-    Assembles the pipeline from local components (no HF downloads at runtime):
-    1. Transformer: GGUF via from_single_file + bundled config
-    2. Text encoder + connector: from local safetensors
-    3. VAE: from local safetensors + bundled config
-    4. Scheduler: from bundled config
-    5. LoRA: distilled LoRA for fast 8-step inference
+    This is a hybrid: we provide the two large components from local store
+    (GGUF transformer + dequantized fp4 text encoder) and let
+    `from_pretrained()` download the smaller pieces (audio_vae, connectors,
+    vocoder, scheduler, tokenizer, processor) from the HF repo on first run.
     """
+    import time
     import torch
     from diffusers import (
         LTX2Pipeline,
@@ -183,104 +228,131 @@ def _load_ltx2_pipeline(
         LTX2VideoTransformer3DModel,
         GGUFQuantizationConfig,
     )
+    from transformers import Gemma3ForConditionalGeneration
+
     from modl_worker.adapters.arch_config import _get_installed_path
+    from modl_worker.adapters.comfy_fp4 import (
+        is_comfy_nvfp4,
+        cached_dequant_path,
+        dequant_comfy_nvfp4_to_file,
+    )
+    from modl_worker.adapters.pipeline_loader import _ensure_hf_layout
 
     PipelineClass = LTX2ImageToVideoPipeline if mode == "img2vid" else LTX2Pipeline
 
     CONFIGS = Path(__file__).parent.parent / "configs"
     dtype = torch.bfloat16
 
-    # --- 1. Resolve model version (2.3 preferred, 19B fallback) ---
-    is_23 = "2.3" in base_model_id or base_model_id == "ltx-video-2.3"
+    # --- 1. Resolve transformer path + HF repo for remaining components ---
     transformer_path = base_model_path
     if not transformer_path:
-        # Prefer 2.3 distilled, fall back to 19B
-        transformer_path = _get_installed_path("ltx-video-2.3") or _get_installed_path("ltx-video-dev")
-        if transformer_path and "2.3" in Path(transformer_path).name:
-            is_23 = True
+        # Prefer 2.3 distilled, fall back to 19B Dev
+        transformer_path = (
+            _get_installed_path("ltx-video-2-3")
+            or _get_installed_path("ltx-video-distilled")
+            or _get_installed_path("ltx-video-dev")
+        )
     if not transformer_path or not Path(transformer_path).exists():
         raise FileNotFoundError(
-            "LTX Video transformer not found. Install with: modl pull ltx-video-2.3"
+            "LTX Video transformer not found. Install with: modl pull ltx-video-2-3"
         )
 
-    emitter.info(f"Loading GGUF transformer from {Path(transformer_path).name}...")
-    t0 = time.time()
+    # Pick HF repo based on whether we're using 2.3 distilled or 19B Dev
+    if is_distilled or "2.3" in Path(transformer_path).name.lower() or "2-3" in Path(transformer_path).name.lower():
+        hf_repo = "dg845/LTX-2.3-Distilled-Diffusers"
+        config_dir = CONFIGS / "ltx23-transformer"
+    else:
+        hf_repo = "Lightricks/LTX-2"
+        config_dir = CONFIGS / "ltx2-transformer"
 
-    config_path = str(CONFIGS / "ltx23-transformer") if is_23 else str(CONFIGS / "ltx2-transformer")
+    emitter.info(f"Using LTX-2 base repo: {hf_repo}")
+
+    # --- 2. Load GGUF transformer locally ---
+    # For LTX-2.3 we need low_cpu_mem_usage=False + ignore_mismatched_sizes=True
+    # to avoid meta-tensor copy errors with the new architecture. This loads
+    # the full dequantized model into RAM (~22GB for 22B model) but is required
+    # by the current diffusers LTX2 implementation.
+    emitter.info(f"Loading GGUF transformer: {Path(transformer_path).name}")
+    t0 = time.time()
     load_kwargs = dict(
-        config=config_path,
+        config=str(config_dir),
         quantization_config=GGUFQuantizationConfig(compute_dtype=dtype),
         torch_dtype=dtype,
     )
-    if is_23:
+    is_23_transformer = (
+        "2.3" in Path(transformer_path).name.lower()
+        or "2-3" in Path(transformer_path).name.lower()
+    )
+    if is_23_transformer:
         load_kwargs["low_cpu_mem_usage"] = False
         load_kwargs["ignore_mismatched_sizes"] = True
     transformer = LTX2VideoTransformer3DModel.from_single_file(
-        transformer_path,
-        **load_kwargs,
+        transformer_path, **load_kwargs,
     )
-    emitter.info(f"Transformer loaded in {time.time()-t0:.1f}s")
+    emitter.info(f"  → Transformer loaded in {time.time()-t0:.1f}s")
 
-    # --- 2. Load text encoder (Gemma 3 12B in 4-bit NF4, ~7.6GB) ---
-    # ComfyUI uses a custom FP4 format. For diffusers we use bitsandbytes NF4
-    # which gives similar size (~8GB) and fits alongside the GGUF transformer.
-    emitter.info("Loading Gemma 3 12B text encoder (4-bit NF4)...")
-    emitter.info("(First run downloads from HF, ~48GB cached, loaded as 4-bit)")
-    t1 = time.time()
+    # --- 3. Load text encoder from local fp4 cache, quantize to NF4 in RAM ---
+    # The dequantized bf16 cache is 23GB; loading directly would OOM with the
+    # GGUF transformer also resident. Apply bitsandbytes NF4 at load time →
+    # ~8GB RAM/VRAM, fits alongside the transformer.
+    text_encoder_path = _get_installed_path("ltx2-gemma3-12b")
+    text_encoder = None
+    if text_encoder_path and Path(text_encoder_path).exists() and is_comfy_nvfp4(text_encoder_path):
+        cache_path = cached_dequant_path(text_encoder_path)
+        if not cache_path.exists():
+            emitter.info(f"  → Dequantizing fp4 text encoder (one-time, ~3min)...")
+            dequant_comfy_nvfp4_to_file(text_encoder_path, str(cache_path), target_dtype=dtype)
+        else:
+            emitter.info(f"  → Using cached dequantized text encoder")
+        te_layout = _ensure_hf_layout(str(cache_path), CONFIGS / "ltx2-text-encoder")
 
-    from transformers import Gemma3ForConditionalGeneration, BitsAndBytesConfig
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=dtype,
-        bnb_4bit_quant_type="nf4",
-    )
-    # Use the right HF repo for 2.3 vs 19B
-    hf_repo = "dg845/LTX-2.3-Distilled-Diffusers" if is_23 else "Lightricks/LTX-2"
-    text_encoder = Gemma3ForConditionalGeneration.from_pretrained(
-        hf_repo,
-        subfolder="text_encoder",
-        quantization_config=bnb_config,
-        dtype=dtype,
-    )
-    emitter.info(f"Text encoder loaded in {time.time()-t1:.1f}s")
+        # Quantize to NF4 at load time (8GB instead of 24GB)
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=dtype,
+            bnb_4bit_quant_type="nf4",
+        )
+        emitter.info(f"  → Loading text encoder with NF4 quantization...")
+        t1 = time.time()
+        text_encoder = Gemma3ForConditionalGeneration.from_pretrained(
+            te_layout,
+            quantization_config=bnb_config,
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True,
+        )
+        emitter.info(f"  → Text encoder loaded in {time.time()-t1:.1f}s")
+    else:
+        emitter.info("  → No local fp4 text encoder, will download from HF")
 
-    # --- 3. Load rest of pipeline (VAE, connector, scheduler, tokenizer) ---
-    emitter.info(f"Loading {PipelineClass.__name__} (VAE, connector, scheduler)...")
+    # --- 4. Load full pipeline from HF, override with local components ---
+    emitter.info(f"Loading remaining components from {hf_repo} (audio_vae, connectors, vocoder, scheduler, tokenizer)...")
     t2 = time.time()
-
-    # Move transformer to CPU to free VRAM during pipeline assembly
-    transformer.to("cpu")
-    torch.cuda.empty_cache()
-
-    pipe = PipelineClass.from_pretrained(
-        hf_repo,
-        transformer=transformer,
-        text_encoder=text_encoder,
-        torch_dtype=dtype,
-    )
-    emitter.info(f"Pipeline assembled in {time.time()-t2:.1f}s")
-
-    # --- 4. Memory optimization ---
-    pipe.enable_model_cpu_offload()
-    pipe.vae.enable_tiling()
-    emitter.info("CPU offload + VAE tiling enabled")
-
-    # --- 5. Apply distilled LoRA (19B only — 2.3 is already distilled) ---
-    if not is_23:
-        lora_path = None
-        lora_strength = 0.6
-        if lora_info:
-            lora_path = lora_info.get("path")
-            lora_strength = lora_info.get("weight", 0.6)
-        if not lora_path:
-            lora_path = _get_installed_path("ltx2-distilled-lora")
-        if lora_path and Path(lora_path).exists():
-            emitter.info(f"Applying distilled LoRA (strength={lora_strength})...")
-            try:
-                pipe.load_lora_weights(lora_path)
-                pipe.fuse_lora(lora_scale=lora_strength)
-                emitter.info("Distilled LoRA applied")
-            except Exception as exc:
-                emitter.warning("LORA_FAILED", f"Failed to apply LoRA: {exc}")
+    overrides = {"transformer": transformer, "torch_dtype": dtype}
+    if text_encoder is not None:
+        overrides["text_encoder"] = text_encoder
+    pipe = PipelineClass.from_pretrained(hf_repo, **overrides)
+    emitter.info(f"  → Pipeline assembled in {time.time()-t2:.1f}s")
 
     return pipe
+
+
+def _apply_distilled_lora(pipe, lora_info, emitter):
+    """Apply distilled LoRA for 19B model (reduces steps from 30 to 8)."""
+    from modl_worker.adapters.arch_config import _get_installed_path
+
+    lora_path = None
+    lora_strength = 0.6
+    if lora_info:
+        lora_path = lora_info.get("path")
+        lora_strength = lora_info.get("weight", 0.6)
+    if not lora_path:
+        lora_path = _get_installed_path("ltx2-distilled-lora")
+    if lora_path and Path(lora_path).exists():
+        emitter.info(f"Applying distilled LoRA (strength={lora_strength})...")
+        try:
+            pipe.load_lora_weights(lora_path)
+            pipe.fuse_lora(lora_scale=lora_strength)
+            emitter.info("Distilled LoRA applied")
+        except Exception as exc:
+            emitter.info(f"Warning: Failed to apply LoRA: {exc}")
