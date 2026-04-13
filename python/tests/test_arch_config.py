@@ -12,23 +12,32 @@ plain Python image. The diffusers-class resolution check is gated behind
 
 from __future__ import annotations
 
+import importlib.util
 import tomllib
 from pathlib import Path
 
 import pytest
 
-from modl_worker.adapters.arch_config import (
-    ARCH_CONFIGS,
-    MODEL_REGISTRY,
-    detect_arch,
-    resolve_pipeline_class,
-    resolve_pipeline_class_for_mode,
-    resolve_gen_defaults,
-)
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIGS_DIR = REPO_ROOT / "python" / "modl_worker" / "configs"
 MODELS_TOML = REPO_ROOT / "models.toml"
+
+# Load arch_config.py directly instead of importing modl_worker.adapters.
+# The package __init__.py eagerly imports every adapter (gen, edit, caption, …)
+# which pulls PIL/torch/diffusers and defeats the "no heavy deps" promise of
+# this test module. arch_config.py itself only uses os/sqlite3/pathlib, so a
+# direct file load keeps the schema tests installable with just pytest.
+_ARCH_CONFIG_PATH = REPO_ROOT / "python" / "modl_worker" / "adapters" / "arch_config.py"
+_spec = importlib.util.spec_from_file_location("_arch_config_isolated", _ARCH_CONFIG_PATH)
+_arch_config = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_arch_config)  # type: ignore[union-attr]
+
+ARCH_CONFIGS = _arch_config.ARCH_CONFIGS
+MODEL_REGISTRY = _arch_config.MODEL_REGISTRY
+detect_arch = _arch_config.detect_arch
+resolve_pipeline_class = _arch_config.resolve_pipeline_class
+resolve_pipeline_class_for_mode = _arch_config.resolve_pipeline_class_for_mode
+resolve_gen_defaults = _arch_config.resolve_gen_defaults
 
 ARCH_KEYS = sorted(ARCH_CONFIGS.keys())
 
