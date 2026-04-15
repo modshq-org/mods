@@ -136,6 +136,16 @@ pub enum PlanError {
     #[error("LoRA `{lora}` not found in local store")]
     LoraNotFound { lora: String },
 
+    #[error(
+        "step `{step_id}`: model `{model}` does not support `{kind}` (missing capability `{required}`)"
+    )]
+    IncompatibleCapability {
+        step_id: String,
+        model: String,
+        kind: &'static str,
+        required: &'static str,
+    },
+
     #[error("{0}")]
     Other(String),
 }
@@ -147,6 +157,7 @@ impl PlanError {
             PlanError::Parse(_) => "parse_error",
             PlanError::ModelNotInstalled { .. } => "model_not_installed",
             PlanError::LoraNotFound { .. } => "lora_not_found",
+            PlanError::IncompatibleCapability { .. } => "incompatible_capability",
             PlanError::Other(_) => "other",
         }
     }
@@ -158,6 +169,9 @@ impl PlanError {
             PlanError::LoraNotFound { lora } => {
                 Some(format!("modl pull {lora} or train it with `modl train`"))
             }
+            PlanError::IncompatibleCapability { kind, .. } => Some(format!(
+                "pick a model that supports `{kind}` (see `modl info <model>`)"
+            )),
             _ => None,
         }
     }
@@ -304,6 +318,11 @@ pub fn build_plan(spec_path: &str, db: &Database) -> Result<Plan, PlanError> {
             }
             None => (default_model.clone(), false),
         };
+
+        // Capability check: model must support the step kind. Skipped silently
+        // for models not in models.toml (registry-only models with unknown
+        // capabilities) — same policy as `arch_key`.
+        check_capability(&step.id, &resolved_model.id, &step.kind)?;
 
         // Resolve effective LoRA for this step
         let resolved_lora = match step_lora_override {
@@ -485,6 +504,31 @@ fn resolve_model(id: &str, db: &Database) -> Result<ResolvedModel, PlanError> {
         base_path,
         arch_key,
     })
+}
+
+/// Check that a resolved model supports the operation a step is asking for.
+///
+/// `Generate` requires `txt2img`; `Edit` requires `edit`. Models not present in
+/// `models.toml` (registry-only) are skipped — we don't have capability metadata
+/// for them, and refusing would be more surprising than letting the worker fail.
+fn check_capability(step_id: &str, model_id: &str, kind: &StepKind) -> Result<(), PlanError> {
+    let Some(info) = model_family::find_model(model_id) else {
+        return Ok(());
+    };
+    let (kind_str, required, ok) = match kind {
+        StepKind::Generate(_) => ("generate", "txt2img", info.capabilities.txt2img),
+        StepKind::Edit(_) => ("edit", "edit", info.capabilities.edit),
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(PlanError::IncompatibleCapability {
+            step_id: step_id.to_string(),
+            model: model_id.to_string(),
+            kind: kind_str,
+            required,
+        })
+    }
 }
 
 /// Resolve a LoRA name to a `LoraRef`. Returns a `PlanError` if not in the
@@ -1463,6 +1507,79 @@ fn print_edit_preview(step: &EditStep, source_path: &Path, sub_job_count: usize)
 mod tests {
     use super::*;
     use crate::core::workflow::parse_str;
+
+    fn gen_kind() -> StepKind {
+        StepKind::Generate(GenerateStep {
+            prompt: "x".into(),
+            model: None,
+            lora: None,
+            seed: None,
+            seeds: None,
+            width: None,
+            height: None,
+            steps: None,
+            guidance: None,
+            count: None,
+        })
+    }
+
+    fn edit_kind() -> StepKind {
+        StepKind::Edit(EditStep {
+            source: ImageRef::Local(PathBuf::from("/dev/null")),
+            prompt: "x".into(),
+            model: None,
+            lora: None,
+            seed: None,
+            seeds: None,
+            width: None,
+            height: None,
+            steps: None,
+            guidance: None,
+            count: None,
+        })
+    }
+
+    #[test]
+    fn capability_check_rejects_generate_on_edit_only_model() {
+        let err = check_capability("s", "qwen-image-edit-2511", &gen_kind()).unwrap_err();
+        assert!(matches!(
+            err,
+            PlanError::IncompatibleCapability {
+                kind: "generate",
+                required: "txt2img",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn capability_check_rejects_edit_on_generate_only_model() {
+        let err = check_capability("s", "flux2-dev", &edit_kind()).unwrap_err();
+        assert!(matches!(
+            err,
+            PlanError::IncompatibleCapability {
+                kind: "edit",
+                required: "edit",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn capability_check_allows_generate_on_txt2img_model() {
+        check_capability("s", "flux-dev", &gen_kind()).unwrap();
+    }
+
+    #[test]
+    fn capability_check_allows_edit_on_klein() {
+        check_capability("s", "flux2-klein-4b", &edit_kind()).unwrap();
+    }
+
+    #[test]
+    fn capability_check_skips_unknown_model() {
+        check_capability("s", "totally-made-up-model", &gen_kind()).unwrap();
+        check_capability("s", "totally-made-up-model", &edit_kind()).unwrap();
+    }
 
     fn fake_resolved(id: &str) -> ResolvedModel {
         ResolvedModel {
