@@ -959,6 +959,7 @@ fn print_plan_json(plan: &Plan, in_order: bool) -> Result<()> {
     };
 
     let output = PlanJson {
+        schema_version: PLAN_JSON_SCHEMA_VERSION,
         valid: true,
         workflow: WorkflowJson {
             name: wf.name.clone(),
@@ -976,6 +977,7 @@ fn print_plan_json(plan: &Plan, in_order: bool) -> Result<()> {
 
 fn print_error_json(err: &PlanError) -> Result<()> {
     let output = ErrorJson {
+        schema_version: PLAN_JSON_SCHEMA_VERSION,
         valid: false,
         error: ErrorInfoJson {
             kind: err.kind(),
@@ -999,8 +1001,14 @@ fn truncate(s: &str, max: usize) -> String {
 // JSON output types — stable schema for agent consumption.
 // ---------------------------------------------------------------------------
 
+/// Version of the JSON schema emitted by `--dry-run --json`. Bump on any
+/// breaking change (renamed/removed fields, type changes). Additive changes
+/// (new optional fields) do NOT bump this.
+const PLAN_JSON_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Serialize)]
 struct PlanJson {
+    schema_version: u32,
     valid: bool,
     workflow: WorkflowJson,
     total_planned_artifacts: usize,
@@ -1069,6 +1077,7 @@ struct EffectiveJson {
 
 #[derive(Serialize)]
 struct ErrorJson {
+    schema_version: u32,
     valid: bool,
     error: ErrorInfoJson,
 }
