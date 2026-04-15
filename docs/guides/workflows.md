@@ -246,6 +246,7 @@ On failure:
 | `parse_error` | YAML doesn't parse or fails schema validation | Fix the YAML syntax / structure |
 | `model_not_installed` | Model declared in `model:` isn't pulled | `modl pull <model>` |
 | `lora_not_found` | LoRA declared in `lora:` isn't in the local store | `modl pull <lora>` or train it |
+| `incompatible_capability` | Step asks for an operation the model doesn't support (e.g. `generate:` on an edit-only model) | Pick a model that supports the operation — see `modl info <model>` |
 | `other` | Anything else (network, IO, etc.) | Read the `message` |
 
 The `fix:` field is a human-readable suggestion — optional, present when modl
