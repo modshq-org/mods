@@ -79,7 +79,7 @@ capabilities = ["txt2img", "img2img", "inpaint", "lora", "training"]
 quality = 4
 speed = 2
 text_rendering = false
-defaults = { steps = 40, guidance = 5.0, resolution = 1024 }
+defaults = { steps = 20, guidance = 4.0, resolution = 1024 }
 
 # ─── Flux Fill ───────────────────────────────────────────────────────
 

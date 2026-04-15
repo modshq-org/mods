@@ -457,7 +457,7 @@ ARCH_CONFIGS: dict[str, dict] = {
         "train_text_encoder": False,
         "resolutions": [512, 768, 1024],
         "default_resolution": 1024,
-        "sample": {"sampler": "flowmatch", "steps": 25, "guidance": 4.0, "neg": ""},
+        "sample": {"sampler": "flowmatch", "steps": 20, "guidance": 4.0, "neg": ""},
         "inference": {"supports_negative_prompt": True, "default_negative_prompt": "low quality, ugly, unfinished, out of focus, deformed, disfigured, blurry"},
     },
     "qwen_image": {
