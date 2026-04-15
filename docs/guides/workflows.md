@@ -210,6 +210,7 @@ modl run book-chapter-3.yaml --dry-run --json
 
 ```json
 {
+  "schema_version": 1,
   "valid": true,
   "workflow": { "name": "book-chapter-3", "model": "flux2-klein-4b", "lora": "my-son-v2" },
   "total_planned_artifacts": 13,
@@ -230,6 +231,7 @@ On failure:
 
 ```json
 {
+  "schema_version": 1,
   "valid": false,
   "error": {
     "kind": "lora_not_found",
@@ -252,6 +254,15 @@ On failure:
 The `fix:` field is a human-readable suggestion — optional, present when modl
 knows a likely remediation. The `kind` values are stable; agents can depend
 on them.
+
+### Schema version
+
+Both the success and error JSON outputs include a top-level `schema_version`
+integer. **Current version: `1`.** It bumps only on **breaking** changes
+(renamed or removed fields, type changes). Additive changes — a new optional
+field, a new `kind` enum value, a new `fix` for an existing kind — do **not**
+bump it. Agents should check `schema_version` and warn (or refuse) if they
+see a number higher than they were written against.
 
 ### Agent iteration loop
 
