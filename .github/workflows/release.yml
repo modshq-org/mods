@@ -130,6 +130,7 @@ jobs:
     name: Push GPU Docker Image
     needs: build
     runs-on: ubuntu-latest
+    if: ${{ secrets.DOCKERHUB_USERNAME != '' }}
     steps:
       - uses: actions/checkout@v4
 
