@@ -60,7 +60,7 @@ pub struct ThumbParams {
     w: Option<u32>,
 }
 
-/// Generate (or serve cached) a JPEG thumbnail at the given width.
+/// Generate (or serve cached) a WebP thumbnail at the given width.
 async fn serve_thumbnail(source: &std::path::Path, width: u32) -> axum::response::Response {
     let cache_dir = modl_root().join("cache").join("thumbs");
     // Build cache key from source path hash + width
@@ -71,7 +71,7 @@ async fn serve_thumbnail(source: &std::path::Path, width: u32) -> axum::response
         h.update(hash_input.as_bytes());
         format!("{:x}", h.finalize())
     };
-    let cache_path = cache_dir.join(format!("{}.jpg", &hash[..16]));
+    let cache_path = cache_dir.join(format!("{}.webp", &hash[..16]));
 
     // Check if source is newer than cached thumb
     let cache_valid = if cache_path.exists() {
@@ -89,7 +89,7 @@ async fn serve_thumbnail(source: &std::path::Path, width: u32) -> axum::response
     if cache_valid && let Ok(bytes) = tokio::fs::read(&cache_path).await {
         return (
             [
-                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CONTENT_TYPE, "image/webp"),
                 (header::CACHE_CONTROL, "public, max-age=86400"),
             ],
             bytes,
@@ -109,11 +109,11 @@ async fn serve_thumbnail(source: &std::path::Path, width: u32) -> axum::response
             let _ = std::fs::create_dir_all(parent);
         }
 
-        // Encode as JPEG quality 80
+        // Encode as WebP (lossy, ~quality 80 equivalent — smaller + sharper than JPEG)
         let mut buf = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut buf);
         thumb
-            .write_to(&mut cursor, image::ImageFormat::Jpeg)
+            .write_to(&mut cursor, image::ImageFormat::WebP)
             .map_err(|e| format!("Failed to encode thumbnail: {e}"))?;
 
         // Write cache file (best effort)
@@ -126,7 +126,7 @@ async fn serve_thumbnail(source: &std::path::Path, width: u32) -> axum::response
     match result {
         Ok(Ok(bytes)) => (
             [
-                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CONTENT_TYPE, "image/webp"),
                 (header::CACHE_CONTROL, "public, max-age=86400"),
             ],
             bytes,
