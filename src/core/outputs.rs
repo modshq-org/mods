@@ -283,8 +283,9 @@ fn cleanup_thumbs(source: &Path) {
     if !cache_dir.exists() {
         return;
     }
-    // Thumbnails are cached as <hash[..16]>.jpg where hash = sha256("path:width")
-    // We check all known thumb widths used by the UI.
+    // Thumbnails are cached as <hash[..16]>.webp where hash = sha256("path:width")
+    // We check all known thumb widths used by the UI, and clean up both old
+    // .jpg and current .webp cached thumbnails.
     let widths = [200u32, 320, 480];
     for w in widths {
         let hash_input = format!("{}:{}", source.to_string_lossy(), w);
@@ -294,8 +295,9 @@ fn cleanup_thumbs(source: &Path) {
             h.update(hash_input.as_bytes());
             format!("{:x}", h.finalize())
         };
-        let thumb_path = cache_dir.join(format!("{}.jpg", &hash[..16]));
-        let _ = std::fs::remove_file(thumb_path);
+        let prefix = &hash[..16];
+        let _ = std::fs::remove_file(cache_dir.join(format!("{prefix}.webp")));
+        let _ = std::fs::remove_file(cache_dir.join(format!("{prefix}.jpg")));
     }
 }
 

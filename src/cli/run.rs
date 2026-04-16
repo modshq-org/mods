@@ -26,6 +26,7 @@ use crate::core::job::{
     EditJobSpec, EditParams, EventPayload, ExecutionTarget, GenerateJobSpec, GenerateOutputRef,
     GenerateParams, JobEvent, LoraRef, ModelRef, RuntimeRef,
 };
+use crate::core::outputs::{SidecarMetadata, write_sidecar_yaml};
 use crate::core::workflow::{EditStep, GenerateStep, ImageRef, StepKind, Workflow, parse_file};
 use crate::core::{model_family, model_resolve, paths, registry, runtime};
 
@@ -669,7 +670,52 @@ pub async fn execute_plan(plan: Plan, db: &Database, in_order: bool) -> Result<(
                         &plan.output_dir,
                         step_labels.clone(),
                     );
-                    let artifacts = execute_generate_step(&mut executor, &spec, &step.id, db)?;
+                    let (job_id, artifacts) =
+                        execute_generate_step(&mut executor, &spec, &step.id, db)?;
+                    for (i, artifact) in artifacts.iter().enumerate() {
+                        let artifact_id = format!("{}-img-{}", job_id, i);
+                        let image_seed = spec.params.seed.map(|s| s + i as u64);
+                        let metadata = serde_json::json!({
+                            "generated_with": "modl.run",
+                            "prompt": spec.prompt,
+                            "base_model_id": spec.model.base_model_id,
+                            "base_model_path": spec.model.base_model_path,
+                            "lora_name": spec.lora.as_ref().map(|l| &l.name),
+                            "lora_strength": spec.lora.as_ref().map(|l| l.weight),
+                            "width": spec.params.width,
+                            "height": spec.params.height,
+                            "steps": spec.params.steps,
+                            "guidance": spec.params.guidance,
+                            "seed": image_seed,
+                            "image_index": i,
+                            "count": spec.params.count,
+                            "source": "workflow",
+                        });
+                        let abs_path = artifact.to_string_lossy();
+                        let size_bytes = std::fs::metadata(artifact).map(|m| m.len()).unwrap_or(0);
+                        let _ = db.insert_artifact(
+                            &artifact_id,
+                            Some(&job_id),
+                            "image",
+                            &abs_path,
+                            "",
+                            size_bytes,
+                            Some(&metadata.to_string()),
+                        );
+                        let sidecar = SidecarMetadata {
+                            prompt: spec.prompt.clone(),
+                            base_model: spec.model.base_model_id.clone(),
+                            seed: image_seed,
+                            steps: spec.params.steps,
+                            guidance: spec.params.guidance,
+                            size: format!("{}x{}", spec.params.width, spec.params.height),
+                            lora: spec.lora.as_ref().map(|l| l.name.clone()),
+                            lora_strength: spec.lora.as_ref().map(|l| l.weight),
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                            source: "workflow".to_string(),
+                        };
+                        write_sidecar_yaml(&abs_path, &sidecar);
+                    }
                     step_artifacts.extend(artifacts);
                 }
             }
@@ -700,7 +746,49 @@ pub async fn execute_plan(plan: Plan, db: &Database, in_order: bool) -> Result<(
                         &plan.output_dir,
                         step_labels.clone(),
                     );
-                    let artifacts = execute_edit_step(&mut executor, &spec, &step.id, db)?;
+                    let (job_id, artifacts) =
+                        execute_edit_step(&mut executor, &spec, &step.id, db)?;
+                    for (i, artifact) in artifacts.iter().enumerate() {
+                        let artifact_id = format!("{}-img-{}", job_id, i);
+                        let image_seed = spec.params.seed.map(|s| s + i as u64);
+                        let metadata = serde_json::json!({
+                            "generated_with": "modl.run",
+                            "prompt": spec.prompt,
+                            "base_model_id": spec.model.base_model_id,
+                            "base_model_path": spec.model.base_model_path,
+                            "lora_name": spec.lora.as_ref().map(|l| &l.name),
+                            "lora_strength": spec.lora.as_ref().map(|l| l.weight),
+                            "steps": spec.params.steps,
+                            "guidance": spec.params.guidance,
+                            "seed": image_seed,
+                            "image_index": i,
+                            "source": "workflow",
+                        });
+                        let abs_path = artifact.to_string_lossy();
+                        let size_bytes = std::fs::metadata(artifact).map(|m| m.len()).unwrap_or(0);
+                        let _ = db.insert_artifact(
+                            &artifact_id,
+                            Some(&job_id),
+                            "image",
+                            &abs_path,
+                            "",
+                            size_bytes,
+                            Some(&metadata.to_string()),
+                        );
+                        let sidecar = SidecarMetadata {
+                            prompt: spec.prompt.clone(),
+                            base_model: spec.model.base_model_id.clone(),
+                            seed: image_seed,
+                            steps: spec.params.steps,
+                            guidance: spec.params.guidance,
+                            size: String::new(),
+                            lora: spec.lora.as_ref().map(|l| l.name.clone()),
+                            lora_strength: spec.lora.as_ref().map(|l| l.weight),
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                            source: "workflow".to_string(),
+                        };
+                        write_sidecar_yaml(&abs_path, &sidecar);
+                    }
                     step_artifacts.extend(artifacts);
                 }
             }
@@ -1278,7 +1366,7 @@ fn execute_generate_step(
     spec: &GenerateJobSpec,
     step_id: &str,
     db: &Database,
-) -> Result<Vec<PathBuf>> {
+) -> Result<(String, Vec<PathBuf>)> {
     let handle = executor.submit_generate(spec)?;
     let job_id = handle.job_id.clone();
     register_job(db, &job_id, "generate", spec)?;
@@ -1292,7 +1380,7 @@ fn execute_generate_step(
             let _ = db.update_job_status(&job_id, "error");
         }
     }
-    result
+    result.map(|paths| (job_id, paths))
 }
 
 fn execute_edit_step(
@@ -1300,7 +1388,7 @@ fn execute_edit_step(
     spec: &EditJobSpec,
     step_id: &str,
     db: &Database,
-) -> Result<Vec<PathBuf>> {
+) -> Result<(String, Vec<PathBuf>)> {
     let handle = executor.submit_edit(spec)?;
     let job_id = handle.job_id.clone();
     register_job(db, &job_id, "edit", spec)?;
@@ -1314,7 +1402,7 @@ fn execute_edit_step(
             let _ = db.update_job_status(&job_id, "error");
         }
     }
-    result
+    result.map(|paths| (job_id, paths))
 }
 
 /// Insert a job row so the UI can discover workflow outputs alongside
@@ -1354,17 +1442,15 @@ fn consume_events(
                 step: cur,
                 total_steps,
                 ..
-            } => {
-                if stage == "step" {
-                    let msg = format!("  step {}/{}", cur, total_steps);
-                    // Overwrite previous progress line
-                    eprint!(
-                        "\r{}{}",
-                        msg,
-                        " ".repeat(last_progress_len.saturating_sub(msg.len()))
-                    );
-                    last_progress_len = msg.len();
-                }
+            } if stage == "step" => {
+                let msg = format!("  step {}/{}", cur, total_steps);
+                // Overwrite previous progress line
+                eprint!(
+                    "\r{}{}",
+                    msg,
+                    " ".repeat(last_progress_len.saturating_sub(msg.len()))
+                );
+                last_progress_len = msg.len();
             }
             EventPayload::Artifact { path, .. } => {
                 artifacts.push(PathBuf::from(path));

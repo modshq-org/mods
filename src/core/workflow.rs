@@ -236,6 +236,23 @@ pub fn parse_str(yaml: &str, base_dir: &Path) -> Result<Workflow> {
             );
         }
 
+        // When a step overrides the model, don't inherit workflow-level
+        // defaults for steps/guidance — those are model-dependent and the
+        // runner will fall back to the correct model-specific defaults from
+        // models.toml instead. Width/height/count/seed are model-independent
+        // and always inherit.
+        let has_model_override = raw_step.model.is_some();
+        let default_steps = if has_model_override {
+            None
+        } else {
+            raw.defaults.steps
+        };
+        let default_guidance = if has_model_override {
+            None
+        } else {
+            raw.defaults.guidance
+        };
+
         let kind = if let Some(prompt) = &raw_step.generate {
             StepKind::Generate(GenerateStep {
                 prompt: prompt.clone(),
@@ -245,8 +262,8 @@ pub fn parse_str(yaml: &str, base_dir: &Path) -> Result<Workflow> {
                 seeds: raw_step.seeds.clone(),
                 width: raw_step.width.or(raw.defaults.width),
                 height: raw_step.height.or(raw.defaults.height),
-                steps: raw_step.steps.or(raw.defaults.steps),
-                guidance: raw_step.guidance.or(raw.defaults.guidance),
+                steps: raw_step.steps.or(default_steps),
+                guidance: raw_step.guidance.or(default_guidance),
                 count: raw_step.count.or(raw.defaults.count),
             })
         } else {
@@ -267,8 +284,8 @@ pub fn parse_str(yaml: &str, base_dir: &Path) -> Result<Workflow> {
                 seeds: raw_step.seeds.clone(),
                 width: raw_step.width.or(raw.defaults.width),
                 height: raw_step.height.or(raw.defaults.height),
-                steps: raw_step.steps.or(raw.defaults.steps),
-                guidance: raw_step.guidance.or(raw.defaults.guidance),
+                steps: raw_step.steps.or(default_steps),
+                guidance: raw_step.guidance.or(default_guidance),
                 count: raw_step.count.or(raw.defaults.count),
             })
         };
@@ -466,6 +483,47 @@ steps:
         let wf = parse(yaml).unwrap();
         match &wf.steps[0].kind {
             StepKind::Generate(g) => assert_eq!(g.seed, Some(99)),
+            _ => panic!("expected generate"),
+        }
+    }
+
+    #[test]
+    fn model_override_skips_workflow_defaults_for_steps_and_guidance() {
+        let yaml = r#"
+name: test
+model: flux-dev
+defaults:
+  steps: 28
+  guidance: 3.5
+  width: 512
+  height: 512
+steps:
+  - id: a
+    generate: "a cat"
+  - id: b
+    model: z-image-turbo
+    generate: "a dog"
+"#;
+        let wf = parse(yaml).unwrap();
+        // Step without model override inherits steps/guidance from defaults
+        match &wf.steps[0].kind {
+            StepKind::Generate(g) => {
+                assert_eq!(g.steps, Some(28));
+                assert_eq!(g.guidance, Some(3.5));
+                assert_eq!(g.width, Some(512));
+            }
+            _ => panic!("expected generate"),
+        }
+        // Step with model override does NOT inherit steps/guidance from defaults
+        // (runner will fall back to model-specific defaults from models.toml)
+        // but still inherits model-independent fields like width/height.
+        match &wf.steps[1].kind {
+            StepKind::Generate(g) => {
+                assert_eq!(g.steps, None);
+                assert_eq!(g.guidance, None);
+                assert_eq!(g.width, Some(512));
+                assert_eq!(g.height, Some(512));
+            }
             _ => panic!("expected generate"),
         }
     }
