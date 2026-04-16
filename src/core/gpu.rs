@@ -160,7 +160,7 @@ pub fn select_variant(vram_mb: u64, variants: &[(String, u64)]) -> Option<String
         .collect();
 
     // Sort descending by VRAM requirement (prefer highest quality that fits)
-    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    candidates.sort_by_key(|b| std::cmp::Reverse(b.1));
     candidates.first().map(|(id, _)| id.clone())
 }
 
