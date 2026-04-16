@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     torch torchvision --index-url https://download.pytorch.org/whl/cu121
 RUN pip install --no-cache-dir \
+    # TODO: pin diffusers to a stable version once ErnieImagePipeline ships in a release
     "diffusers @ git+https://github.com/huggingface/diffusers.git@main" transformers accelerate safetensors \
     sentencepiece protobuf peft pillow
 
