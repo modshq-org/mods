@@ -1354,17 +1354,15 @@ fn consume_events(
                 step: cur,
                 total_steps,
                 ..
-            } => {
-                if stage == "step" {
-                    let msg = format!("  step {}/{}", cur, total_steps);
-                    // Overwrite previous progress line
-                    eprint!(
-                        "\r{}{}",
-                        msg,
-                        " ".repeat(last_progress_len.saturating_sub(msg.len()))
-                    );
-                    last_progress_len = msg.len();
-                }
+            } if stage == "step" => {
+                let msg = format!("  step {}/{}", cur, total_steps);
+                // Overwrite previous progress line
+                eprint!(
+                    "\r{}{}",
+                    msg,
+                    " ".repeat(last_progress_len.saturating_sub(msg.len()))
+                );
+                last_progress_len = msg.len();
             }
             EventPayload::Artifact { path, .. } => {
                 artifacts.push(PathBuf::from(path));
