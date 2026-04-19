@@ -2,6 +2,7 @@ pub(crate) mod analysis;
 mod auth;
 mod civitai;
 mod compare;
+mod compose;
 mod config;
 mod datasets;
 mod describe;
@@ -444,6 +445,40 @@ pub enum ProcessCommands {
         /// Preprocessing method
         #[command(subcommand)]
         command: preprocess::PreprocessMethod,
+    },
+
+    /// Composite images onto a canvas (layer subjects over backgrounds)
+    ///
+    /// Creates a raw composite by layering images with position and scale controls.
+    /// Use with `modl edit` for photorealistic integration:
+    ///
+    ///   modl process compose --background forest.png --layer bunny.png --position 0.5,0.7 --scale 0.3
+    ///   modl edit "photorealistic integration, unified lighting" --image composite.png --base klein-9b
+    Compose {
+        /// Background image path, or "transparent"/"white"/"black" for solid color
+        #[arg(long)]
+        background: String,
+        /// Layer image(s) to composite (repeat for multiple layers; order = bottom to top)
+        #[arg(long, required = true)]
+        layer: Vec<String>,
+        /// Position for each layer as x,y (0.0-1.0 = fractional, center of layer). Repeat per layer.
+        #[arg(long)]
+        position: Vec<String>,
+        /// Scale for each layer (1.0 = original size). Repeat per layer.
+        #[arg(long)]
+        scale: Vec<f64>,
+        /// Opacity for each layer (0.0-1.0). Repeat per layer.
+        #[arg(long)]
+        opacity: Vec<f64>,
+        /// Canvas size as WxH (required for solid color backgrounds)
+        #[arg(long)]
+        canvas_size: Option<String>,
+        /// Output directory (default: ~/.modl/outputs/<date>/)
+        #[arg(long, short = 'o')]
+        output: Option<String>,
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1504,6 +1539,28 @@ pub async fn run(cli: Cli) -> Result<()> {
                 .await
             }
             ProcessCommands::Preprocess { command } => preprocess::run(command).await,
+            ProcessCommands::Compose {
+                background,
+                layer,
+                position,
+                scale,
+                opacity,
+                canvas_size,
+                output,
+                json,
+            } => {
+                compose::run(compose::ComposeArgs {
+                    background: &background,
+                    layers: &layer,
+                    positions: &position,
+                    scales: &scale,
+                    opacities: &opacity,
+                    canvas_size: canvas_size.as_deref(),
+                    output_dir: output.as_deref(),
+                    json,
+                })
+                .await
+            }
         },
 
         // ── Remote GPU ───────────────────────────────────────────────

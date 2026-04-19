@@ -51,7 +51,7 @@ def _register_all() -> dict[str, AdapterEntry]:
         run_score, run_detect, run_compare,
         run_segment, run_face_restore, run_upscale, run_remove_bg,
         run_face_crop, run_ground, run_describe, run_vl_tag,
-        run_preprocess, run_lanpaint,
+        run_preprocess, run_lanpaint, run_compose,
     )
 
     entries = [
@@ -93,6 +93,9 @@ def _register_all() -> dict[str, AdapterEntry]:
 
         # ── Inpainting ───────────────────────────────────────────────────
         AdapterEntry("lanpaint",     run_lanpaint,     "Run LanPaint training-free inpainting"),
+
+        # ── Composition (CPU-only) ──────────────────────────────────────
+        AdapterEntry("compose",      run_compose,      "Composite images onto a canvas"),
     ]
 
     return {e.name: e for e in entries}
