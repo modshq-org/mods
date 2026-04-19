@@ -71,13 +71,19 @@ pub async fn run(args: ComposeArgs<'_>) -> Result<()> {
         }
     }
 
+    // Validate positions up front
+    for (i, pos) in positions.iter().enumerate() {
+        parse_position(pos)
+            .with_context(|| format!("Invalid --position for layer {}: {pos:?}", i + 1))?;
+    }
+
     // Build layers with position/scale/opacity
     let compose_layers: Vec<ComposeLayer> = layers
         .iter()
         .enumerate()
         .map(|(i, path)| {
             let position = if i < positions.len() {
-                parse_position(&positions[i]).unwrap_or_else(|_| vec![0.5, 0.5])
+                parse_position(&positions[i]).expect("already validated")
             } else {
                 vec![0.5, 0.5]
             };
