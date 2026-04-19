@@ -58,15 +58,13 @@ def _composite_layer(canvas: Image.Image, layer: dict) -> Image.Image:
         img = img.resize((new_w, new_h), Image.LANCZOS)
         lw, lh = img.size
 
-    # Position: fractional (0-1) means relative to canvas, placing center of layer
+    # Position: always fractional 0.0–1.0, relative to canvas, placing center of layer
     pos = layer.get("position", [0.5, 0.5])
     px, py = pos
 
     # Convert fractional to pixel coordinates (center of the layer)
-    if isinstance(px, float) and 0.0 <= px <= 1.0:
-        px = int(px * cw)
-    if isinstance(py, float) and 0.0 <= py <= 1.0:
-        py = int(py * ch)
+    px = int(px * cw)
+    py = int(py * ch)
 
     # Position is center of layer — offset to top-left
     x = int(px - lw // 2)

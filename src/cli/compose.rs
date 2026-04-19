@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::core::job::{ComposeJobSpec, ComposeLayer};
 
-/// Parse a "0.5,0.7" string into [f64, f64].
+/// Parse a "0.5,0.7" string into [f64, f64], enforcing 0.0–1.0 range.
 fn parse_position(s: &str) -> Result<Vec<f64>> {
     let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 2 {
@@ -12,6 +12,11 @@ fn parse_position(s: &str) -> Result<Vec<f64>> {
     }
     let x: f64 = parts[0].trim().parse().context("Invalid x position")?;
     let y: f64 = parts[1].trim().parse().context("Invalid y position")?;
+    if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+        anyhow::bail!(
+            "Position values must be between 0.0 and 1.0 (fractional canvas coordinates), got {x},{y}"
+        );
+    }
     Ok(vec![x, y])
 }
 
@@ -75,6 +80,23 @@ pub async fn run(args: ComposeArgs<'_>) -> Result<()> {
     for (i, pos) in positions.iter().enumerate() {
         parse_position(pos)
             .with_context(|| format!("Invalid --position for layer {}: {pos:?}", i + 1))?;
+    }
+
+    // Validate scale values
+    for (i, &s) in scales.iter().enumerate() {
+        if s <= 0.0 {
+            anyhow::bail!("--scale for layer {} must be > 0, got {s}", i + 1);
+        }
+    }
+
+    // Validate opacity values
+    for (i, &o) in opacities.iter().enumerate() {
+        if !(0.0..=1.0).contains(&o) {
+            anyhow::bail!(
+                "--opacity for layer {} must be between 0.0 and 1.0, got {o}",
+                i + 1
+            );
+        }
     }
 
     // Build layers with position/scale/opacity

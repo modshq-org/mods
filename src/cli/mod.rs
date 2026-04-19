@@ -461,13 +461,13 @@ pub enum ProcessCommands {
         /// Layer image(s) to composite (repeat for multiple layers; order = bottom to top)
         #[arg(long, required = true)]
         layer: Vec<String>,
-        /// Position for each layer as x,y (0.0-1.0 = fractional, center of layer). Repeat per layer.
+        /// Position for each layer as x,y in 0.0-1.0 fractional coordinates (center of layer). Repeat per layer.
         #[arg(long)]
         position: Vec<String>,
-        /// Scale for each layer (1.0 = original size). Repeat per layer.
+        /// Scale for each layer (must be > 0, 1.0 = original size). Repeat per layer.
         #[arg(long)]
         scale: Vec<f64>,
-        /// Opacity for each layer (0.0-1.0). Repeat per layer.
+        /// Opacity for each layer (0.0-1.0, 1.0 = fully opaque). Repeat per layer.
         #[arg(long)]
         opacity: Vec<f64>,
         /// Canvas size as WxH (required for solid color backgrounds)
