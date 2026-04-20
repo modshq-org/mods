@@ -10,11 +10,20 @@ pub async fn run(id: &str) -> Result<()> {
     let index = RegistryIndex::load_or_fetch().await?;
     let db = Database::open()?;
 
-    // Try registry first, fall back to trained artifact lookup
-    match index.find(id) {
-        Some(manifest) => show_registry_model(&db, id, manifest),
-        None => show_trained_artifact(&db, id),
+    // 1. Registry match — the rich path.
+    if let Some(manifest) = index.find(id) {
+        return show_registry_model(&db, id, manifest);
     }
+
+    // 2. Installed locally but missing from the registry (stale cache,
+    //    sideloaded pull, or model added upstream since last update).
+    //    Show what we can from the DB + models.toml specs.
+    if let Some(installed) = db.list_installed(None)?.into_iter().find(|m| m.id == id) {
+        return show_installed_model(&installed);
+    }
+
+    // 3. Trained LoRA artifact.
+    show_trained_artifact(&db, id)
 }
 
 fn show_registry_model(
@@ -297,6 +306,125 @@ fn show_registry_model(
             println!(
                 "    {}",
                 style(format!("modl train --base {} --dataset ./my-images", id)).dim()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Show info for a model that's installed locally but not present in the
+/// cached registry index. Falls back to DB fields + models.toml specs.
+fn show_installed_model(model: &crate::core::db::InstalledModel) -> Result<()> {
+    println!(
+        "{} {}",
+        style(&model.name).bold().cyan(),
+        style("[installed]").green()
+    );
+    println!(
+        "  {} · {}",
+        style(&model.asset_type).dim(),
+        style(&model.id).dim()
+    );
+    println!();
+    println!(
+        "  {} Not in registry index — showing installed metadata only.",
+        style("ℹ").yellow()
+    );
+    println!(
+        "  {} {} to refresh the registry.",
+        style("Run").dim(),
+        style("modl system update").cyan()
+    );
+    println!();
+
+    // Specs from models.toml when available.
+    if let Some(spec) = model_family::find_model(&model.id) {
+        println!("  {}", style("Specs:").bold());
+        if spec.text_encoder_b > 0.0 {
+            println!(
+                "    Parameters:    {:.0}B transformer + {:.0}B text encoder ({:.0}B total)",
+                spec.transformer_b, spec.text_encoder_b, spec.total_b
+            );
+        } else {
+            println!("    Parameters:    {:.0}B", spec.total_b);
+        }
+        if spec.vram_fp8_gb > 0 {
+            println!(
+                "    VRAM:          {}GB bf16 / {}GB fp8",
+                spec.vram_bf16_gb, spec.vram_fp8_gb
+            );
+        } else {
+            println!("    VRAM:          {}GB bf16", spec.vram_bf16_gb);
+        }
+        let mut caps = Vec::new();
+        if spec.capabilities.txt2img {
+            caps.push("generate");
+        }
+        if spec.capabilities.edit {
+            caps.push("edit");
+        }
+        if spec.capabilities.img2img {
+            caps.push("img2img");
+        }
+        if spec.capabilities.inpaint {
+            caps.push("inpaint");
+        }
+        if spec.capabilities.lora {
+            caps.push("lora");
+        }
+        if spec.capabilities.training {
+            caps.push("training");
+        }
+        if !caps.is_empty() {
+            println!("    Capabilities:  {}", caps.join(", "));
+        }
+        println!(
+            "    Defaults:      {} steps, {:.1} CFG, {}px",
+            spec.default_steps, spec.default_guidance, spec.default_resolution
+        );
+        println!();
+    }
+
+    println!("  {}", style("Installed:").bold().green());
+    if let Some(ref v) = model.variant {
+        println!("    Variant:  {}", v);
+    }
+    println!("    Size:     {}", HumanBytes(model.size));
+    println!("    Path:     {}", model.store_path);
+
+    // Usage examples (mirror the registry-path behavior).
+    if let Some(spec) = model_family::find_model(&model.id) {
+        println!();
+        println!("  {}", style("Usage:").bold());
+        if spec.capabilities.txt2img {
+            println!(
+                "    {}",
+                style(format!(
+                    "modl generate \"a photo of a sunset\" --base {}",
+                    model.id
+                ))
+                .dim()
+            );
+        }
+        if spec.capabilities.edit {
+            println!(
+                "    {}",
+                style(format!(
+                    "modl edit \"change background to white\" --image photo.jpg --base {}",
+                    model.id
+                ))
+                .dim()
+            );
+        }
+        if spec.capabilities.training {
+            println!(
+                "    {}",
+                style(format!(
+                    "modl train --base {} --dataset ./my-images",
+                    model.id
+                ))
+                .dim()
             );
         }
     }

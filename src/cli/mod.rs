@@ -528,14 +528,8 @@ pub enum Commands {
     ///   img2img:    modl generate "prompt" --init-image photo.png --strength 0.6
     ///   inpainting: modl generate "prompt" --init-image photo.png --mask mask.png
     ///
-    /// Models:
-    ///   flux-schnell (default)   4 steps, 12B, fastest
-    ///   flux-dev                28 steps, 12B, best quality
-    ///   z-image-turbo            8 steps, 6B, fast
-    ///   z-image                 30 steps, 6B, quality
-    ///   qwen-image              40 steps, 20B, text rendering
-    ///   chroma                  45 steps, 12B, artistic
-    ///   sdxl                    30 steps, 3.5B, huge LoRA ecosystem
+    /// To see available models: `modl ls` (installed), `modl search <query>`
+    /// (registry), or `modl info <id>` (details for one model).
     ///
     /// Use --lora to apply a trained LoRA. Use --controlnet for structural guidance.
     #[command(verbatim_doc_comment, after_help = GENERATE_EXAMPLES)]
@@ -630,11 +624,8 @@ pub enum Commands {
     /// Unlike generate --mask (pixel-level inpainting), edit uses instruction-following
     /// models that understand "change X to Y" without needing a mask.
     ///
-    /// Models:
-    ///   qwen-image-edit-2511 (default)  40 steps, 20B, best quality
-    ///   klein-4b                         4 steps, 4B, fastest
-    ///   klein-9b                         4 steps, 9B, balanced
-    ///   flux2-dev                       28 steps, 24B, flux-based
+    /// To see available edit models: `modl ls` (installed), `modl search edit`
+    /// (registry), or `modl info <id>` (details for one model).
     ///
     /// Examples:
     ///   modl edit "make the sky sunset orange" --image photo.png
