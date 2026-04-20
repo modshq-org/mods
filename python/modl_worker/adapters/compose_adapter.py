@@ -52,6 +52,8 @@ def _composite_layer(canvas: Image.Image, layer: dict) -> Image.Image:
 
     # Apply scale
     scale = layer.get("scale", 1.0)
+    if scale <= 0:
+        raise ValueError(f"scale must be > 0, got {scale}")
     if scale != 1.0:
         new_w = max(1, int(lw * scale))
         new_h = max(1, int(lh * scale))
@@ -72,6 +74,8 @@ def _composite_layer(canvas: Image.Image, layer: dict) -> Image.Image:
 
     # Apply opacity
     opacity = layer.get("opacity", 1.0)
+    if not (0.0 <= opacity <= 1.0):
+        raise ValueError(f"opacity must be between 0.0 and 1.0, got {opacity}")
     if opacity < 1.0:
         alpha = img.getchannel("A")
         alpha = alpha.point(lambda a: int(a * opacity))

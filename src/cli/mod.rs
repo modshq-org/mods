@@ -944,7 +944,7 @@ pub enum Commands {
         command: VisionCommands,
     },
 
-    /// Image processing tools (upscale, remove-bg, segment, preprocess)
+    /// Image processing tools (upscale, remove-bg, segment, compose, preprocess)
     Process {
         #[command(subcommand)]
         command: ProcessCommands,
