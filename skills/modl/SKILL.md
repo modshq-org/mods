@@ -43,6 +43,9 @@ triggers:
   - upscale
   - remove background
   - segment
+  - compose images
+  - composite
+  - layer images
   # Prompt
   - enhance prompt
   - improve prompt
@@ -97,6 +100,7 @@ modl is a local-first CLI for AI image generation: pull models, generate images,
 | Upscale 4x | `modl process upscale photo.jpg --json` |
 | Remove background | `modl process remove-bg photo.jpg --json` |
 | Segment object | `modl process segment photo.jpg --bbox 100,100,400,400 --json` |
+| Compose layers | `modl process compose --background bg.png --layer subject.png --position 0.5,0.7 --scale 0.3` |
 | Enhance prompt | `modl enhance "a cat" --json` |
 | Serve web UI | `modl serve` |
 | GPU status | `modl worker status` |
@@ -392,6 +396,16 @@ modl process segment <IMAGE> [--method bbox|background|sam] [--bbox X1,Y1,X2,Y2]
 # Extract control images
 modl process preprocess <METHOD> <IMAGE>
   Methods: canny, depth, pose, softedge, scribble, hed, mlsd, lineart
+
+# Compose layers onto a canvas (CPU-only, no GPU needed)
+modl process compose --background <PATH|transparent|white|black> --layer <PATH> [OPTIONS]
+  --position <X,Y>          Fractional 0.0-1.0 coordinates (center of layer, default: 0.5,0.5)
+  --scale <SCALE>           Layer scale (>0, default: 1.0)
+  --opacity <0.0-1.0>       Layer opacity (default: 1.0)
+  --canvas-size <WxH>       Required for solid color backgrounds
+  -o <DIR>                  Output directory
+  --json                    JSON output
+  # Repeat --layer/--position/--scale/--opacity for multiple layers (order = bottom to top)
 ```
 
 ### modl dataset
@@ -530,6 +544,30 @@ modl train status my-face --watch
 
 # 5. Use the trained LoRA
 modl generate "ohwx person as an astronaut" --lora my-face --base flux-dev --json
+```
+
+### Compose → Edit Pipeline
+
+```bash
+# 1. Remove background from subject
+modl process remove-bg subject.jpg --json
+
+# 2. Compose subject onto a background with precise placement
+modl process compose --background forest.png --layer subject_nobg.png \
+  --position 0.5,0.7 --scale 0.3 --json
+
+# 3. Edit for photorealistic integration (blends lighting, shadows, edges)
+modl edit "photorealistic integration, unified lighting, preserve subject" \
+  --image composite.png --base klein-9b --json
+```
+
+### Multi-Layer Composition
+
+```bash
+# Build a scene with multiple subjects on a transparent canvas
+modl process compose --background transparent --canvas-size 1024x1024 \
+  --layer cup.png --position 0.3,0.5 --scale 0.35 \
+  --layer book.png --position 0.7,0.55 --scale 0.4 --json
 ```
 
 ### Image Analysis

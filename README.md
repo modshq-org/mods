@@ -141,6 +141,7 @@ modl segment photo.png --bbox 120,340,280,500   # create masks (SAM)
 modl face-restore photo.png                     # fix AI faces
 modl upscale photo.png --scale 4                # 4x resolution
 modl remove-bg photo.png                        # transparent PNG
+modl compose --bg scene.png --layer subject.png # layer images onto canvas
 modl compare ref.png target.png                 # CLIP similarity
 ```
 
