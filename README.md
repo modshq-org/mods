@@ -45,6 +45,23 @@ curl -fsSL https://modl.run/install.sh | sh -s -- --quick
 
 This installs modl, pulls a starter model, and launches the web UI.
 
+### Other install methods
+
+You can [inspect the install script](https://github.com/modl-org/modl/blob/main/install.sh) before running it, or skip it entirely:
+
+```bash
+# Download binary directly from GitHub Releases
+# https://github.com/modl-org/modl/releases
+tar -xzf modl-*.tar.gz
+sudo mv modl /usr/local/bin/
+
+# Or build from source (Rust 1.85+, Python 3.11+)
+git clone https://github.com/modl-org/modl.git
+cd modl
+cargo build --release
+# Binary at target/release/modl
+```
+
 ---
 
 ## Web UI
